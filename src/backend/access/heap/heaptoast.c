@@ -94,7 +94,7 @@ heap_toast_delete(Relation rel, HeapTuple oldtup, bool is_speculative)
  */
 HeapTuple
 heap_toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
-							int options, HTAB *preserved_am_info)
+							int options)
 {
 	HeapTuple	result_tuple;
 	TupleDesc	tupleDesc;

@@ -145,21 +145,11 @@ lookup_attribute_compression(Oid attrelid, AttrNumber attnum, Oid amoid)
 }
 #endif
 /*
- * Link compression with an attribute. Creates a row in pg_attr_compression
- * if needed.
+ * Link compression with an attribute.
  *
  * When compression is not specified returns default attribute compression.
  * It is possible case for CREATE TABLE and ADD COLUMN commands
  * where COMPRESSION syntax is optional.
- *
- * If any of builtin attribute compression tuples satisfies conditions
- * returns it.
- *
- * For ALTER command check for previous attribute compression record with
- * identical compression options and reuse it if found any.
- *
- * Note we create attribute compression for EXTERNAL storage too, so when
- * storage is changed we can start compression on future tuples right away.
  */
 Oid
 CreateAttributeCompression(Form_pg_attribute att,

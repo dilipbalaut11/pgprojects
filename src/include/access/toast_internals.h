@@ -135,7 +135,8 @@ extern void init_amoptions_cache(void);
  *
  * Return cached CompressionAmOptions for specified attribute compression.
  */
-extern CompressionAmOptions *lookup_compression_am_options(Oid acoid);
+extern void lookup_compression_am_options(Oid acoid,
+										 CompressionAmOptions *result);
 
 /*
  * toast_set_compressed_datum_info -

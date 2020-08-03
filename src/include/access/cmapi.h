@@ -32,12 +32,7 @@ typedef struct CompressionAmRoutine CompressionAmRoutine;
  */
 typedef struct CompressionAmOptions
 {
-	Oid			acoid;			/* Oid of attribute compression,
-								   should go always first */
-	Oid			amoid;			/* Oid of compression access method */
-	List	   *acoptions;		/* Parsed options, used for comparison */
 	CompressionAmRoutine *amroutine;	/* compression access method routine */
-	MemoryContext	mcxt;
 
 	/* result of cminitstate function will be put here */
 	void	   *acstate;

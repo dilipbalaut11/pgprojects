@@ -1,0 +1,71 @@
+-- test storages
+CREATE TABLE cmstoragetest(st1 TEXT, st2 INT);
+ALTER TABLE cmstoragetest ALTER COLUMN st1 SET STORAGE EXTERNAL;
+\d+ cmstoragetest
+                                      Table "public.cmstoragetest"
+ Column |  Type   | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+---------+-----------+----------+---------+----------+-------------+--------------+-------------
+ st1    | text    |           |          |         | external | pglz        |              | 
+ st2    | integer |           |          |         | plain    |             |              | 
+
+ALTER TABLE cmstoragetest ALTER COLUMN st1 SET STORAGE MAIN;
+\d+ cmstoragetest
+                                      Table "public.cmstoragetest"
+ Column |  Type   | Collation | Nullable | Default | Storage | Compression | Stats target | Description 
+--------+---------+-----------+----------+---------+---------+-------------+--------------+-------------
+ st1    | text    |           |          |         | main    | pglz        |              | 
+ st2    | integer |           |          |         | plain   |             |              | 
+
+ALTER TABLE cmstoragetest ALTER COLUMN st1 SET STORAGE PLAIN;
+\d+ cmstoragetest
+                                      Table "public.cmstoragetest"
+ Column |  Type   | Collation | Nullable | Default | Storage | Compression | Stats target | Description 
+--------+---------+-----------+----------+---------+---------+-------------+--------------+-------------
+ st1    | text    |           |          |         | plain   | pglz        |              | 
+ st2    | integer |           |          |         | plain   |             |              | 
+
+ALTER TABLE cmstoragetest ALTER COLUMN st1 SET STORAGE EXTENDED;
+\d+ cmstoragetest
+                                      Table "public.cmstoragetest"
+ Column |  Type   | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+---------+-----------+----------+---------+----------+-------------+--------------+-------------
+ st1    | text    |           |          |         | extended | pglz        |              | 
+ st2    | integer |           |          |         | plain    |             |              | 
+
+DROP TABLE cmstoragetest;
+CREATE TABLE cmdata(f1 text COMPRESSION pglz);
+INSERT INTO cmdata VALUES(repeat('1234567890',1000));
+INSERT INTO cmdata VALUES(repeat('1234567890',1001));
+-- copy with table creation
+SELECT * INTO cmmove1 FROM cmdata;
+-- we update using datum from different table
+CREATE TABLE cmmove2(f1 text COMPRESSION pglz);
+INSERT INTO cmmove2 VALUES (repeat('1234567890',1004));
+UPDATE cmmove2 SET f1 = cmdata.f1 FROM cmdata;
+-- copy to existing table
+CREATE TABLE cmmove3(f1 text COMPRESSION pglz);
+INSERT INTO cmmove3 SELECT * FROM cmdata;
+-- drop original compression information
+DROP TABLE cmdata;
+-- check data is okdd
+SELECT length(f1) FROM cmmove1;
+ length 
+--------
+  10000
+  10010
+(2 rows)
+
+SELECT length(f1) FROM cmmove2;
+ length 
+--------
+  10000
+(1 row)
+
+SELECT length(f1) FROM cmmove3;
+ length 
+--------
+  10000
+  10010
+(2 rows)
+
+DROP TABLE cmmove1, cmmove2, cmmove3;

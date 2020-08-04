@@ -13,22 +13,44 @@
 
 #include "postgres.h"
 
+#include "access/cmapi.h"
 #include "access/detoast.h"
 #include "access/genam.h"
 #include "access/heapam.h"
+#include "access/reloptions.h"
 #include "access/heaptoast.h"
 #include "access/table.h"
 #include "access/toast_internals.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
+#include "catalog/pg_am.h"
+#include "commands/defrem.h"
 #include "common/pg_lzcompress.h"
 #include "miscadmin.h"
 #include "utils/fmgroids.h"
+#include "utils/hsearch.h"
+#include "utils/inval.h"
+#include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
+#include "utils/syscache.h"
 
 static bool toastrel_valueid_exists(Relation toastrel, Oid valueid);
 static bool toastid_valueid_exists(Oid toastrelid, Oid valueid);
+
+/* ---------
+ * toast_set_compressed_datum_info
+ *
+ * Save metadata in compressed datum. This information will required
+ * for decompression.
+ * --------
+ */
+void
+toast_set_compressed_datum_info(struct varlena *val, Oid cmid, int32 rawsize)
+{
+	TOAST_COMPRESS_SET_RAWSIZE(val, rawsize);
+	TOAST_COMPRESS_SET_CMID(val, cmid);
+}
 
 /* ----------
  * toast_compress_datum -
@@ -44,54 +66,47 @@ static bool toastid_valueid_exists(Oid toastrelid, Oid valueid);
  * ----------
  */
 Datum
-toast_compress_datum(Datum value)
+toast_compress_datum(Datum value, Oid amoid)
 {
-	struct varlena *tmp;
-	int32		valsize = VARSIZE_ANY_EXHDR(DatumGetPointer(value));
-	int32		len;
+	struct varlena *tmp = NULL;
+	int32 valsize;
+	CompressionAmOptions cmoptions;
 
 	Assert(!VARATT_IS_EXTERNAL(DatumGetPointer(value)));
 	Assert(!VARATT_IS_COMPRESSED(DatumGetPointer(value)));
 
-	/*
-	 * No point in wasting a palloc cycle if value size is out of the allowed
-	 * range for compression
-	 */
-	if (valsize < PGLZ_strategy_default->min_input_size ||
-		valsize > PGLZ_strategy_default->max_input_size)
+	/* Fallback to default compression if not specified */
+	if (!OidIsValid(amoid))
+		amoid = DefaultCompressionOid;
+
+	lookup_compression_am_options(amoid, &cmoptions);
+	tmp = cmoptions.amroutine->cmcompress(&cmoptions, (const struct varlena *) value);
+	if (!tmp)
 		return PointerGetDatum(NULL);
 
-	tmp = (struct varlena *) palloc(PGLZ_MAX_OUTPUT(valsize) +
-									TOAST_COMPRESS_HDRSZ);
-
 	/*
-	 * We recheck the actual size even if pglz_compress() reports success,
-	 * because it might be satisfied with having saved as little as one byte
-	 * in the compressed data --- which could turn into a net loss once you
-	 * consider header and alignment padding.  Worst case, the compressed
-	 * format might require three padding bytes (plus header, which is
-	 * included in VARSIZE(tmp)), whereas the uncompressed format would take
-	 * only one header byte and no padding if the value is short enough.  So
-	 * we insist on a savings of more than 2 bytes to ensure we have a gain.
+	 * We recheck the actual size even if compression function reports
+	 * success, because it might be satisfied with having saved as little as
+	 * one byte in the compressed data --- which could turn into a net loss
+	 * once you consider header and alignment padding.  Worst case, the
+	 * compressed format might require three padding bytes (plus header, which
+	 * is included in VARSIZE(tmp)), whereas the uncompressed format would
+	 * take only one header byte and no padding if the value is short enough.
+	 * So we insist on a savings of more than 2 bytes to ensure we have a
+	 * gain.
 	 */
-	len = pglz_compress(VARDATA_ANY(DatumGetPointer(value)),
-						valsize,
-						TOAST_COMPRESS_RAWDATA(tmp),
-						PGLZ_strategy_default);
-	if (len >= 0 &&
-		len + TOAST_COMPRESS_HDRSZ < valsize - 2)
+	valsize = VARSIZE_ANY_EXHDR(DatumGetPointer(value));
+
+	if (VARSIZE(tmp) < valsize - 2)
 	{
-		TOAST_COMPRESS_SET_RAWSIZE(tmp, valsize);
-		SET_VARSIZE_COMPRESSED(tmp, len + TOAST_COMPRESS_HDRSZ);
 		/* successful compression */
+		toast_set_compressed_datum_info(tmp, amoid, valsize);
 		return PointerGetDatum(tmp);
 	}
-	else
-	{
-		/* incompressible data */
-		pfree(tmp);
-		return PointerGetDatum(NULL);
-	}
+
+	/* incompressible data */
+	pfree(tmp);
+	return PointerGetDatum(NULL);
 }
 
 /* ----------
@@ -152,19 +167,19 @@ toast_save_datum(Relation rel, Datum value,
 									&num_indexes);
 
 	/*
-	 * Get the data pointer and length, and compute va_rawsize and va_extsize.
+	 * Get the data pointer and length, and compute va_rawsize and va_extinfo.
 	 *
 	 * va_rawsize is the size of the equivalent fully uncompressed datum, so
 	 * we have to adjust for short headers.
 	 *
-	 * va_extsize is the actual size of the data payload in the toast records.
+	 * va_extinfo is the actual size of the data payload in the toast records.
 	 */
 	if (VARATT_IS_SHORT(dval))
 	{
 		data_p = VARDATA_SHORT(dval);
 		data_todo = VARSIZE_SHORT(dval) - VARHDRSZ_SHORT;
 		toast_pointer.va_rawsize = data_todo + VARHDRSZ;	/* as if not short */
-		toast_pointer.va_extsize = data_todo;
+		toast_pointer.va_extinfo = data_todo;
 	}
 	else if (VARATT_IS_COMPRESSED(dval))
 	{
@@ -172,7 +187,10 @@ toast_save_datum(Relation rel, Datum value,
 		data_todo = VARSIZE(dval) - VARHDRSZ;
 		/* rawsize in a compressed datum is just the size of the payload */
 		toast_pointer.va_rawsize = VARRAWSIZE_4B_C(dval) + VARHDRSZ;
-		toast_pointer.va_extsize = data_todo;
+		toast_pointer.va_extinfo = data_todo;
+		if (VARATT_IS_CUSTOM_COMPRESSED(dval))
+			VARATT_EXTERNAL_SET_CUSTOM(toast_pointer);
+
 		/* Assert that the numbers look like it's compressed */
 		Assert(VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer));
 	}
@@ -181,7 +199,7 @@ toast_save_datum(Relation rel, Datum value,
 		data_p = VARDATA(dval);
 		data_todo = VARSIZE(dval) - VARHDRSZ;
 		toast_pointer.va_rawsize = VARSIZE(dval);
-		toast_pointer.va_extsize = data_todo;
+		toast_pointer.va_extinfo = data_todo; /* no flags */
 	}
 
 	/*
@@ -629,4 +647,24 @@ init_toast_snapshot(Snapshot toast_snapshot)
 		elog(ERROR, "no known snapshots");
 
 	InitToastSnapshot(*toast_snapshot, snapshot->lsn, snapshot->whenTaken);
+}
+
+/* ----------
+ * lookup_compression_am_options
+ *
+ * Get compression handler routine.
+ */
+void
+lookup_compression_am_options(Oid acoid, CompressionAmOptions *result)
+{
+	regproc amhandler;
+
+	amhandler = get_am_handler_oid(acoid, AMTYPE_COMPRESSION, false);
+	result->amroutine = InvokeCompressionAmHandler(amhandler);
+	result->acstate = result->amroutine->cminitstate ?
+			result->amroutine->cminitstate(acoid) : NULL;
+
+	if (!result->amroutine)
+		/* should not happen but need to check if something goes wrong */
+		elog(ERROR, "compression access method routine is NULL");
 }

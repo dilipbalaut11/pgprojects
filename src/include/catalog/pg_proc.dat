@@ -945,6 +945,12 @@
   prorettype => 'void', proargtypes => 'regclass int8',
   prosrc => 'brin_desummarize_range' },
 
+# Compression access method handlers
+{ oid => '4388', descr => 'pglz compression access method handler',
+  proname => 'pglzhandler', provolatile => 'v',
+  prorettype => 'compression_am_handler', proargtypes => 'internal',
+  prosrc => 'pglzhandler' },
+
 { oid => '338', descr => 'validate an operator class',
   proname => 'amvalidate', provolatile => 'v', prorettype => 'bool',
   proargtypes => 'oid', prosrc => 'amvalidate' },
@@ -7182,6 +7188,13 @@
 { oid => '268', descr => 'I/O',
   proname => 'table_am_handler_out', prorettype => 'cstring',
   proargtypes => 'table_am_handler', prosrc => 'table_am_handler_out' },
+{ oid => '560', descr => 'I/O',
+  proname => 'compression_am_handler_in', proisstrict => 'f',
+  prorettype => 'compression_am_handler', proargtypes => 'cstring',
+  prosrc => 'compression_am_handler_in' },
+{ oid => '561', descr => 'I/O',
+  proname => 'compression_am_handler_out', prorettype => 'cstring',
+  proargtypes => 'compression_am_handler', prosrc => 'compression_am_handler_out' },
 { oid => '5086', descr => 'I/O',
   proname => 'anycompatible_in', prorettype => 'anycompatible',
   proargtypes => 'cstring', prosrc => 'anycompatible_in' },

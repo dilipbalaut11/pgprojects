@@ -87,6 +87,7 @@
 #include "access/detoast.h"
 #include "access/heapam.h"
 #include "access/rewriteheap.h"
+#include "access/toast_internals.h"
 #include "access/transam.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
@@ -4238,7 +4239,7 @@ ReorderBufferToastReplace(ReorderBuffer *rb, ReorderBufferTXN *txn,
 				   VARSIZE(chunk) - VARHDRSZ);
 			data_done += VARSIZE(chunk) - VARHDRSZ;
 		}
-		Assert(data_done == toast_pointer.va_extsize);
+		Assert(data_done == VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer));
 
 		/* make sure its marked as compressed or not */
 		if (VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer))

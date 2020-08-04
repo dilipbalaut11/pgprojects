@@ -3921,37 +3921,6 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				break;
 			}
 
-		case OCLASS_ATTR_COMPRESSION:
-			{
-				char	   *attname;
-				HeapTuple	tup;
-				Form_pg_attr_compression acform;
-
-				tup = SearchSysCache1(ATTCOMPRESSIONOID, ObjectIdGetDatum(object->objectId));
-				if (!HeapTupleIsValid(tup))
-					elog(ERROR, "cache lookup failed for attribute compression %u", object->objectId);
-
-				acform = (Form_pg_attr_compression) GETSTRUCT(tup);
-				if (OidIsValid(acform->acrelid))
-				{
-					appendStringInfo(&buffer, _("compression on "));
-					getRelationDescription(&buffer, acform->acrelid, false);
-
-					attname = get_attname(acform->acrelid, acform->acattnum, true);
-					if (attname)
-					{
-						appendStringInfo(&buffer, _(" column %s"), attname);
-						pfree(attname);
-					}
-				}
-				else
-					appendStringInfo(&buffer, _("attribute compression %u"), object->objectId);
-
-				ReleaseSysCache(tup);
-
-				break;
-			}
-
 		case OCLASS_TRANSFORM:
 			{
 				HeapTuple	trfTup;
@@ -4522,10 +4491,6 @@ getObjectTypeDescription(const ObjectAddress *object, bool missing_ok)
 
 		case OCLASS_TRANSFORM:
 			appendStringInfoString(&buffer, "transform");
-			break;
-
-		case OCLASS_ATTR_COMPRESSION:
-			appendStringInfoString(&buffer, "attribute compression");
 			break;
 
 			/*
@@ -5201,15 +5166,6 @@ getObjectIdentityParts(const ObjectAddress *object,
 
 				systable_endscan(amscan);
 				table_close(amprocDesc, AccessShareLock);
-				break;
-			}
-
-		case OCLASS_ATTR_COMPRESSION:
-			{
-				appendStringInfo(&buffer, "%u",
-								 object->objectId);
-				if (objname)
-					*objname = list_make1(psprintf("%u", object->objectId));
 				break;
 			}
 

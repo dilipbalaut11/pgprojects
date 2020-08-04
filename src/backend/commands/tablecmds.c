@@ -169,8 +169,6 @@ typedef struct AlteredTableInfo
 	List	   *afterStmts;		/* List of utility command parsetrees */
 	bool		verify_new_notnull; /* T if we should recheck NOT NULL */
 	bool		new_notnull;	/* T if we added new NOT NULL constraints */
-	HTAB	   *preservedAmInfo;	/* Hash table for preserved compression
-									 * methods */
 	int			rewrite;		/* Reason for forced rewrite, if any */
 	Oid			newTableSpace;	/* new tablespace; 0 means no change */
 	bool		chgPersistence; /* T if SET LOGGED/UNLOGGED is used */
@@ -5138,7 +5136,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 	if (newrel)
 	{
 		mycid = GetCurrentCommandId(true);
-		bistate = GetBulkInsertState(tab->preservedAmInfo);
+		bistate = GetBulkInsertState();
 		ti_options = TABLE_INSERT_SKIP_FSM;
 	}
 	else
@@ -5459,24 +5457,6 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 	}
 
 	FreeExecutorState(estate);
-
-	/* Remove old compression options */
-	if (tab->rewrite & AT_REWRITE_ALTER_COMPRESSION)
-	{
-		AttrCmPreservedInfo *pinfo;
-		HASH_SEQ_STATUS status;
-
-		Assert(tab->preservedAmInfo);
-		hash_seq_init(&status, tab->preservedAmInfo);
-		while ((pinfo = (AttrCmPreservedInfo *) hash_seq_search(&status)) != NULL)
-		{
-			CleanupAttributeCompression(tab->relid, pinfo->attnum,
-										pinfo->preserved_amoids);
-			list_free(pinfo->preserved_amoids);
-		}
-
-		hash_destroy(tab->preservedAmInfo);
-	}
 
 	table_close(oldrel, NoLock);
 	if (newrel)
@@ -11433,12 +11413,6 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 						 errdetail("%s depends on column \"%s\"",
 								   getObjectDescription(&foundObject, false),
 								   colName)));
-				break;
-
-			case OCLASS_ATTR_COMPRESSION:
-
-				/* Just check that dependency is the right type */
-				Assert(foundDep->deptype == DEPENDENCY_INTERNAL);
 				break;
 
 			case OCLASS_DEFAULT:

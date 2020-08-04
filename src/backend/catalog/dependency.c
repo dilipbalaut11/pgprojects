@@ -182,7 +182,6 @@ static const Oid object_classes[] = {
 	PublicationRelRelationId,	/* OCLASS_PUBLICATION_REL */
 	SubscriptionRelationId,		/* OCLASS_SUBSCRIPTION */
 	TransformRelationId,		/* OCLASS_TRANSFORM */
-	AttrCompressionRelationId	/* OCLASS_ATTR_COMPRESSION */
 };
 
 
@@ -1499,10 +1498,6 @@ doDeletion(const ObjectAddress *object, int flags)
 		case OCLASS_PUBLICATION:
 		case OCLASS_TRANSFORM:
 			DropObjectById(object);
-			break;
-
-		case OCLASS_ATTR_COMPRESSION:
-			RemoveAttributeCompression(object->objectId);
 			break;
 
 			/*
@@ -2849,9 +2844,6 @@ getObjectClass(const ObjectAddress *object)
 
 		case TransformRelationId:
 			return OCLASS_TRANSFORM;
-
-		case AttrCompressionRelationId:
-			return OCLASS_ATTR_COMPRESSION;
 	}
 
 	/* shouldn't get here */

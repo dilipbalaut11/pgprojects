@@ -142,8 +142,14 @@ extern Datum transformGenericOptions(Oid catalogId,
 extern ObjectAddress CreateAccessMethod(CreateAmStmt *stmt);
 extern Oid	get_index_am_oid(const char *amname, bool missing_ok);
 extern Oid	get_table_am_oid(const char *amname, bool missing_ok);
+extern Oid	get_compression_am_oid(const char *amname, bool missing_ok);
 extern Oid	get_am_oid(const char *amname, bool missing_ok);
 extern char *get_am_name(Oid amOid);
+extern regproc get_am_handler_oid(Oid amOid, char amtype, bool noerror);
+
+/* commands/compressioncmds.c */
+extern char *GetCompressionName(Oid acoid);
+extern Oid GetAttributeCompression(Form_pg_attribute attr, char *compression);
 
 /* support routines in commands/define.c */
 

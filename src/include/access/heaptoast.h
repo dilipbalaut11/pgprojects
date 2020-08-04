@@ -15,6 +15,7 @@
 
 #include "access/htup_details.h"
 #include "storage/lockdefs.h"
+#include "utils/hsearch.h"
 #include "utils/relcache.h"
 
 /*

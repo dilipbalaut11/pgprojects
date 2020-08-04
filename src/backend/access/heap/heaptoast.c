@@ -94,7 +94,7 @@ heap_toast_delete(Relation rel, HeapTuple oldtup, bool is_speculative)
  */
 HeapTuple
 heap_toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
-							int options)
+							int options, HTAB *preserved_am_info)
 {
 	HeapTuple	result_tuple;
 	TupleDesc	tupleDesc;
@@ -324,6 +324,7 @@ heap_toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 						(char *) new_data + new_header_len,
 						new_data_len,
 						&(new_data->t_infomask),
+						&(new_data->t_infomask2),
 						((ttc.ttc_flags & TOAST_HAS_NULLS) != 0) ?
 						new_data->t_bits : NULL);
 	}
@@ -530,9 +531,10 @@ toast_flatten_tuple_to_datum(HeapTupleHeader tup,
 	heap_fill_tuple(tupleDesc,
 					toast_values,
 					toast_isnull,
-					(char *) new_data + new_header_len,
+					(char *)new_data + new_header_len,
 					new_data_len,
 					&(new_data->t_infomask),
+					&(new_data->t_infomask2),
 					has_nulls ? new_data->t_bits : NULL);
 
 	/*

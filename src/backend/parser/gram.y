@@ -599,6 +599,9 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>		hash_partbound
 %type <defelt>		hash_partbound_elem
 
+%type <node>	optColumnCompression
+%type <str>		compressionClause
+
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
  * They must be listed first so that their numeric codes do not depend on
@@ -634,9 +637,9 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	CACHE CALL CALLED CASCADE CASCADED CASE CAST CATALOG_P CHAIN CHAR_P
 	CHARACTER CHARACTERISTICS CHECK CHECKPOINT CLASS CLOSE
 	CLUSTER COALESCE COLLATE COLLATION COLUMN COLUMNS COMMENT COMMENTS COMMIT
-	COMMITTED CONCURRENTLY CONFIGURATION CONFLICT CONNECTION CONSTRAINT
-	CONSTRAINTS CONTENT_P CONTINUE_P CONVERSION_P COPY COST CREATE
-	CROSS CSV CUBE CURRENT_P
+	COMMITTED COMPRESSION CONCURRENTLY CONFIGURATION CONFLICT
+	CONNECTION CONSTRAINT CONSTRAINTS CONTENT_P CONTINUE_P CONVERSION_P COPY
+	COST CREATE CROSS CSV CUBE CURRENT_P
 	CURRENT_CATALOG CURRENT_DATE CURRENT_ROLE CURRENT_SCHEMA
 	CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR CYCLE
 
@@ -3374,11 +3377,12 @@ TypedTableElement:
 			| TableConstraint					{ $$ = $1; }
 		;
 
-columnDef:	ColId Typename create_generic_options ColQualList
+columnDef:	ColId Typename optColumnCompression create_generic_options ColQualList
 				{
 					ColumnDef *n = makeNode(ColumnDef);
 					n->colname = $1;
 					n->typeName = $2;
+					n->compression = (ColumnCompression *) $3;
 					n->inhcount = 0;
 					n->is_local = true;
 					n->is_not_null = false;
@@ -3387,8 +3391,8 @@ columnDef:	ColId Typename create_generic_options ColQualList
 					n->raw_default = NULL;
 					n->cooked_default = NULL;
 					n->collOid = InvalidOid;
-					n->fdwoptions = $3;
-					SplitColQualList($4, &n->constraints, &n->collClause,
+					n->fdwoptions = $4;
+					SplitColQualList($5, &n->constraints, &n->collClause,
 									 yyscanner);
 					n->location = @1;
 					$$ = (Node *)n;
@@ -3431,6 +3435,20 @@ columnOptions:	ColId ColQualList
 					n->location = @1;
 					$$ = (Node *)n;
 				}
+		;
+
+compressionClause:
+			COMPRESSION name { $$ = pstrdup($2); }
+		;
+
+optColumnCompression:
+			compressionClause
+				{
+					ColumnCompression *n = makeNode(ColumnCompression);
+					n->amname = $1;
+					$$ = (Node *) n;
+				}
+			| /*EMPTY*/	{ $$ = NULL; }
 		;
 
 ColQualList:
@@ -3662,6 +3680,7 @@ TableLikeOption:
 				| INDEXES			{ $$ = CREATE_TABLE_LIKE_INDEXES; }
 				| STATISTICS		{ $$ = CREATE_TABLE_LIKE_STATISTICS; }
 				| STORAGE			{ $$ = CREATE_TABLE_LIKE_STORAGE; }
+				| COMPRESSION		{ $$ = CREATE_TABLE_LIKE_COMPRESSION; }
 				| ALL				{ $$ = CREATE_TABLE_LIKE_ALL; }
 		;
 
@@ -5204,6 +5223,7 @@ CreateAmStmt: CREATE ACCESS METHOD name TYPE_P am_type HANDLER handler_name
 am_type:
 			INDEX			{ $$ = AMTYPE_INDEX; }
 		|	TABLE			{ $$ = AMTYPE_TABLE; }
+		|	COMPRESSION		{ $$ = AMTYPE_COMPRESSION; }
 		;
 
 /*****************************************************************************
@@ -15059,6 +15079,7 @@ unreserved_keyword:
 			| COMMENTS
 			| COMMIT
 			| COMMITTED
+			| COMPRESSION
 			| CONFIGURATION
 			| CONFLICT
 			| CONNECTION

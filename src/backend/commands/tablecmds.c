@@ -23,6 +23,7 @@
 #include "access/relscan.h"
 #include "access/sysattr.h"
 #include "access/tableam.h"
+#include "access/toast_internals.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/catalog.h"
@@ -34,6 +35,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/partition.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_attr_compression.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_depend.h"
@@ -41,6 +43,7 @@
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
+#include "catalog/pg_proc.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
@@ -88,6 +91,7 @@
 #include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/datum.h"
 #include "utils/fmgroids.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
@@ -164,6 +168,9 @@ typedef struct AlteredTableInfo
 	List	   *newvals;		/* List of NewColumnValue */
 	List	   *afterStmts;		/* List of utility command parsetrees */
 	bool		verify_new_notnull; /* T if we should recheck NOT NULL */
+	bool		new_notnull;	/* T if we added new NOT NULL constraints */
+	HTAB	   *preservedAmInfo;	/* Hash table for preserved compression
+									 * methods */
 	int			rewrite;		/* Reason for forced rewrite, if any */
 	Oid			newTableSpace;	/* new tablespace; 0 means no change */
 	bool		chgPersistence; /* T if SET LOGGED/UNLOGGED is used */
@@ -390,6 +397,8 @@ static bool check_for_column_name_collision(Relation rel, const char *colname,
 											bool if_not_exists);
 static void add_column_datatype_dependency(Oid relid, int32 attnum, Oid typid);
 static void add_column_collation_dependency(Oid relid, int32 attnum, Oid collid);
+static void add_column_compression_dependency(Oid relid, int32 attnum, Oid acoid);
+static void set_column_compression_relid(Oid acoid, Oid relid);
 static void ATPrepDropNotNull(Relation rel, bool recurse, bool recursing);
 static ObjectAddress ATExecDropNotNull(Relation rel, const char *colName, LOCKMODE lockmode);
 static void ATPrepSetNotNull(List **wqueue, Relation rel,
@@ -581,6 +590,7 @@ ObjectAddress
 DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 			   ObjectAddress *typaddress, const char *queryString)
 {
+	int			i;
 	char		relname[NAMEDATALEN];
 	Oid			namespaceId;
 	Oid			relationId;
@@ -800,6 +810,8 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	 * We can set the atthasdef flags now in the tuple descriptor; this just
 	 * saves StoreAttrDefault from having to do an immediate update of the
 	 * pg_attribute rows.
+	 *
+	 * Also create attribute compression records if needed.
 	 */
 	rawDefaults = NIL;
 	cookedDefaults = NIL;
@@ -850,6 +862,13 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 
 		if (colDef->generated)
 			attr->attgenerated = colDef->generated;
+
+		if (!IsBinaryUpgrade &&
+			(relkind == RELKIND_RELATION || relkind == RELKIND_PARTITIONED_TABLE))
+			attr->attcompression = CreateAttributeCompression(attr,
+														colDef->compression);
+		else
+			attr->attcompression = InvalidOid;
 	}
 
 	/*
@@ -916,6 +935,23 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	 * complaining about deadlock risks.
 	 */
 	rel = relation_open(relationId, AccessExclusiveLock);
+
+	/*
+	 * Specify relation Oid in attribute compression tuples, and create
+	 * dependencies.
+	 */
+	for (i = 0; i < (RelationGetDescr(rel))->natts; i++)
+	{
+		Form_pg_attribute attr;
+
+		attr = TupleDescAttr(RelationGetDescr(rel), i);
+		if (OidIsValid(attr->attcompression))
+		{
+			set_column_compression_relid(attr->attcompression, relationId);
+			add_column_compression_dependency(attr->attrelid, attr->attnum,
+											  attr->attcompression);
+		}
+	}
 
 	/*
 	 * Now add any newly specified column default and generation expressions
@@ -2371,6 +2407,19 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 									   storage_name(def->storage),
 									   storage_name(attribute->attstorage))));
 
+				if (OidIsValid(attribute->attcompression))
+				{
+					ColumnCompression *compression =
+					MakeColumnCompression(attribute->attcompression);
+
+					if (!def->compression)
+						def->compression = compression;
+					else
+						CheckCompressionMismatch(def->compression,
+												 compression,
+												 attributeName);
+				}
+
 				def->inhcount++;
 				/* Merge of NOT NULL constraints = OR 'em together */
 				def->is_not_null |= attribute->attnotnull;
@@ -2405,6 +2454,7 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 				def->collOid = attribute->attcollation;
 				def->constraints = NIL;
 				def->location = -1;
+				def->compression = MakeColumnCompression(attribute->attcompression);
 				inhSchema = lappend(inhSchema, def);
 				newattmap->attnums[parent_attno - 1] = ++child_attno;
 			}
@@ -2613,6 +2663,13 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 							 errdetail("%s versus %s",
 									   storage_name(def->storage),
 									   storage_name(newdef->storage))));
+
+				if (!def->compression)
+					def->compression = newdef->compression;
+				else if (newdef->compression)
+					CheckCompressionMismatch(def->compression,
+											 newdef->compression,
+											 attributeName);
 
 				/* Mark the column as locally defined */
 				def->is_local = true;
@@ -4852,7 +4909,9 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 
 		/*
 		 * We only need to rewrite the table if at least one column needs to
-		 * be recomputed, or we are changing its persistence.
+		 * be recomputed, we are adding/removing the OID column, we are
+		 * changing its persistence, or we are changing compression type of a
+		 * column without preserving old ones.
 		 *
 		 * There are two reasons for requiring a rewrite when changing
 		 * persistence: on one hand, we need to ensure that the buffers
@@ -5099,7 +5158,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 	if (newrel)
 	{
 		mycid = GetCurrentCommandId(true);
-		bistate = GetBulkInsertState();
+		bistate = GetBulkInsertState(tab->preservedAmInfo);
 		ti_options = TABLE_INSERT_SKIP_FSM;
 	}
 	else
@@ -5420,6 +5479,24 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 	}
 
 	FreeExecutorState(estate);
+
+	/* Remove old compression options */
+	if (tab->rewrite & AT_REWRITE_ALTER_COMPRESSION)
+	{
+		AttrCmPreservedInfo *pinfo;
+		HASH_SEQ_STATUS status;
+
+		Assert(tab->preservedAmInfo);
+		hash_seq_init(&status, tab->preservedAmInfo);
+		while ((pinfo = (AttrCmPreservedInfo *) hash_seq_search(&status)) != NULL)
+		{
+			CleanupAttributeCompression(tab->relid, pinfo->attnum,
+										pinfo->preserved_amoids);
+			list_free(pinfo->preserved_amoids);
+		}
+
+		hash_destroy(tab->preservedAmInfo);
+	}
 
 	table_close(oldrel, NoLock);
 	if (newrel)
@@ -6130,6 +6207,15 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	attribute.attislocal = colDef->is_local;
 	attribute.attinhcount = colDef->inhcount;
 	attribute.attcollation = collOid;
+
+	/* create attribute compresssion record */
+	if (rel->rd_rel->relkind == RELKIND_RELATION ||
+		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		attribute.attcompression = CreateAttributeCompression(&attribute,
+															  colDef->compression);
+	else
+		attribute.attcompression = InvalidOid;
+
 	/* attribute.attacl is handled by InsertPgAttributeTuples() */
 
 	ReleaseSysCache(typeTuple);
@@ -6301,6 +6387,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	 */
 	add_column_datatype_dependency(myrelid, newattnum, attribute.atttypid);
 	add_column_collation_dependency(myrelid, newattnum, attribute.attcollation);
+	add_column_compression_dependency(myrelid, newattnum, attribute.attcompression);
 
 	/*
 	 * Propagate to children as appropriate.  Unlike most other ALTER
@@ -6426,6 +6513,30 @@ add_column_datatype_dependency(Oid relid, int32 attnum, Oid typid)
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 }
 
+/* Update acrelid in pg_attr_compression */
+static void
+set_column_compression_relid(Oid acoid, Oid relid)
+{
+	Relation	rel;
+	HeapTuple	tuple;
+	Form_pg_attr_compression acform;
+
+	Assert(OidIsValid(relid));
+	if (IsBuiltinCompression(acoid))
+		return;
+
+	rel = table_open(AttrCompressionRelationId, RowExclusiveLock);
+	tuple = SearchSysCache1(ATTCOMPRESSIONOID, ObjectIdGetDatum(acoid));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for attribute compression %u", acoid);
+
+	acform = (Form_pg_attr_compression) GETSTRUCT(tuple);
+	acform->acrelid = relid;
+	CatalogTupleUpdate(rel, &tuple->t_self, tuple);
+	ReleaseSysCache(tuple);
+	table_close(rel, RowExclusiveLock);
+}
+
 /*
  * Install a column's dependency on its collation.
  */
@@ -6446,6 +6557,106 @@ add_column_collation_dependency(Oid relid, int32 attnum, Oid collid)
 		referenced.objectSubId = 0;
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 	}
+}
+
+/*
+ * Install a dependency for compression options on its column.
+ *
+ * If it is builtin attribute compression then column depends on it. This
+ * is used to determine connection between column and builtin attribute
+ * compression in ALTER SET COMPRESSION command.
+ *
+ * If dependency is already there the whole thing is skipped.
+ */
+static void
+add_column_compression_dependency(Oid relid, int32 attnum, Oid acoid)
+{
+	bool		found = false;
+	Relation	depRel;
+	ObjectAddress acref,
+				attref;
+	HeapTuple	depTup;
+	ScanKeyData key[3];
+	SysScanDesc scan;
+
+	if (!OidIsValid(acoid))
+		return;
+
+	Assert(relid > 0 && attnum > 0);
+	ObjectAddressSet(acref, AttrCompressionRelationId, acoid);
+	ObjectAddressSubSet(attref, RelationRelationId, relid, attnum);
+
+	depRel = table_open(DependRelationId, AccessShareLock);
+
+	if (IsBuiltinCompression(acoid))
+	{
+		ScanKeyInit(&key[0],
+					Anum_pg_depend_classid,
+					BTEqualStrategyNumber, F_OIDEQ,
+					ObjectIdGetDatum(RelationRelationId));
+		ScanKeyInit(&key[1],
+					Anum_pg_depend_objid,
+					BTEqualStrategyNumber, F_OIDEQ,
+					ObjectIdGetDatum(relid));
+		ScanKeyInit(&key[2],
+					Anum_pg_depend_objsubid,
+					BTEqualStrategyNumber, F_INT4EQ,
+					Int32GetDatum((int32) attnum));
+
+		scan = systable_beginscan(depRel, DependDependerIndexId, true,
+								  NULL, 3, key);
+
+		while (HeapTupleIsValid(depTup = systable_getnext(scan)))
+		{
+			Form_pg_depend foundDep = (Form_pg_depend) GETSTRUCT(depTup);
+
+			if (foundDep->refclassid == AttrCompressionRelationId &&
+				foundDep->refobjid == acoid)
+			{
+				found = true;
+				break;
+			}
+		}
+		systable_endscan(scan);
+
+		if (!found)
+			recordDependencyOn(&attref, &acref, DEPENDENCY_NORMAL);
+	}
+	else
+	{
+		ScanKeyInit(&key[0],
+					Anum_pg_depend_refclassid,
+					BTEqualStrategyNumber, F_OIDEQ,
+					ObjectIdGetDatum(RelationRelationId));
+		ScanKeyInit(&key[1],
+					Anum_pg_depend_refobjid,
+					BTEqualStrategyNumber, F_OIDEQ,
+					ObjectIdGetDatum(relid));
+		ScanKeyInit(&key[2],
+					Anum_pg_depend_refobjsubid,
+					BTEqualStrategyNumber, F_INT4EQ,
+					Int32GetDatum((int32) attnum));
+
+		scan = systable_beginscan(depRel, DependReferenceIndexId, true,
+								  NULL, 3, key);
+
+		while (HeapTupleIsValid(depTup = systable_getnext(scan)))
+		{
+			Form_pg_depend foundDep = (Form_pg_depend) GETSTRUCT(depTup);
+
+			if (foundDep->classid == AttrCompressionRelationId &&
+				foundDep->objid == acoid)
+			{
+				found = true;
+				break;
+			}
+		}
+		systable_endscan(scan);
+
+		if (!found)
+			recordDependencyOn(&acref, &attref, DEPENDENCY_INTERNAL);
+	}
+	table_close(depRel, AccessShareLock);
 }
 
 /*
@@ -7488,6 +7699,10 @@ ATExecSetStorage(Relation rel, const char *colName, Node *newValue, LOCKMODE loc
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("column data type %s can only have storage PLAIN",
 						format_type_be(attrtuple->atttypid))));
+
+	/* use default compression if storage is not PLAIN */
+	if (!OidIsValid(attrtuple->attcompression) && (newstorage != 'p'))
+		attrtuple->attcompression = DefaultCompressionOid;
 
 	CatalogTupleUpdate(attrelation, &tuple->t_self, tuple);
 
@@ -10537,6 +10752,45 @@ createForeignKeyCheckTriggers(Oid myRelOid, Oid refRelOid,
 }
 
 /*
+ * Initialize hash table used to keep rewrite rules for
+ * compression changes in ALTER commands.
+ */
+static void
+setupCompressionRewriteRules(AlteredTableInfo *tab, const char *column,
+							 AttrNumber attnum, List *preserved_amoids)
+{
+	bool		found;
+	AttrCmPreservedInfo *pinfo;
+
+	Assert(!IsBinaryUpgrade);
+	tab->rewrite |= AT_REWRITE_ALTER_COMPRESSION;
+
+	/* initialize hash for oids */
+	if (tab->preservedAmInfo == NULL)
+	{
+		HASHCTL		ctl;
+
+		MemSet(&ctl, 0, sizeof(ctl));
+		ctl.keysize = sizeof(AttrNumber);
+		ctl.entrysize = sizeof(AttrCmPreservedInfo);
+		tab->preservedAmInfo =
+			hash_create("preserved access methods cache", 10, &ctl,
+						HASH_ELEM | HASH_BLOBS);
+	}
+	pinfo = (AttrCmPreservedInfo *) hash_search(tab->preservedAmInfo,
+												&attnum, HASH_ENTER, &found);
+
+	if (found)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot alter compression of column \"%s\" twice", column),
+				 errhint("Remove one of statements from the command.")));
+
+	pinfo->attnum = attnum;
+	pinfo->preserved_amoids = preserved_amoids;
+}
+
+/*
  * ALTER TABLE DROP CONSTRAINT
  *
  * Like DROP COLUMN, we can't use the normal ALTER TABLE recursion mechanism.
@@ -11365,6 +11619,12 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 								   colName)));
 				break;
 
+			case OCLASS_ATTR_COMPRESSION:
+
+				/* Just check that dependency is the right type */
+				Assert(foundDep->deptype == DEPENDENCY_INTERNAL);
+				break;
+
 			case OCLASS_DEFAULT:
 
 				/*
@@ -11475,7 +11735,8 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 			  foundDep->refobjid == attTup->attcollation) &&
 			!(foundDep->refclassid == RelationRelationId &&
 			  foundDep->refobjid == RelationGetRelid(rel) &&
-			  foundDep->refobjsubid != 0)
+			  foundDep->refobjsubid != 0) &&
+			 foundDep->refclassid != AttrCompressionRelationId
 			)
 			elog(ERROR, "found unexpected dependency for column: %s",
 				 getObjectDescription(&foundObject, false));
@@ -11566,6 +11827,34 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 
 	ReleaseSysCache(typeTuple);
 
+	if (rel->rd_rel->relkind == RELKIND_RELATION ||
+		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		/* Setup attribute compression for new attribute */
+		if (OidIsValid(attTup->attcompression) && attTup->attstorage == 'p')
+		{
+			/* Set up rewrite of table */
+			attTup->attcompression = InvalidOid;
+			setupCompressionRewriteRules(tab, colName, attOldTup->attnum, NIL);
+		}
+		else if (OidIsValid(attTup->attcompression))
+		{
+			/* create new record */
+			ColumnCompression *compression = MakeColumnCompression(attTup->attcompression);
+
+			if (!IsBuiltinCompression(attTup->attcompression))
+				setupCompressionRewriteRules(tab, colName, attOldTup->attnum, NIL);
+
+			attTup->attcompression = CreateAttributeCompression(attTup, compression);
+		}
+		else if (attTup->attstorage != 'p')
+			attTup->attcompression = DefaultCompressionOid;
+		else
+			attTup->attcompression = InvalidOid;
+	}
+	else
+		attTup->attcompression = InvalidOid;
+
 	CatalogTupleUpdate(attrelation, &heapTup->t_self, heapTup);
 
 	table_close(attrelation, RowExclusiveLock);
@@ -11573,6 +11862,11 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 	/* Install dependencies on new datatype and collation */
 	add_column_datatype_dependency(RelationGetRelid(rel), attnum, targettype);
 	add_column_collation_dependency(RelationGetRelid(rel), attnum, targetcollid);
+
+	/* Create dependency for new attribute compression */
+	if (OidIsValid(attTup->attcompression))
+		add_column_compression_dependency(RelationGetRelid(rel), attnum,
+										  attTup->attcompression);
 
 	/*
 	 * Drop any pg_statistic entry for the column, since it's now wrong type

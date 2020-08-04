@@ -15,6 +15,7 @@
 
 #include "access/htup_details.h"
 #include "storage/lockdefs.h"
+#include "utils/hsearch.h"
 #include "utils/relcache.h"
 
 /*
@@ -95,7 +96,8 @@
  * ----------
  */
 extern HeapTuple heap_toast_insert_or_update(Relation rel, HeapTuple newtup,
-											 HeapTuple oldtup, int options);
+											 HeapTuple oldtup, int options,
+											 HTAB *preserved_am_info);
 
 /* ----------
  * heap_toast_delete -

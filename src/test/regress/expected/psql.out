@@ -2801,34 +2801,34 @@ CREATE ACCESS METHOD heap_psql TYPE TABLE HANDLER heap_tableam_handler;
 CREATE TABLE tbl_heap_psql(f1 int, f2 char(100)) using heap_psql;
 CREATE TABLE tbl_heap(f1 int, f2 char(100)) using heap;
 \d+ tbl_heap_psql
-                                   Table "public.tbl_heap_psql"
- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+--------------+-------------
- f1     | integer        |           |          |         | plain    |              | 
- f2     | character(100) |           |          |         | extended |              | 
+                                          Table "public.tbl_heap_psql"
+ Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |             |              | 
+ f2     | character(100) |           |          |         | extended | pglz        |              | 
 
 \d+ tbl_heap
-                                     Table "public.tbl_heap"
- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+--------------+-------------
- f1     | integer        |           |          |         | plain    |              | 
- f2     | character(100) |           |          |         | extended |              | 
+                                            Table "public.tbl_heap"
+ Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |             |              | 
+ f2     | character(100) |           |          |         | extended | pglz        |              | 
 
 \set HIDE_TABLEAM off
 \d+ tbl_heap_psql
-                                   Table "public.tbl_heap_psql"
- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+--------------+-------------
- f1     | integer        |           |          |         | plain    |              | 
- f2     | character(100) |           |          |         | extended |              | 
+                                          Table "public.tbl_heap_psql"
+ Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |             |              | 
+ f2     | character(100) |           |          |         | extended | pglz        |              | 
 Access method: heap_psql
 
 \d+ tbl_heap
-                                     Table "public.tbl_heap"
- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+--------------+-------------
- f1     | integer        |           |          |         | plain    |              | 
- f2     | character(100) |           |          |         | extended |              | 
+                                            Table "public.tbl_heap"
+ Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |             |              | 
+ f2     | character(100) |           |          |         | extended | pglz        |              | 
 Access method: heap
 
 \set HIDE_TABLEAM on
@@ -4843,8 +4843,11 @@ List of access methods
  hash   | Index
  heap   | Table
  heap2  | Table
+ pglz   | 
+ pglz1  | 
  spgist | Index
-(8 rows)
+ zlib   | 
+(11 rows)
 
 \dA *
 List of access methods
@@ -4857,8 +4860,11 @@ List of access methods
  hash   | Index
  heap   | Table
  heap2  | Table
+ pglz   | 
+ pglz1  | 
  spgist | Index
-(8 rows)
+ zlib   | 
+(11 rows)
 
 \dA h*
 List of access methods
@@ -4893,8 +4899,11 @@ List of access methods
  hash   | Index | hashhandler          | hash index access method
  heap   | Table | heap_tableam_handler | heap table access method
  heap2  | Table | heap_tableam_handler | 
+ pglz   |       | pglzhandler          | pglz compression access method
+ pglz1  |       | pglzhandler          | 
  spgist | Index | spghandler           | SP-GiST index access method
-(8 rows)
+ zlib   |       | zlibhandler          | zlib compression access method
+(11 rows)
 
 \dA+ *
                              List of access methods
@@ -4907,8 +4916,11 @@ List of access methods
  hash   | Index | hashhandler          | hash index access method
  heap   | Table | heap_tableam_handler | heap table access method
  heap2  | Table | heap_tableam_handler | 
+ pglz   |       | pglzhandler          | pglz compression access method
+ pglz1  |       | pglzhandler          | 
  spgist | Index | spghandler           | SP-GiST index access method
-(8 rows)
+ zlib   |       | zlibhandler          | zlib compression access method
+(11 rows)
 
 \dA+ h*
                      List of access methods

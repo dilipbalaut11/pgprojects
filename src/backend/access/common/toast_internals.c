@@ -662,7 +662,7 @@ lookup_compression_am_options(Oid acoid, CompressionAmOptions *result)
 	amhandler = get_am_handler_oid(acoid, AMTYPE_COMPRESSION, false);
 	result->amroutine = InvokeCompressionAmHandler(amhandler);
 	result->acstate = result->amroutine->cminitstate ?
-			result->amroutine->cminitstate(acoid, NULL) : NULL;
+			result->amroutine->cminitstate(acoid) : NULL;
 
 	if (!result->amroutine)
 		/* should not happen but need to check if something goes wrong */

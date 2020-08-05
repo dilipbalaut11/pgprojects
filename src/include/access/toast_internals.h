@@ -37,19 +37,6 @@ typedef struct toast_compress_header_custom
 	Oid cmid;	   /* Oid from pg_attr_compression */
 } toast_compress_header_custom;
 
-/*
- * Used to pass to preserved compression access methods from
- * ALTER TABLE SET COMPRESSION into toast_insert_or_update.
- */
-typedef struct AttrCmPreservedInfo
-{
-	AttrNumber attnum;
-	List *preserved_amoids;
-} AttrCmPreservedInfo;
-
-static HTAB *amoptions_cache = NULL;
-static MemoryContext amoptions_cache_mcxt = NULL;
-
 #define RAWSIZEMASK (0x3FFFFFFFU)
 
 /*
@@ -129,7 +116,7 @@ extern int	toast_open_indexes(Relation toastrel,
 extern void toast_close_indexes(Relation *toastidxs, int num_indexes,
 								LOCKMODE lock);
 extern void init_toast_snapshot(Snapshot toast_snapshot);
-extern void init_amoptions_cache(void);
+
 /*
  * lookup_compression_am_options -
  *

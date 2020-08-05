@@ -18,83 +18,17 @@
 #include "nodes/parsenodes.h"
 #include "utils/builtins.h"
 
-#define PGLZ_OPTIONS_COUNT 6
-
-static char *PGLZ_options[PGLZ_OPTIONS_COUNT] = {
-	"min_input_size",
-	"max_input_size",
-	"min_comp_rate",
-	"first_success_by",
-	"match_size_good",
-	"match_size_drop"
-};
-
-/*
- * Convert value from reloptions to int32, and report if it is not correct.
- * Also checks parameter names
- */
-static int32
-parse_option(char *name, char *value)
-{
-	int			i;
-
-	for (i = 0; i < PGLZ_OPTIONS_COUNT; i++)
-	{
-		if (strcmp(PGLZ_options[i], name) == 0)
-			return pg_atoi(value, 4, 0);
-	}
-
-	ereport(ERROR,
-			(errcode(ERRCODE_UNDEFINED_PARAMETER),
-			 errmsg("unexpected parameter for pglz: \"%s\"", name)));
-}
-
-/*
- * Check PGLZ options if specified
- */
-static void
-pglz_cmcheck(Form_pg_attribute att, List *options)
-{
-	ListCell   *lc;
-
-	foreach(lc, options)
-	{
-		DefElem    *def = (DefElem *) lfirst(lc);
-
-		parse_option(def->defname, defGetString(def));
-	}
-}
-
 /*
  * Configure PGLZ_Strategy struct for compression function
  */
 static void *
-pglz_cminitstate(Oid acoid, List *options)
+pglz_cminitstate(Oid acoid)
 {
-	ListCell   *lc;
 	PGLZ_Strategy *strategy = palloc(sizeof(PGLZ_Strategy));
 
 	/* initialize with default strategy values */
 	memcpy(strategy, PGLZ_strategy_default, sizeof(PGLZ_Strategy));
-	foreach(lc, options)
-	{
-		DefElem    *def = (DefElem *) lfirst(lc);
-		int32		val = parse_option(def->defname, defGetString(def));
 
-		/* fill the strategy */
-		if (strcmp(def->defname, "min_input_size") == 0)
-			strategy->min_input_size = val;
-		else if (strcmp(def->defname, "max_input_size") == 0)
-			strategy->max_input_size = val;
-		else if (strcmp(def->defname, "min_comp_rate") == 0)
-			strategy->min_comp_rate = val;
-		else if (strcmp(def->defname, "first_success_by") == 0)
-			strategy->first_success_by = val;
-		else if (strcmp(def->defname, "match_size_good") == 0)
-			strategy->match_size_good = val;
-		else if (strcmp(def->defname, "match_size_drop") == 0)
-			strategy->match_size_drop = val;
-	}
 	return (void *) strategy;
 }
 
@@ -180,7 +114,6 @@ pglzhandler(PG_FUNCTION_ARGS)
 {
 	CompressionAmRoutine *routine = makeNode(CompressionAmRoutine);
 
-	routine->cmcheck = pglz_cmcheck;
 	routine->cminitstate = pglz_cminitstate;
 	routine->cmcompress = pglz_cmcompress;
 	routine->cmdecompress = pglz_cmdecompress;

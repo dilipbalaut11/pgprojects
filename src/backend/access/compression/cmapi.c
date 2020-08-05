@@ -18,7 +18,6 @@
 #include "access/htup_details.h"
 #include "access/reloptions.h"
 #include "catalog/pg_am.h"
-#include "catalog/pg_attr_compression.h"
 #include "commands/defrem.h"
 #include "utils/syscache.h"
 
@@ -41,28 +40,4 @@ InvokeCompressionAmHandler(Oid amhandler)
 			 amhandler);
 
 	return routine;
-}
-
-/*
- * GetAttrCompressionAmOid
- *
- * Return access method Oid by attribute compression Oid
- */
-Oid
-GetAttrCompressionAmOid(Oid acoid)
-{
-	Oid			result;
-	HeapTuple	tuple;
-	Form_pg_attr_compression acform;
-
-	/* extract access method Oid */
-	tuple = SearchSysCache1(ATTCOMPRESSIONOID, ObjectIdGetDatum(acoid));
-	if (!HeapTupleIsValid(tuple))
-		elog(ERROR, "cache lookup failed for attribute compression %u", acoid);
-
-	acform = (Form_pg_attr_compression) GETSTRUCT(tuple);
-	result = get_compression_am_oid(NameStr(acform->acname), false);
-	ReleaseSysCache(tuple);
-
-	return result;
 }

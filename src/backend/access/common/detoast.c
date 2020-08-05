@@ -454,7 +454,7 @@ toast_decompress_datum(struct varlena *attr)
 		CompressionAmOptions cmoptions;
 		toast_compress_header_custom *hdr;
 
-		hdr = (toast_compress_header_custom *)attr;
+		hdr = (toast_compress_header_custom *) attr;
 		lookup_compression_am_options(hdr->cmid, &cmoptions);
 		result = cmoptions.amroutine->cmdecompress(&cmoptions, attr);
 	}
@@ -500,7 +500,7 @@ toast_decompress_datum_slice(struct varlena *attr, int32 slicelength)
 		CompressionAmOptions cmoptions;
 		toast_compress_header_custom *hdr;
 
-		hdr = (toast_compress_header_custom *)attr;
+		hdr = (toast_compress_header_custom *) attr;
 		lookup_compression_am_options(hdr->cmid, &cmoptions);
 		if (cmoptions.amroutine->cmdecompress_slice)
 			result = cmoptions.amroutine->cmdecompress_slice(&cmoptions, attr,

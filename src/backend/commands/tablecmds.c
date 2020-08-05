@@ -35,7 +35,6 @@
 #include "catalog/objectaccess.h"
 #include "catalog/partition.h"
 #include "catalog/pg_am.h"
-#include "catalog/pg_attr_compression.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_depend.h"
@@ -11525,8 +11524,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 			  foundDep->refobjid == attTup->attcollation) &&
 			!(foundDep->refclassid == RelationRelationId &&
 			  foundDep->refobjid == RelationGetRelid(rel) &&
-			  foundDep->refobjsubid != 0) &&
-			 foundDep->refclassid != AttrCompressionRelationId
+			  foundDep->refobjsubid != 0)
 			)
 			elog(ERROR, "found unexpected dependency for column: %s",
 				 getObjectDescription(&foundObject, false));

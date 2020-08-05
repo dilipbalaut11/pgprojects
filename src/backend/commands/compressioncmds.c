@@ -22,7 +22,6 @@
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
-#include "catalog/pg_attr_compression_d.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_am_d.h"
 #include "catalog/pg_collation_d.h"

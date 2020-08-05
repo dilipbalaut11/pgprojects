@@ -14,12 +14,12 @@
 #define CMAPI_H
 
 #include "postgres.h"
-#include "catalog/pg_attr_compression.h"
+#include "catalog/pg_am.h"
 #include "catalog/pg_attribute.h"
 #include "nodes/pg_list.h"
 
 #define IsBuiltinCompression(cmid)	((cmid) < FirstBootstrapObjectId)
-#define DefaultCompressionOid		(PGLZ_AC_OID)
+#define DefaultCompressionOid		(PGLZ_COMPRESSION_AM_OID)
 
 typedef struct CompressionAmRoutine CompressionAmRoutine;
 

@@ -34,7 +34,7 @@ typedef struct toast_compress_header_custom
 {
 	int32 vl_len_; /* varlena header (do not touch directly!) */
 	uint32 info;   /* flags (2 high bits) and rawsize */
-	Oid cmid;	   /* Oid from pg_attr_compression */
+	Oid cmid;	   /* Oid from pg_am */
 } toast_compress_header_custom;
 
 #define RAWSIZEMASK (0x3FFFFFFFU)

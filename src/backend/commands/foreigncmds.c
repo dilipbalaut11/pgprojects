@@ -49,10 +49,11 @@ typedef struct
 /* Internal functions */
 static void import_error_callback(void *arg);
 
+
 /*
  * Convert a DefElem list to the text array format that is used in
- * pg_foreign_data_wrapper, pg_foreign_server, pg_user_mapping,
- * pg_foreign_table and pg_attr_compression
+ * pg_foreign_data_wrapper, pg_foreign_server, pg_user_mapping, and
+ * pg_foreign_table.
  *
  * Returns the array in the form of a Datum, or PointerGetDatum(NULL)
  * if the list is empty.
@@ -65,14 +66,14 @@ static Datum
 optionListToArray(List *options)
 {
 	ArrayBuildState *astate = NULL;
-	ListCell *cell;
+	ListCell   *cell;
 
-	foreach (cell, options)
+	foreach(cell, options)
 	{
-		DefElem *def = lfirst(cell);
+		DefElem    *def = lfirst(cell);
 		const char *value;
-		Size len;
-		text *t;
+		Size		len;
+		text	   *t;
 
 		value = defGetString(def);
 		len = VARHDRSZ + strlen(def->defname) + 1 + strlen(value);
@@ -90,6 +91,7 @@ optionListToArray(List *options)
 
 	return PointerGetDatum(NULL);
 }
+
 
 /*
  * Transform a list of DefElem into text array format.  This is substantially

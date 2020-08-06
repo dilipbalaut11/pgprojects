@@ -615,7 +615,7 @@ static const ObjectPropertyType ObjectProperty[] =
 		InvalidAttrNumber,
 		OBJECT_USER_MAPPING,
 		false
-	}
+	},
 };
 
 /*

@@ -657,43 +657,6 @@ my %tests = (
 		},
 	},
 
-	# compression data in binary upgrade mode
-	'ALTER TABLE test_table_compression ALTER COLUMN ... SET COMPRESSION' => {
-		all_runs  => 1,
-		catch_all => 'ALTER TABLE ... commands',
-		regexp    => qr/^
-			\QCREATE TABLE dump_test.test_table_compression (\E\n
-			\s+\Qcol1 text,\E\n
-			\s+\Qcol2 text,\E\n
-			\s+\Qcol3 text,\E\n
-			\s+\Qcol4 text\E\n
-			\);
-			.*
-			\QSELECT binary_upgrade_set_next_attr_compression_oid('\E\d+\Q'::pg_catalog.oid);\E\n
-			\QALTER TABLE dump_test.test_table_compression ALTER COLUMN col1\E\n
-			\QSET COMPRESSION pglz;\E\n
-			.*
-			\QSELECT binary_upgrade_set_next_attr_compression_oid('\E\d+\Q'::pg_catalog.oid);\E\n
-			\QALTER TABLE dump_test.test_table_compression ALTER COLUMN col2\E\n
-			\QSET COMPRESSION pglz2;\E\n
-			.*
-			\QSELECT binary_upgrade_set_next_attr_compression_oid('\E\d+\Q'::pg_catalog.oid);\E\n
-			\QALTER TABLE dump_test.test_table_compression ALTER COLUMN col3\E\n
-			\QSET COMPRESSION pglz\E\n
-			\QWITH (min_input_size '1000');\E\n
-			.*
-			\QSELECT binary_upgrade_set_next_attr_compression_oid('\E\d+\Q'::pg_catalog.oid);\E\n
-			\QALTER TABLE dump_test.test_table_compression ALTER COLUMN col4\E\n
-			\QSET COMPRESSION pglz2\E\n
-			\QWITH (min_input_size '1000');\E\n
-			\QSELECT binary_upgrade_set_next_attr_compression_oid('\E\d+\Q'::pg_catalog.oid);\E\n
-			\QALTER TABLE dump_test.test_table_compression ALTER COLUMN col4\E\n
-			\QSET COMPRESSION pglz2\E\n
-			\QWITH (min_input_size '2000');\E\n
-			/xms,
-		like => { binary_upgrade => 1, },
-	},
-
 	'ALTER TABLE ONLY test_table ALTER COLUMN col1 SET STATISTICS 90' => {
 		create_order => 93,
 		create_sql =>
@@ -1413,17 +1376,6 @@ my %tests = (
 		  'CREATE ACCESS METHOD gist2 TYPE INDEX HANDLER gisthandler;',
 		regexp =>
 		  qr/CREATE ACCESS METHOD gist2 TYPE INDEX HANDLER gisthandler;/m,
-		like => { %full_runs, section_pre_data => 1, },
-	},
-
-	'CREATE ACCESS METHOD pglz2' => {
-		all_runs     => 1,
-		catch_all    => 'CREATE ... commands',
-		create_order => 52,
-		create_sql =>
-		  'CREATE ACCESS METHOD pglz2 TYPE COMPRESSION HANDLER pglzhandler;',
-		regexp =>
-		  qr/CREATE ACCESS METHOD pglz2 TYPE COMPRESSION HANDLER pglzhandler;/m,
 		like => { %full_runs, section_pre_data => 1, },
 	},
 

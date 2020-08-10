@@ -3817,8 +3817,6 @@ raw_expression_tree_walker(Node *node,
 				/* for now, constraints are ignored */
 			}
 			break;
-		case T_ColumnCompression:
-			break;
 		case T_IndexElem:
 			{
 				IndexElem  *indelem = (IndexElem *) node;

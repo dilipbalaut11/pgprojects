@@ -71,11 +71,6 @@
      </row>
 
      <row>
-      <entry><link linkend="catalog-pg-attr-compression"><structname>pg_attr_compression</structname></link></entry>
-      <entry>table columns compression relationships and options</entry>
-     </row>
-
-     <row>
       <entry><link linkend="catalog-pg-attrdef"><structname>pg_attrdef</structname></link></entry>
       <entry>column default values</entry>
      </row>
@@ -1017,12 +1012,6 @@
 
  </sect1>
 
- <sect1 id="catalog-pg-attr-compression">
-  <title><structname>pg_attr_compression</structname></title>
-  <indexterm zone="catalog-pg-attr-compression">
-   <primary>pg_attr_compression</primary>
-  </indexterm>
- </sect1>
 
  <sect1 id="catalog-pg-attrdef">
   <title><structname>pg_attrdef</structname></title>

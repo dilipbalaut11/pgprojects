@@ -1336,7 +1336,6 @@ untransformRelOptions(Datum options)
 			val = (Node *) makeString(pstrdup(p));
 		}
 		result = lappend(result, makeDefElem(pstrdup(s), val, -1));
-		pfree(s);
 	}
 
 	return result;

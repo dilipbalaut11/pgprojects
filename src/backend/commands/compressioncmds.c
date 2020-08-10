@@ -45,8 +45,7 @@
  * where COMPRESSION syntax is optional.
  */
 Oid
-CreateAttributeCompression(Form_pg_attribute att,
-						   ColumnCompression *compression)
+GetAttributeCompression(Form_pg_attribute att, char *compression)
 {
 	/* No compression for PLAIN storage. */
 	if (att->attstorage == TYPSTORAGE_PLAIN)
@@ -56,18 +55,18 @@ CreateAttributeCompression(Form_pg_attribute att,
 	if (compression == NULL)
 		return DefaultCompressionOid;
 
-	return get_compression_am_oid(compression->amname, false);
+	return get_compression_am_oid(compression, false);
 }
 
 /*
- * Construct ColumnCompression node by attribute compression Oid.
+ * Get compression name by attribute compression Oid.
  */
-ColumnCompression *
-MakeColumnCompression(Oid amoid)
+char *
+GetCompressionName(Oid amoid)
 {
 	HeapTuple	tuple;
 	Form_pg_am amform;
-	ColumnCompression *node;
+	char	  *amname;
 
 	if (!OidIsValid(amoid))
 		return NULL;
@@ -78,26 +77,10 @@ MakeColumnCompression(Oid amoid)
 		elog(ERROR, "cache lookup failed for attribute compression %u", amoid);
 
 	amform = (Form_pg_am) GETSTRUCT(tuple);
-	node = makeNode(ColumnCompression);
-	node->amname = pstrdup(NameStr(amform->amname));
+	amname = pstrdup(NameStr(amform->amname));
 
 	ReleaseSysCache(tuple);
 
-	return node;
-}
-
-/*
- * Compare compression options for two columns.
- */
-void
-CheckCompressionMismatch(ColumnCompression *c1, ColumnCompression *c2,
-						 const char *attributeName)
-{
-	if (strcmp(c1->amname, c2->amname))
-		ereport(ERROR,
-				(errcode(ERRCODE_DATATYPE_MISMATCH),
-				 errmsg("column \"%s\" has a compression method conflict",
-						attributeName),
-				 errdetail("%s versus %s", c1->amname, c2->amname)));
+	return amname;
 }
 

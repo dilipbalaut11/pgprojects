@@ -599,8 +599,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>		hash_partbound
 %type <defelt>		hash_partbound_elem
 
-%type <node>	optColumnCompression
-%type <str>		compressionClause
+%type <str>	optColumnCompression
 
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
@@ -3382,7 +3381,7 @@ columnDef:	ColId Typename optColumnCompression create_generic_options ColQualLis
 					ColumnDef *n = makeNode(ColumnDef);
 					n->colname = $1;
 					n->typeName = $2;
-					n->compression = (ColumnCompression *) $3;
+					n->compression = $3;
 					n->inhcount = 0;
 					n->is_local = true;
 					n->is_not_null = false;
@@ -3437,19 +3436,13 @@ columnOptions:	ColId ColQualList
 				}
 		;
 
-compressionClause:
-			COMPRESSION name { $$ = pstrdup($2); }
-		;
-
-optColumnCompression:
-			compressionClause
-				{
-					ColumnCompression *n = makeNode(ColumnCompression);
-					n->amname = $1;
-					$$ = (Node *) n;
-				}
-			| /*EMPTY*/	{ $$ = NULL; }
-		;
+optColumnCompression: 
+					COMPRESSION name
+					{
+						$$ = $2;
+					}
+					| /*EMPTY*/	{ $$ = NULL; }
+				;
 
 ColQualList:
 			ColQualList ColConstraint				{ $$ = lappend($1, $2); }

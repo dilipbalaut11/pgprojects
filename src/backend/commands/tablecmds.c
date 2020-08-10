@@ -859,7 +859,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 
 		if (!IsBinaryUpgrade &&
 			(relkind == RELKIND_RELATION || relkind == RELKIND_PARTITIONED_TABLE))
-			attr->attcompression = CreateAttributeCompression(attr,
+			attr->attcompression = GetAttributeCompression(attr,
 														colDef->compression);
 		else
 			attr->attcompression = InvalidOid;
@@ -2386,15 +2386,16 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 
 				if (OidIsValid(attribute->attcompression))
 				{
-					ColumnCompression *compression =
-					MakeColumnCompression(attribute->attcompression);
+					char *compression = GetCompressionName(attribute->attcompression);
 
 					if (!def->compression)
 						def->compression = compression;
-					else
-						CheckCompressionMismatch(def->compression,
-												 compression,
-												 attributeName);
+					else if (strcmp(def->compression, compression))
+							ereport(ERROR,
+								(errcode(ERRCODE_DATATYPE_MISMATCH),
+									errmsg("column \"%s\" has a compression method conflict",
+										attributeName),
+									errdetail("%s versus %s", def->compression, compression)));
 				}
 
 				def->inhcount++;
@@ -2431,7 +2432,7 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 				def->collOid = attribute->attcollation;
 				def->constraints = NIL;
 				def->location = -1;
-				def->compression = MakeColumnCompression(attribute->attcompression);
+				def->compression = GetCompressionName(attribute->attcompression);
 				inhSchema = lappend(inhSchema, def);
 				newattmap->attnums[parent_attno - 1] = ++child_attno;
 			}
@@ -2644,9 +2645,14 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 				if (!def->compression)
 					def->compression = newdef->compression;
 				else if (newdef->compression)
-					CheckCompressionMismatch(def->compression,
-											 newdef->compression,
-											 attributeName);
+				{
+					if (strcmp(def->compression, newdef->compression))
+						ereport(ERROR,
+							(errcode(ERRCODE_DATATYPE_MISMATCH),
+								errmsg("column \"%s\" has a compression method conflict",
+									attributeName),
+								errdetail("%s versus %s", def->compression, newdef->compression)));
+				}
 
 				/* Mark the column as locally defined */
 				def->is_local = true;
@@ -6170,7 +6176,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	/* create attribute compresssion record */
 	if (rel->rd_rel->relkind == RELKIND_RELATION ||
 		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		attribute.attcompression = CreateAttributeCompression(&attribute,
+		attribute.attcompression = GetAttributeCompression(&attribute,
 															  colDef->compression);
 	else
 		attribute.attcompression = InvalidOid;
@@ -11619,7 +11625,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
 		/* Setup attribute compression */
-		if (attTup->attstorage == 'p')
+		if (attTup->attstorage == TYPSTORAGE_PLAIN)
 			attTup->attcompression = InvalidOid;
 		else if (!OidIsValid(attTup->attcompression))
 			attTup->attcompression = DefaultCompressionOid;

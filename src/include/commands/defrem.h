@@ -148,13 +148,8 @@ extern char *get_am_name(Oid amOid);
 extern regproc get_am_handler_oid(Oid amOid, char amtype, bool noerror);
 
 /* commands/compressioncmds.c */
-extern ColumnCompression *MakeColumnCompression(Oid acoid);
-extern Oid CreateAttributeCompression(Form_pg_attribute attr,
-						   ColumnCompression *compression);
-extern void RemoveAttributeCompression(Oid acoid);
-extern void CheckCompressionMismatch(ColumnCompression *c1,
-						 ColumnCompression *c2, const char *attributeName);
-void		CleanupAttributeCompression(Oid relid, AttrNumber attnum, List *keepAmOids);
+extern char *GetCompressionName(Oid acoid);
+extern Oid GetAttributeCompression(Form_pg_attribute attr, char *compression);
 
 /* support routines in commands/define.c */
 

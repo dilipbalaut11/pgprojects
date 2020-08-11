@@ -4844,10 +4844,9 @@ List of access methods
  heap   | Table
  heap2  | Table
  pglz   | 
- pglz1  | 
  spgist | Index
  zlib   | 
-(11 rows)
+(10 rows)
 
 \dA *
 List of access methods
@@ -4861,10 +4860,9 @@ List of access methods
  heap   | Table
  heap2  | Table
  pglz   | 
- pglz1  | 
  spgist | Index
  zlib   | 
-(11 rows)
+(10 rows)
 
 \dA h*
 List of access methods
@@ -4900,10 +4898,9 @@ List of access methods
  heap   | Table | heap_tableam_handler | heap table access method
  heap2  | Table | heap_tableam_handler | 
  pglz   |       | pglzhandler          | pglz compression access method
- pglz1  |       | pglzhandler          | 
  spgist | Index | spghandler           | SP-GiST index access method
  zlib   |       | zlibhandler          | zlib compression access method
-(11 rows)
+(10 rows)
 
 \dA+ *
                              List of access methods
@@ -4917,10 +4914,9 @@ List of access methods
  heap   | Table | heap_tableam_handler | heap table access method
  heap2  | Table | heap_tableam_handler | 
  pglz   |       | pglzhandler          | pglz compression access method
- pglz1  |       | pglzhandler          | 
  spgist | Index | spghandler           | SP-GiST index access method
  zlib   |       | zlibhandler          | zlib compression access method
-(11 rows)
+(10 rows)
 
 \dA+ h*
                      List of access methods

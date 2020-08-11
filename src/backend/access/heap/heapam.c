@@ -1796,7 +1796,7 @@ UpdateXmaxHintBits(HeapTupleHeader tuple, Buffer buffer, TransactionId xid)
  * GetBulkInsertState - prepare status object for a bulk insert
  */
 BulkInsertState
-GetBulkInsertState()
+GetBulkInsertState(void)
 {
 	BulkInsertState bistate;
 

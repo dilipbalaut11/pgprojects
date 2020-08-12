@@ -84,8 +84,7 @@ CREATE ACCESS METHOD <replaceable class="parameter">name</replaceable>
       The C-level API that the handler function must implement varies
       depending on the type of access method. The table access method API
       is described in <xref linkend="tableam"/>, the index access method
-      API is described in <xref linkend="indexam"/> an the compression access
-      method API is described in <xref linkend="compression-am"/>.
+      API is described in <xref linkend="indexam"/>.
      </para>
     </listitem>
    </varlistentry>

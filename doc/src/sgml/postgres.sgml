@@ -259,7 +259,6 @@ break is not needed in a wider output rendering.
   &geqo;
   &tableam;
   &indexam;
-  &compression-am;
   &generic-wal;
   &btree;
   &gist;

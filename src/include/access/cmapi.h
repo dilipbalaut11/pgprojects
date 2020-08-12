@@ -14,12 +14,12 @@
 #define CMAPI_H
 
 #include "postgres.h"
-#include "catalog/pg_am.h"
+#include "catalog/pg_attr_compression.h"
 #include "catalog/pg_attribute.h"
 #include "nodes/pg_list.h"
 
 #define IsBuiltinCompression(cmid)	((cmid) < FirstBootstrapObjectId)
-#define DefaultCompressionOid		(PGLZ_COMPRESSION_AM_OID)
+#define DefaultCompressionOid		(PGLZ_AC_OID)
 
 typedef struct CompressionAmRoutine CompressionAmRoutine;
 
@@ -32,18 +32,24 @@ typedef struct CompressionAmRoutine CompressionAmRoutine;
  */
 typedef struct CompressionAmOptions
 {
+	Oid			acoid;			/* Oid of attribute compression,
+								   should go always first */
+	Oid			amoid;			/* Oid of compression access method */
+	List	   *acoptions;		/* Parsed options, used for comparison */
 	CompressionAmRoutine *amroutine;	/* compression access method routine */
+	MemoryContext	mcxt;
 
 	/* result of cminitstate function will be put here */
 	void	   *acstate;
 } CompressionAmOptions;
 
+typedef void (*cmcheck_function) (Form_pg_attribute att, List *options);
 typedef struct varlena *(*cmcompress_function)
 			(CompressionAmOptions *cmoptions, const struct varlena *value);
 typedef struct varlena *(*cmdecompress_slice_function)
 			(CompressionAmOptions *cmoptions, const struct varlena *value,
 			 int32 slicelength);
-typedef void *(*cminitstate_function) (Oid acoid);
+typedef void *(*cminitstate_function) (Oid acoid, List *options);
 
 /*
  * API struct for a compression AM.
@@ -63,6 +69,7 @@ struct CompressionAmRoutine
 {
 	NodeTag		type;
 
+	cmcheck_function cmcheck;	/* can be NULL */
 	cminitstate_function cminitstate;	/* can be NULL */
 	cmcompress_function cmcompress;
 	cmcompress_function cmdecompress;

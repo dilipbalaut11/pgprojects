@@ -624,6 +624,20 @@ typedef struct RangeTableSample
 } RangeTableSample;
 
 /*
+ * ColumnCompression - compression parameters for some attribute
+ *
+ * This represents compression information defined using clause:
+ * .. COMPRESSION <compression method> WITH (<params>) PRESERVE <compression AMs>
+ */
+typedef struct ColumnCompression
+{
+	NodeTag		type;
+	char	   *amname;
+	List	   *options;
+	List	   *preserve;
+} ColumnCompression;
+
+/*
  * ColumnDef - column definition (used in various creates)
  *
  * If the column has a default value, we may have the value expression
@@ -646,7 +660,7 @@ typedef struct ColumnDef
 	NodeTag		type;
 	char	   *colname;		/* name of column */
 	TypeName   *typeName;		/* type of column */
-	char	   *compression;
+	ColumnCompression *compression;
 	int			inhcount;		/* number of times column is inherited */
 	bool		is_local;		/* column has local (non-inherited) def'n */
 	bool		is_not_null;	/* NOT NULL constraint specified? */
@@ -1849,7 +1863,8 @@ typedef enum AlterTableType
 	AT_DetachPartition,			/* DETACH PARTITION */
 	AT_AddIdentity,				/* ADD IDENTITY */
 	AT_SetIdentity,				/* SET identity column options */
-	AT_DropIdentity				/* DROP IDENTITY */
+	AT_DropIdentity,			/* DROP IDENTITY */
+	AT_SetCompression			/* SET COMPRESSION */
 } AlterTableType;
 
 typedef struct ReplicaIdentityStmt

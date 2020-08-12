@@ -14,7 +14,9 @@
 #ifndef TOAST_HELPER_H
 #define TOAST_HELPER_H
 
+#include "utils/hsearch.h"
 #include "utils/rel.h"
+
 
 /*
  * Information about one column of a tuple being toasted.
@@ -101,7 +103,7 @@ typedef struct
 #define TOASTCOL_IGNORE						0x0010
 #define TOASTCOL_INCOMPRESSIBLE				0x0020
 
-extern void toast_tuple_init(ToastTupleContext *ttc);
+extern void toast_tuple_init(ToastTupleContext *ttc, HTAB *preserved_am_info);
 extern int	toast_tuple_find_biggest_attribute(ToastTupleContext *ttc,
 											   bool for_compression,
 											   bool check_main);

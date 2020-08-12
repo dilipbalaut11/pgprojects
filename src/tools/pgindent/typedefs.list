@@ -367,6 +367,7 @@ CollectedCommand
 CollectedCommandType
 ColorTrgm
 ColorTrgmInfo
+ColumnCompression
 ColumnCompareData
 ColumnDef
 ColumnIOData

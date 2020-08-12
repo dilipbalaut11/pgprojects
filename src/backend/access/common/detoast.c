@@ -451,12 +451,12 @@ toast_decompress_datum(struct varlena *attr)
 
 	if (VARATT_IS_CUSTOM_COMPRESSED(attr))
 	{
-		CompressionAmOptions cmoptions;
+		CompressionAmOptions *cmoptions;
 		toast_compress_header_custom *hdr;
 
 		hdr = (toast_compress_header_custom *) attr;
-		lookup_compression_am_options(hdr->cmid, &cmoptions);
-		result = cmoptions.amroutine->cmdecompress(&cmoptions, attr);
+		cmoptions = lookup_compression_am_options(hdr->cmid);
+		result = cmoptions->amroutine->cmdecompress(cmoptions, attr);
 	}
 	else
 	{
@@ -497,16 +497,16 @@ toast_decompress_datum_slice(struct varlena *attr, int32 slicelength)
 
 	if (VARATT_IS_CUSTOM_COMPRESSED(attr))
 	{
-		CompressionAmOptions cmoptions;
+		CompressionAmOptions *cmoptions;
 		toast_compress_header_custom *hdr;
 
 		hdr = (toast_compress_header_custom *) attr;
-		lookup_compression_am_options(hdr->cmid, &cmoptions);
-		if (cmoptions.amroutine->cmdecompress_slice)
-			result = cmoptions.amroutine->cmdecompress_slice(&cmoptions, attr,
-															 slicelength);
+		cmoptions = lookup_compression_am_options(hdr->cmid);
+		if (cmoptions->amroutine->cmdecompress_slice)
+			result = cmoptions->amroutine->cmdecompress_slice(cmoptions, attr,
+															  slicelength);
 		else
-			result = cmoptions.amroutine->cmdecompress(&cmoptions, attr);
+			result = cmoptions->amroutine->cmdecompress(cmoptions, attr);
 	}
 	else
 	{

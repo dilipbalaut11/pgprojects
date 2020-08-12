@@ -2553,53 +2553,6 @@ my %tests = (
 		},
 	},
 
-	'CREATE TABLE test_table_compression' => {
-		create_order => 55,
-		create_sql   => 'CREATE TABLE dump_test.test_table_compression (
-						   col1 text,
-						   col2 text COMPRESSION pglz2,
-						   col3 text COMPRESSION pglz WITH (min_input_size \'1000\'),
-						   col4 text COMPRESSION pglz2 WITH (min_input_size \'1000\')
-					     );',
-		regexp => qr/^
-			\QCREATE TABLE dump_test.test_table_compression (\E\n
-			\s+\Qcol1 text,\E\n
-			\s+\Qcol2 text COMPRESSION pglz2,\E\n
-			\s+\Qcol3 text COMPRESSION pglz WITH (min_input_size '1000'),\E\n
-			\s+\Qcol4 text COMPRESSION pglz2 WITH (min_input_size '2000')\E\n
-			\);
-			/xm,
-		like =>
-		  { %full_runs, %dump_test_schema_runs, section_pre_data => 1, },
-		unlike => {
-			binary_upgrade		     => 1,
-			exclude_dump_test_schema => 1,
-		},
-	},
-
-	'ALTER TABLE test_table_compression' => {
-		create_order => 56,
-		create_sql   => 'ALTER TABLE dump_test.test_table_compression
-						 ALTER COLUMN col4
-						 SET COMPRESSION pglz2
-						 WITH (min_input_size \'2000\')
-						 PRESERVE (pglz2);',
-		regexp => qr/^
-			\QCREATE TABLE dump_test.test_table_compression (\E\n
-			\s+\Qcol1 text,\E\n
-			\s+\Qcol2 text COMPRESSION pglz2,\E\n
-			\s+\Qcol3 text COMPRESSION pglz WITH (min_input_size '1000'),\E\n
-			\s+\Qcol4 text COMPRESSION pglz2 WITH (min_input_size '2000')\E\n
-			\);
-			/xm,
-		like =>
-		  { %full_runs, %dump_test_schema_runs, section_pre_data => 1, },
-		unlike => {
-			binary_upgrade		     => 1,
-			exclude_dump_test_schema => 1,
-		},
-	},
-
 	'CREATE STATISTICS extended_stats_no_options' => {
 		create_order => 97,
 		create_sql   => 'CREATE STATISTICS dump_test.test_ext_stats_no_options

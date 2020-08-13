@@ -34,4 +34,12 @@ SELECT length(f1) FROM cmmove1;
 SELECT length(f1) FROM cmmove2;
 SELECT length(f1) FROM cmmove3;
 
-DROP TABLE cmmove1, cmmove2, cmmove3;
+-- zlib compression
+CREATE TABLE zlibtest(f1 TEXT COMPRESSION zlib);
+CREATE TABLE zlibtest(f1 TEXT COMPRESSION zlib);
+CREATE TABLE zlibtest(f1 TEXT COMPRESSION zlib);
+INSERT INTO zlibtest VALUES(repeat('1234567890',1004));
+INSERT INTO zlibtest VALUES(repeat('1234567890 one two three',1004));
+SELECT length(f1) FROM zlibtest;
+
+DROP TABLE cmmove1, cmmove2, cmmove3, zlibtest;

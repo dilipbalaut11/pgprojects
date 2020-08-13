@@ -68,4 +68,19 @@ SELECT length(f1) FROM cmmove3;
   10010
 (2 rows)
 
-DROP TABLE cmmove1, cmmove2, cmmove3;
+-- zlib compression
+CREATE TABLE zlibtest(f1 TEXT COMPRESSION zlib);
+CREATE TABLE zlibtest(f1 TEXT COMPRESSION zlib);
+ERROR:  relation "zlibtest" already exists
+CREATE TABLE zlibtest(f1 TEXT COMPRESSION zlib);
+ERROR:  relation "zlibtest" already exists
+INSERT INTO zlibtest VALUES(repeat('1234567890',1004));
+INSERT INTO zlibtest VALUES(repeat('1234567890 one two three',1004));
+SELECT length(f1) FROM zlibtest;
+ length 
+--------
+  10040
+  24096
+(2 rows)
+
+DROP TABLE cmmove1, cmmove2, cmmove3, zlibtest;

@@ -145,6 +145,32 @@ toast_tuple_init(ToastTupleContext *ttc)
 				ttc->ttc_attr[i].tai_colflags |= TOASTCOL_NEEDS_FREE;
 				ttc->ttc_flags |= (TOAST_NEEDS_CHANGE | TOAST_NEEDS_FREE);
 			}
+			/*
+			 * Process custom compressed datum.
+			 *
+			 * If destination column has different compression oid then
+			 * untoast the datum.
+			 */
+			else if (VARATT_IS_CUSTOM_COMPRESSED(new_value))
+			{
+				bool storage_ok;
+				toast_compress_header_custom *hdr;
+
+				storage_ok = (att->attstorage == TYPSTORAGE_MAIN ||
+							  att->attstorage == TYPSTORAGE_PLAIN);
+				hdr = (toast_compress_header_custom *) new_value;
+
+				if (!storage_ok || hdr->cmid != att->attcompression)
+				{
+					/* just decompress the value */
+					new_value = detoast_attr(new_value);
+
+					ttc->ttc_values[i] = PointerGetDatum(new_value);
+					ttc->ttc_attr[i].tai_colflags |= TOASTCOL_NEEDS_FREE;
+					ttc->ttc_flags |= (TOAST_NEEDS_CHANGE | TOAST_NEEDS_FREE);
+
+				}
+			}
 
 			/*
 			 * Remember the size of this attribute

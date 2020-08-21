@@ -34,8 +34,21 @@ typedef struct toast_compress_header_custom
 {
 	int32 vl_len_; /* varlena header (do not touch directly!) */
 	uint32 info;   /* flags (2 high bits) and rawsize */
-	Oid cmid;	   /* Oid from pg_am */
+	Oid cmid;	   /* Oid from pg_attr_compression */
 } toast_compress_header_custom;
+
+/*
+ * Used to pass to preserved compression access methods from
+ * ALTER TABLE SET COMPRESSION into toast_insert_or_update.
+ */
+typedef struct AttrCmPreservedInfo
+{
+	AttrNumber attnum;
+	List *preserved_amoids;
+} AttrCmPreservedInfo;
+
+HTAB *amoptions_cache;
+MemoryContext amoptions_cache_mcxt;
 
 #define RAWSIZEMASK (0x3FFFFFFFU)
 
@@ -116,14 +129,14 @@ extern int	toast_open_indexes(Relation toastrel,
 extern void toast_close_indexes(Relation *toastidxs, int num_indexes,
 								LOCKMODE lock);
 extern void init_toast_snapshot(Snapshot toast_snapshot);
-
+extern void init_amoptions_cache(void);
+extern bool attr_compression_options_are_equal(Oid acoid1, Oid acoid2);
 /*
  * lookup_compression_am_options -
  *
  * Return cached CompressionAmOptions for specified attribute compression.
  */
-extern void lookup_compression_am_options(Oid acoid,
-										 CompressionAmOptions *result);
+extern CompressionAmOptions *lookup_compression_am_options(Oid acoid);
 
 /*
  * toast_set_compressed_datum_info -

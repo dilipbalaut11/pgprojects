@@ -3866,6 +3866,14 @@ raw_expression_tree_walker(Node *node,
 				/* for now, constraints are ignored */
 			}
 			break;
+		case T_ColumnCompression:
+			{
+				ColumnCompression *colcmp = (ColumnCompression *) node;
+
+				if (walker(colcmp->options, context))
+					return true;
+			}
+			break;
 		case T_IndexElem:
 			{
 				IndexElem  *indelem = (IndexElem *) node;

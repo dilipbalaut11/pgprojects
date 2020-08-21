@@ -38,7 +38,7 @@
  * perform any initialization of the array before calling this function.
  */
 void
-toast_tuple_init(ToastTupleContext *ttc)
+toast_tuple_init(ToastTupleContext *ttc, HTAB *preserved_am_info)
 {
 	TupleDesc	tupleDesc = ttc->ttc_rel->rd_att;
 	int			numAttrs = tupleDesc->natts;
@@ -120,11 +120,29 @@ toast_tuple_init(ToastTupleContext *ttc)
 		 */
 		if (att->attlen == -1)
 		{
+			List *preserved_amoids = NIL;
+
 			/*
 			 * If the table's attribute says PLAIN always, force it so.
 			 */
 			if (att->attstorage == TYPSTORAGE_PLAIN)
 				ttc->ttc_attr[i].tai_colflags |= TOASTCOL_IGNORE;
+
+			/*
+			 * If it's ALTER SET COMPRESSION command we should check that
+			 * access method of compression in preserved list.
+			 */
+			if (preserved_am_info != NULL)
+			{
+				bool found;
+
+				AttrCmPreservedInfo *pinfo;
+
+				pinfo = hash_search(preserved_am_info, &att->attnum,
+									HASH_FIND, &found);
+				if (found)
+					preserved_amoids = pinfo->preserved_amoids;
+			}
 
 			/*
 			 * We took care of UPDATE above, so any external value we find
@@ -148,8 +166,10 @@ toast_tuple_init(ToastTupleContext *ttc)
 			/*
 			 * Process custom compressed datum.
 			 *
-			 * If destination column has different compression oid then
-			 * untoast the datum.
+			 * 1) If destination column has identical compression move the data as is
+			 * and only change attribute compression Oid. 2) If it's rewrite from
+			 * ALTER command check list of preserved compression access methods. 3) In
+			 * other cases just untoast the datum.
 			 */
 			else if (VARATT_IS_CUSTOM_COMPRESSED(new_value))
 			{
@@ -162,13 +182,43 @@ toast_tuple_init(ToastTupleContext *ttc)
 
 				if (!storage_ok || hdr->cmid != att->attcompression)
 				{
-					/* just decompress the value */
-					new_value = detoast_attr(new_value);
+					if (storage_ok &&
+						OidIsValid(att->attcompression) &&
+						attr_compression_options_are_equal(att->attcompression,
+														   hdr->cmid))
+					{
+						struct varlena *tmpval = NULL;
 
+						/* identical compression, just change Oid to new one */
+						tmpval = palloc(VARSIZE(new_value));
+						memcpy(tmpval, new_value, VARSIZE(new_value));
+						TOAST_COMPRESS_SET_CMID(tmpval, att->attcompression);
+						new_value = tmpval;
+						ttc->ttc_attr[i].tai_colflags |= TOASTCOL_NEEDS_FREE;
+						ttc->ttc_flags |= (TOAST_NEEDS_CHANGE | TOAST_NEEDS_FREE);
+					}
+					else if (preserved_amoids != NULL)
+					{
+						Oid amoid = GetAttrCompressionAmOid(hdr->cmid);
+
+						/* decompress the value if it's not in preserved list */
+						if (!list_member_oid(preserved_amoids, amoid))
+						{
+							new_value = detoast_attr(new_value);
+							ttc->ttc_attr[i].tai_colflags |= TOASTCOL_NEEDS_FREE;
+							ttc->ttc_flags |= (TOAST_NEEDS_CHANGE | TOAST_NEEDS_FREE);
+						}
+					}
+					else
+					{
+						/* just decompress the value */
+						new_value = detoast_attr(new_value);
+						ttc->ttc_attr[i].tai_colflags |= TOASTCOL_NEEDS_FREE;
+						ttc->ttc_flags |= (TOAST_NEEDS_CHANGE | TOAST_NEEDS_FREE);
+					}
+
+					/* FIXME: Check the ttc_flags */
 					ttc->ttc_values[i] = PointerGetDatum(new_value);
-					ttc->ttc_attr[i].tai_colflags |= TOASTCOL_NEEDS_FREE;
-					ttc->ttc_flags |= (TOAST_NEEDS_CHANGE | TOAST_NEEDS_FREE);
-
 				}
 			}
 

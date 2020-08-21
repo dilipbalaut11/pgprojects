@@ -376,27 +376,30 @@ SELECT acname, acattnum, acoptions FROM pg_attr_compression
 
 -- zlib compression
 CREATE TABLE zlibtest(f1 TEXT COMPRESSION zlib WITH (invalid 'param'));
-ERROR:  unexpected parameter for zlib: "invalid"
+ERROR:  not built with zlib support
 CREATE TABLE zlibtest(f1 TEXT COMPRESSION zlib WITH (level 'best'));
-ERROR:  invalid input syntax for type integer: "best"
+ERROR:  not built with zlib support
 CREATE TABLE zlibtest(f1 TEXT COMPRESSION zlib);
 ALTER TABLE zlibtest
 	ALTER COLUMN f1 SET COMPRESSION zlib WITH (level '9');
+ERROR:  not built with zlib support
 ALTER TABLE zlibtest
 	ALTER COLUMN f1 SET COMPRESSION zlib WITH (level '1');
+ERROR:  not built with zlib support
 ALTER TABLE zlibtest
 	ALTER COLUMN f1 SET COMPRESSION zlib WITH (dict 'one');
-ERROR:  zlib dictionary is too small
+ERROR:  not built with zlib support
 INSERT INTO zlibtest VALUES(repeat('1234567890',1004));
+ERROR:  not built with zlib support
 ALTER TABLE zlibtest
 	ALTER COLUMN f1 SET COMPRESSION zlib WITH (dict 'one two') PRESERVE (zlib);
+ERROR:  not built with zlib support
 INSERT INTO zlibtest VALUES(repeat('1234567890 one two three',1004));
+ERROR:  not built with zlib support
 SELECT length(f1) FROM zlibtest;
  length 
 --------
-  10040
-  24096
-(2 rows)
+(0 rows)
 
 DROP ACCESS METHOD pglz2;
 DROP VIEW cmtest_deps;

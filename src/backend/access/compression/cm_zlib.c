@@ -30,13 +30,100 @@ typedef struct
 	unsigned int	dictlen;
 } zlib_state;
 
+/*
+ * Check options if specified. All validation is located here so
+ * we don't need do it again in cminitstate function.
+ */
+static void
+zlib_cmcheck(Form_pg_attribute att, List *options)
+{
+	ListCell	*lc;
+
+	foreach(lc, options)
+	{
+		DefElem    *def = (DefElem *) lfirst(lc);
+
+		if (strcmp(def->defname, "level") == 0)
+		{
+			int8 level = pg_atoi(defGetString(def), sizeof(int8), 0);
+			if (level < 0 || level > 9)
+				ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("unexpected value for zlib compression level: \"%s\"",
+								defGetString(def)),
+					 errhint("expected value between 0 and 9")
+					));
+		}
+		else if (strcmp(def->defname, "dict") == 0)
+		{
+			int		ntokens = 0;
+			char   *val,
+				   *tok;
+
+			val = pstrdup(defGetString(def));
+			if (strlen(val) > (ZLIB_MAX_DICTIONARY_LENGTH - 1))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						(errmsg("zlib dictionary length should be less than %d", ZLIB_MAX_DICTIONARY_LENGTH))));
+
+			while ((tok = strtok(val, ZLIB_DICTIONARY_DELIM)) != NULL)
+			{
+				ntokens++;
+				val = NULL;
+			}
+
+			if (ntokens < 2)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						(errmsg("zlib dictionary is too small"))));
+		}
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_PARAMETER),
+					 errmsg("unexpected parameter for zlib: \"%s\"", def->defname)));
+	}
+}
+
 static void *
-zlib_cminitstate(Oid acoid)
+zlib_cminitstate(Oid acoid, List *options)
 {
 	zlib_state		*state = NULL;
 
 	state = palloc0(sizeof(zlib_state));
 	state->level = Z_DEFAULT_COMPRESSION;
+
+	if (list_length(options) > 0)
+	{
+		ListCell	*lc;
+
+		foreach(lc, options)
+		{
+			DefElem    *def = (DefElem *) lfirst(lc);
+
+			if (strcmp(def->defname, "level") == 0)
+				state->level = pg_atoi(defGetString(def), sizeof(int), 0);
+			else if (strcmp(def->defname, "dict") == 0)
+			{
+				char   *val,
+					   *tok;
+
+				val = pstrdup(defGetString(def));
+
+				/* Fill the zlib dictionary */
+				while ((tok = strtok(val, ZLIB_DICTIONARY_DELIM)) != NULL)
+				{
+					int len = strlen(tok);
+					memcpy((void *) (state->dict + state->dictlen), tok, len);
+					state->dictlen += len + 1;
+					Assert(state->dictlen <= ZLIB_MAX_DICTIONARY_LENGTH);
+
+					/* add space as dictionary delimiter */
+					state->dict[state->dictlen - 1] = ' ';
+					val = NULL;
+				}
+			}
+		}
+	}
 
 	return state;
 }
@@ -153,6 +240,7 @@ zlibhandler(PG_FUNCTION_ARGS)
 #else
 	CompressionAmRoutine *routine = makeNode(CompressionAmRoutine);
 
+	routine->cmcheck = zlib_cmcheck;
 	routine->cminitstate = zlib_cminitstate;
 	routine->cmcompress = zlib_cmcompress;
 	routine->cmdecompress = zlib_cmdecompress;

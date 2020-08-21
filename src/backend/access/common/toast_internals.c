@@ -35,6 +35,9 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
+HTAB *amoptions_cache = NULL;
+MemoryContext amoptions_cache_mcxt = NULL;
+
 static bool toastrel_valueid_exists(Relation toastrel, Oid valueid);
 static bool toastid_valueid_exists(Oid toastrelid, Oid valueid);
 
@@ -66,21 +69,21 @@ toast_set_compressed_datum_info(struct varlena *val, Oid cmid, int32 rawsize)
  * ----------
  */
 Datum
-toast_compress_datum(Datum value, Oid amoid)
+toast_compress_datum(Datum value, Oid acoid)
 {
 	struct varlena *tmp = NULL;
 	int32 valsize;
-	CompressionAmOptions cmoptions;
+	CompressionAmOptions *cmoptions = NULL;
 
 	Assert(!VARATT_IS_EXTERNAL(DatumGetPointer(value)));
 	Assert(!VARATT_IS_COMPRESSED(DatumGetPointer(value)));
 
 	/* Fallback to default compression if not specified */
-	if (!OidIsValid(amoid))
-		amoid = DefaultCompressionOid;
+	if (!OidIsValid(acoid))
+		acoid = DefaultCompressionOid;
 
-	lookup_compression_am_options(amoid, &cmoptions);
-	tmp = cmoptions.amroutine->cmcompress(&cmoptions, (const struct varlena *) value);
+	cmoptions = lookup_compression_am_options(acoid);
+	tmp = cmoptions->amroutine->cmcompress(cmoptions, (const struct varlena *) value);
 	if (!tmp)
 		return PointerGetDatum(NULL);
 
@@ -100,7 +103,7 @@ toast_compress_datum(Datum value, Oid amoid)
 	if (VARSIZE(tmp) < valsize - 2)
 	{
 		/* successful compression */
-		toast_set_compressed_datum_info(tmp, amoid, valsize);
+		toast_set_compressed_datum_info(tmp, cmoptions->acoid, valsize);
 		return PointerGetDatum(tmp);
 	}
 
@@ -650,21 +653,156 @@ init_toast_snapshot(Snapshot toast_snapshot)
 }
 
 /* ----------
+ * remove_cached_amoptions
+ *
+ * Remove specified compression options from cache
+ */
+static void
+remove_cached_amoptions(CompressionAmOptions *entry)
+{
+	MemoryContextDelete(entry->mcxt);
+
+	if (hash_search(amoptions_cache, (void *)&entry->acoid,
+					HASH_REMOVE, NULL) == NULL)
+		elog(ERROR, "hash table corrupted");
+}
+
+/* ----------
+ * invalidate_amoptions_cache
+ *
+ * Flush cache entries when pg_attr_compression is updated.
+ */
+static void
+invalidate_amoptions_cache(Datum arg, int cacheid, uint32 hashvalue)
+{
+	HASH_SEQ_STATUS status;
+	CompressionAmOptions *entry;
+
+	hash_seq_init(&status, amoptions_cache);
+	while ((entry = (CompressionAmOptions *)hash_seq_search(&status)) != NULL)
+		remove_cached_amoptions(entry);
+}
+
+/* ----------
+ * init_amoptions_cache
+ *
+ * Initialize a local cache for attribute compression options.
+ */
+void
+init_amoptions_cache(void)
+{
+	HASHCTL ctl;
+
+	amoptions_cache_mcxt = AllocSetContextCreate(TopMemoryContext,
+												 "attr compression cache",
+												 ALLOCSET_DEFAULT_SIZES);
+	MemSet(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(Oid);
+	ctl.entrysize = sizeof(CompressionAmOptions);
+	ctl.hcxt = amoptions_cache_mcxt;
+	amoptions_cache = hash_create("attr compression cache", 100, &ctl,
+								  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+
+	/* Set up invalidation callback on pg_attr_compression. */
+	CacheRegisterSyscacheCallback(ATTCOMPRESSIONOID,
+								  invalidate_amoptions_cache,
+								  (Datum)0);
+}
+
+/* ----------
  * lookup_compression_am_options
  *
  * Get compression handler routine.
  */
-void
-lookup_compression_am_options(Oid acoid, CompressionAmOptions *result)
+CompressionAmOptions *
+lookup_compression_am_options(Oid acoid)
 {
+	bool found,
+		optisnull;
+	CompressionAmOptions *result;
+	Datum acoptions;
+	Form_pg_attr_compression acform;
+	HeapTuple tuple;
+	Oid amoid;
 	regproc amhandler;
 
-	amhandler = get_am_handler_oid(acoid, AMTYPE_COMPRESSION, false);
-	result->amroutine = InvokeCompressionAmHandler(amhandler);
-	result->acstate = result->amroutine->cminitstate ?
-			result->amroutine->cminitstate(acoid) : NULL;
+	/*
+	 * This call could invalidate system cache so we need to call it before
+	 * we're putting something to our cache.
+	 */
+	tuple = SearchSysCache1(ATTCOMPRESSIONOID, ObjectIdGetDatum(acoid));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for attribute compression %u", acoid);
+
+	acform = (Form_pg_attr_compression)GETSTRUCT(tuple);
+	amoid = get_compression_am_oid(NameStr(acform->acname), false);
+	amhandler = get_am_handler_oid(amoid, AMTYPE_COMPRESSION, false);
+	acoptions = SysCacheGetAttr(ATTCOMPRESSIONOID, tuple,
+								Anum_pg_attr_compression_acoptions, &optisnull);
+
+	if (!amoptions_cache)
+		init_amoptions_cache();
+
+	result = hash_search(amoptions_cache, &acoid, HASH_ENTER, &found);
+	if (!found)
+	{
+		MemoryContext oldcxt = CurrentMemoryContext;
+
+		result->mcxt = AllocSetContextCreate(amoptions_cache_mcxt,
+											 "compression am options",
+											 ALLOCSET_DEFAULT_SIZES);
+
+		PG_TRY();
+		{
+			result->acoid = acoid;
+			result->amoid = amoid;
+
+			MemoryContextSwitchTo(result->mcxt);
+			result->amroutine = InvokeCompressionAmHandler(amhandler);
+			if (optisnull)
+				result->acoptions = NIL;
+			else
+				result->acoptions = untransformRelOptions(acoptions);
+			result->acstate = result->amroutine->cminitstate ? result->amroutine->cminitstate(acoid, result->acoptions) : NULL;
+		}
+		PG_CATCH();
+		{
+			MemoryContextSwitchTo(oldcxt);
+			remove_cached_amoptions(result);
+			PG_RE_THROW();
+		}
+		PG_END_TRY();
+		MemoryContextSwitchTo(oldcxt);
+	}
+
+	ReleaseSysCache(tuple);
 
 	if (!result->amroutine)
 		/* should not happen but need to check if something goes wrong */
 		elog(ERROR, "compression access method routine is NULL");
+
+	return result;
+}
+
+/* ----------
+ * attr_compression_options_are_equal
+ *
+ * Compare two attribute compression records
+ */
+bool
+attr_compression_options_are_equal(Oid acoid1, Oid acoid2)
+{
+	CompressionAmOptions *a;
+	CompressionAmOptions *b;
+
+	a = lookup_compression_am_options(acoid1);
+	b = lookup_compression_am_options(acoid2);
+
+	if (a->amoid != b->amoid)
+		return false;
+
+	if (list_length(a->acoptions) != list_length(b->acoptions))
+		return false;
+
+	return equal(a->acoptions, b->acoptions);
 }

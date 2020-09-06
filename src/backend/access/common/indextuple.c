@@ -16,13 +16,11 @@
 
 #include "postgres.h"
 
-#include "access/cmapi.h"
 #include "access/detoast.h"
 #include "access/heaptoast.h"
 #include "access/htup_details.h"
 #include "access/itup.h"
 #include "access/toast_internals.h"
-
 
 /*
  * This enables de-toasting of index entries.  Needed until VACUUM is
@@ -59,6 +57,7 @@ index_form_tuple(TupleDesc tupleDescriptor,
 	unsigned short infomask = 0;
 	bool		hasnull = false;
 	uint16		tupmask = 0;
+	uint16		tupmask2 = 0;
 	int			numberOfAttributes = tupleDescriptor->natts;
 
 #ifdef TOAST_INDEX_HACK
@@ -105,7 +104,7 @@ index_form_tuple(TupleDesc tupleDescriptor,
 			(att->attstorage == TYPSTORAGE_EXTENDED ||
 			 att->attstorage == TYPSTORAGE_MAIN))
 		{
-			Datum		cvalue = toast_compress_datum(untoasted_values[i], PGLZ_COMPRESSION);
+			Datum		cvalue = toast_compress_datum(untoasted_values[i], InvalidOid);
 
 			if (DatumGetPointer(cvalue) != NULL)
 			{
@@ -155,6 +154,7 @@ index_form_tuple(TupleDesc tupleDescriptor,
 					(char *) tp + hoff,
 					data_size,
 					&tupmask,
+					&tupmask2,
 					(hasnull ? (bits8 *) tp + sizeof(IndexTupleData) : NULL));
 
 #ifdef TOAST_INDEX_HACK

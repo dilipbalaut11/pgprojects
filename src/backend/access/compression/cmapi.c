@@ -18,55 +18,79 @@
 #include "access/htup_details.h"
 #include "access/reloptions.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_attr_compression.h"
 #include "commands/defrem.h"
 #include "utils/syscache.h"
 
-static struct CompressionRoutine BuiltInCMRoutine[] =
-	{
-		{"pglz",
-		 pglz_cmcompress,
-		 pglz_cmdecompress,
-		 pglz_cmdecompress_slice},
-		{"zlib",
-		 zlib_cmcompress,
-		 zlib_cmdecompress,
-		 NULL}
-	};
-
 /*
- * GetCompressionMethod - Search the array of built-in compression method
- * and return the compression id.
+ * InvokeCompressionAmHandler - call the specified access method handler routine to get
+ * its CompressionAmRoutine struct, which will be palloc'd in the caller's context.
  */
-int32
-GetCompressionMethod(char *cmname)
+CompressionAmRoutine *
+InvokeCompressionAmHandler(Oid amhandler)
 {
-	int i;
+	Datum		datum;
+	CompressionAmRoutine *routine;
 
-	for (i = 0; i < MAX_BUILTIN_COMPRESSION_METHOD; i++)
-	{
-		if (strcmp(BuiltInCMRoutine[i].cmname, cmname) == 0)
-			return i;
-	}
+	datum = OidFunctionCall0(amhandler);
+	routine = (CompressionAmRoutine *) DatumGetPointer(datum);
 
-	return 0;
-}
+	if (routine == NULL || !IsA(routine, CompressionAmRoutine))
+		elog(ERROR, "compression method handler function %u "
+			 "did not return an CompressionAmRoutine struct",
+			 amhandler);
 
-char *
-GetCompressionName(int32 cmid)
-{
-	if (cmid >= MAX_BUILTIN_COMPRESSION_METHOD)
-		elog(ERROR, "Invalid compression method %d", cmid);
-	return BuiltInCMRoutine[cmid].cmname;
+	return routine;
 }
 
 /*
- * GetCompressionRoutine - Get the compression method handler routines.
+ * GetAttrCompressionOptions
+ *
+ * Parse array of attribute compression options and return it as a list.
  */
-CompressionRoutine *
-GetCompressionRoutine(int32 cmid)
+List *
+GetAttrCompressionOptions(Oid acoid)
 {
-	if (cmid >= MAX_BUILTIN_COMPRESSION_METHOD)
-		elog(ERROR, "Invalid compression method %d", cmid);
+	HeapTuple	tuple;
+	List	   *result = NIL;
+	bool		isnull;
+	Datum		acoptions;
 
-	return &BuiltInCMRoutine[cmid];
+	tuple = SearchSysCache1(ATTCOMPRESSIONOID, ObjectIdGetDatum(acoid));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for an attribute compression %u", acoid);
+
+	/* options could be NULL, so we can't use form struct */
+	acoptions = SysCacheGetAttr(ATTCOMPRESSIONOID, tuple,
+								Anum_pg_attr_compression_acoptions, &isnull);
+
+	if (!isnull)
+		result = untransformRelOptions(acoptions);
+
+	ReleaseSysCache(tuple);
+	return result;
+}
+
+/*
+ * GetAttrCompressionAmOid
+ *
+ * Return access method Oid by attribute compression Oid
+ */
+Oid
+GetAttrCompressionAmOid(Oid acoid)
+{
+	Oid			result;
+	HeapTuple	tuple;
+	Form_pg_attr_compression acform;
+
+	/* extract access method Oid */
+	tuple = SearchSysCache1(ATTCOMPRESSIONOID, ObjectIdGetDatum(acoid));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for attribute compression %u", acoid);
+
+	acform = (Form_pg_attr_compression) GETSTRUCT(tuple);
+	result = get_compression_am_oid(NameStr(acform->acname), false);
+	ReleaseSysCache(tuple);
+
+	return result;
 }

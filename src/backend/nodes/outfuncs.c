@@ -2834,7 +2834,7 @@ _outColumnDef(StringInfo str, const ColumnDef *node)
 
 	WRITE_STRING_FIELD(colname);
 	WRITE_NODE_FIELD(typeName);
-	WRITE_STRING_FIELD(compression);
+	WRITE_NODE_FIELD(compression);
 	WRITE_INT_FIELD(inhcount);
 	WRITE_BOOL_FIELD(is_local);
 	WRITE_BOOL_FIELD(is_not_null);
@@ -2850,6 +2850,16 @@ _outColumnDef(StringInfo str, const ColumnDef *node)
 	WRITE_NODE_FIELD(constraints);
 	WRITE_NODE_FIELD(fdwoptions);
 	WRITE_LOCATION_FIELD(location);
+}
+
+static void
+_outColumnCompression(StringInfo str, const ColumnCompression *node)
+{
+	WRITE_NODE_TYPE("COLUMNCOMPRESSION");
+
+	WRITE_STRING_FIELD(amname);
+	WRITE_NODE_FIELD(options);
+	WRITE_NODE_FIELD(preserve);
 }
 
 static void
@@ -4199,6 +4209,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_ColumnDef:
 				_outColumnDef(str, obj);
+				break;
+			case T_ColumnCompression:
+				_outColumnCompression(str, obj);
 				break;
 			case T_TypeName:
 				_outTypeName(str, obj);

@@ -248,7 +248,7 @@ FROM pg_stat_statements ORDER BY query COLLATE "C";
  wal_records = rows as wal_records_as_rows                +|       |      |                     |                       | 
  FROM pg_stat_statements ORDER BY query COLLATE "C"        |       |      |                     |                       | 
  SET pg_stat_statements.track_utility = FALSE              |     1 |    0 | f                   | f                     | t
- UPDATE pgss_test SET b = $1 WHERE a > $2                  |     1 |    3 | t                   | t                     | t
+ UPDATE pgss_test SET b = $1 WHERE a > $2                  |     1 |    3 | t                   | t                     | f
 (7 rows)
 
 --

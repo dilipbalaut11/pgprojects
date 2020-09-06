@@ -13,7 +13,6 @@
 
 #include "postgres.h"
 
-#include "access/cmapi.h"
 #include "access/detoast.h"
 #include "access/table.h"
 #include "access/tableam.h"
@@ -233,7 +232,7 @@ detoast_attr_slice(struct varlena *attr,
 			 * of a given length (after decompression).
 			 */
 			max_size = pglz_maximum_compressed_size(sliceoffset + slicelength,
-													toast_pointer.va_extsize);
+										VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer));
 
 			/*
 			 * Fetch enough compressed slices (compressed marker will get set
@@ -334,7 +333,7 @@ toast_fetch_datum(struct varlena *attr)
 	/* Must copy to access aligned fields */
 	VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
 
-	attrsize = toast_pointer.va_extsize;
+	attrsize = VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer);
 
 	result = (struct varlena *) palloc(attrsize + VARHDRSZ);
 
@@ -395,7 +394,7 @@ toast_fetch_datum_slice(struct varlena *attr, int32 sliceoffset,
 	 */
 	Assert(!VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer) || 0 == sliceoffset);
 
-	attrsize = toast_pointer.va_extsize;
+	attrsize = VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer);
 
 	if (sliceoffset >= attrsize)
 	{
@@ -446,15 +445,38 @@ toast_fetch_datum_slice(struct varlena *attr, int32 sliceoffset,
 static struct varlena *
 toast_decompress_datum(struct varlena *attr)
 {
-	CompressionRoutine *cmroutine;
-	uint8 cmmethod;
+	struct varlena *result;
 
 	Assert(VARATT_IS_COMPRESSED(attr));
 
-	cmmethod = TOAST_COMPRESS_METHOD(attr);
+	if (VARATT_IS_CUSTOM_COMPRESSED(attr))
+	{
+		CompressionAmOptions *cmoptions;
+		toast_compress_header_custom *hdr;
 
-	cmroutine = GetCompressionRoutine(cmmethod);
-	return cmroutine->cmdecompress(attr);
+		hdr = (toast_compress_header_custom *) attr;
+		cmoptions = lookup_compression_am_options(hdr->cmid);
+		result = cmoptions->amroutine->cmdecompress(cmoptions, attr);
+	}
+	else
+	{
+		int rawsize;
+
+		result = (struct varlena *)
+			palloc(TOAST_COMPRESS_RAWSIZE(attr) + VARHDRSZ);
+		SET_VARSIZE(result, TOAST_COMPRESS_RAWSIZE(attr) + VARHDRSZ);
+
+		rawsize = pglz_decompress(TOAST_COMPRESS_RAWDATA(attr),
+								  TOAST_COMPRESS_SIZE(attr),
+								  VARDATA(result),
+								  TOAST_COMPRESS_RAWSIZE(attr), true);
+		if (rawsize < 0)
+			elog(ERROR, "compressed data is corrupted");
+
+		SET_VARSIZE(result, rawsize + VARHDRSZ);
+	}
+
+	return result;
 }
 
 
@@ -468,15 +490,39 @@ toast_decompress_datum(struct varlena *attr)
 static struct varlena *
 toast_decompress_datum_slice(struct varlena *attr, int32 slicelength)
 {
-	CompressionRoutine *cmroutine;
-	uint8 cmmethod;
+	struct varlena *result;
+	int32		rawsize;
 
 	Assert(VARATT_IS_COMPRESSED(attr));
 
-	cmmethod = TOAST_COMPRESS_METHOD(attr);
+	if (VARATT_IS_CUSTOM_COMPRESSED(attr))
+	{
+		CompressionAmOptions *cmoptions;
+		toast_compress_header_custom *hdr;
 
-	cmroutine = GetCompressionRoutine(cmmethod);
-	return cmroutine->cmdecompress_slice(attr, slicelength);
+		hdr = (toast_compress_header_custom *) attr;
+		cmoptions = lookup_compression_am_options(hdr->cmid);
+		if (cmoptions->amroutine->cmdecompress_slice)
+			result = cmoptions->amroutine->cmdecompress_slice(cmoptions, attr,
+															  slicelength);
+		else
+			result = cmoptions->amroutine->cmdecompress(cmoptions, attr);
+	}
+	else
+	{
+		result = (struct varlena *) palloc(slicelength + VARHDRSZ);
+
+		rawsize = pglz_decompress(TOAST_COMPRESS_RAWDATA(attr),
+								  VARSIZE(attr) - TOAST_COMPRESS_HDRSZ,
+								  VARDATA(result),
+								  slicelength, false);
+		if (rawsize < 0)
+			elog(ERROR, "compressed data is corrupted");
+
+		SET_VARSIZE(result, rawsize + VARHDRSZ);
+	}
+
+	return result;
 }
 
 /* ----------
@@ -558,7 +604,7 @@ toast_datum_size(Datum value)
 		struct varatt_external toast_pointer;
 
 		VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
-		result = toast_pointer.va_extsize;
+		result = VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer);
 	}
 	else if (VARATT_IS_EXTERNAL_INDIRECT(attr))
 	{

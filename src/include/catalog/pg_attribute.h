@@ -156,8 +156,8 @@ CATALOG(pg_attribute,1249,AttributeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(75,
 	/* attribute's collation */
 	Oid			attcollation;
 
-	/* attribute's compression options  or NULL */
-	int32		attcompression BKI_DEFAULT(0);
+	/* attribute's compression options  or InvalidOid */
+	Oid			attcompression BKI_DEFAULT(0);
 
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	/* NOTE: The following fields are not present in tuple descriptors. */
@@ -183,7 +183,7 @@ CATALOG(pg_attribute,1249,AttributeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(75,
  * ATTRIBUTE_FIXED_PART_SIZE is the size of the fixed-layout,
  * guaranteed-not-null part of a pg_attribute row.  This is in fact as much
  * of the row as gets copied into tuple descriptors, so don't expect you
- * can access fields beyond attcollation except in a real tuple!
+ * can access fields beyond attcompression except in a real tuple!
  */
 #define ATTRIBUTE_FIXED_PART_SIZE \
 	(offsetof(FormData_pg_attribute,attcompression) + sizeof(Oid))

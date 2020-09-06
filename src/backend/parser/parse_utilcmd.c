@@ -27,7 +27,6 @@
 #include "postgres.h"
 
 #include "access/amapi.h"
-#include "access/cmapi.h"
 #include "access/htup_details.h"
 #include "access/relation.h"
 #include "access/reloptions.h"
@@ -1067,7 +1066,7 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 		/* Likewise, copy compression if requested */
 		if (table_like_clause->options & CREATE_TABLE_LIKE_COMPRESSION
 			&& OidIsValid(attribute->attcompression))
-			def->compression = GetCompressionName(attribute->attcompression);
+			def->compression = MakeColumnCompression(attribute->attcompression);
 		else
 			def->compression = NULL;
 

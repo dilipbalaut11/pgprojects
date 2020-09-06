@@ -67,7 +67,8 @@
 typedef struct varatt_external
 {
 	int32		va_rawsize;		/* Original data size (includes header) */
-	int32		va_extsize;		/* External saved size (doesn't) */
+	uint32		va_extinfo;		/* External saved size (without header) and
+								 * flags */
 	Oid			va_valueid;		/* Unique ID of value within TOAST table */
 	Oid			va_toastrelid;	/* RelID of TOAST table containing it */
 }			varatt_external;
@@ -149,6 +150,14 @@ typedef union
 								 * flags */
 		char		va_data[FLEXIBLE_ARRAY_MEMBER]; /* Compressed data */
 	}			va_compressed;
+	struct						/* Compressed-in-line format */
+	{
+		uint32		va_header;
+		uint32		va_info;	/* Original data size (excludes header) and
+								 * flags */
+		Oid			va_cmid;	/* Oid of compression options */
+		char		va_data[FLEXIBLE_ARRAY_MEMBER]; /* Compressed data */
+	}			va_custom_compressed;
 } varattrib_4b;
 
 typedef struct
@@ -287,6 +296,9 @@ typedef struct
 #define VARFLAGS_4B_C(PTR) \
 	(((varattrib_4b *) (PTR))->va_compressed.va_info >> 30)
 
+#define VARHDRSZ_CUSTOM_COMPRESSED	\
+	(offsetof(varattrib_4b, va_custom_compressed.va_data))
+
 /* Externally visible macros */
 
 /*
@@ -314,6 +326,8 @@ typedef struct
 #define VARDATA_EXTERNAL(PTR)				VARDATA_1B_E(PTR)
 
 #define VARATT_IS_COMPRESSED(PTR)			VARATT_IS_4B_C(PTR)
+#define VARATT_IS_CUSTOM_COMPRESSED(PTR)	(VARATT_IS_4B_C(PTR) && \
+											 (VARFLAGS_4B_C(PTR) == 0x02))
 #define VARATT_IS_EXTERNAL(PTR)				VARATT_IS_1B_E(PTR)
 #define VARATT_IS_EXTERNAL_ONDISK(PTR) \
 	(VARATT_IS_EXTERNAL(PTR) && VARTAG_EXTERNAL(PTR) == VARTAG_ONDISK)

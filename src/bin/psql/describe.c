@@ -1895,9 +1895,14 @@ describeOneTableDetails(const char *schemaname,
 			 tableinfo.relkind == RELKIND_PARTITIONED_TABLE))
 		{
 			appendPQExpBufferStr(&buf, ",\n  CASE WHEN attcompression = 0 THEN NULL ELSE "
-								 " (SELECT c.amname "
-								 "  FROM pg_catalog.pg_am c "
-								 "  WHERE c.oid = a.attcompression) "
+								 " (SELECT c.acname || "
+								 "		(CASE WHEN acoptions IS NULL "
+								 "		 THEN '' "
+								 "		 ELSE '(' || array_to_string(ARRAY(SELECT quote_ident(option_name) || ' ' || quote_literal(option_value)"
+								 "											  FROM pg_options_to_table(acoptions)), ', ') || ')'"
+								 " 		 END) "
+								 "  FROM pg_catalog.pg_attr_compression c "
+								 "  WHERE c.acoid = a.attcompression) "
 								 " END AS attcmname");
 			attcompression_col = cols++;
 		}

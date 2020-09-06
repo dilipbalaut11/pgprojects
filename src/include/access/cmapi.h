@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * cmapi.h
- *	  API for Postgres compression methods.
+ *	  API for Postgres compression AM.
  *
  * Copyright (c) 2015-2017, PostgreSQL Global Development Group
  *
@@ -14,42 +14,71 @@
 #define CMAPI_H
 
 #include "postgres.h"
-#include "catalog/pg_am.h"
+#include "catalog/pg_attr_compression.h"
 #include "catalog/pg_attribute.h"
 #include "nodes/pg_list.h"
 
-/* Built-in compression methods */
-#define PGLZ_COMPRESSION	0x00
-#define ZLIB_COMPRESSION	0x01
+#define IsBuiltinCompression(cmid)	((cmid) < FirstBootstrapObjectId)
+#define DefaultCompressionOid		(PGLZ_AC_OID)
 
-#define	MAX_BUILTIN_COMPRESSION_METHOD	2
-
-typedef struct CompressionRoutine CompressionRoutine;
-
-typedef struct varlena *(*cmcompress_function) (const struct varlena *value);
-typedef struct varlena *(*cmdecompress_slice_function)
-						(const struct varlena *value, int32 slicelength);
+typedef struct CompressionAmRoutine CompressionAmRoutine;
 
 /*
- * API struct for a compression routine.
+ * CompressionAmOptions contains all information needed to compress varlena.
+ *
+ *  For optimization purposes it will be created once for each attribute
+ *  compression and stored in cache, until its renewal on global cache reset,
+ *  or until deletion of related attribute compression.
+ */
+typedef struct CompressionAmOptions
+{
+	Oid			acoid;			/* Oid of attribute compression,
+								   should go always first */
+	Oid			amoid;			/* Oid of compression access method */
+	List	   *acoptions;		/* Parsed options, used for comparison */
+	CompressionAmRoutine *amroutine;	/* compression access method routine */
+	MemoryContext	mcxt;
+
+	/* result of cminitstate function will be put here */
+	void	   *acstate;
+} CompressionAmOptions;
+
+typedef void (*cmcheck_function) (Form_pg_attribute att, List *options);
+typedef struct varlena *(*cmcompress_function)
+			(CompressionAmOptions *cmoptions, const struct varlena *value);
+typedef struct varlena *(*cmdecompress_slice_function)
+			(CompressionAmOptions *cmoptions, const struct varlena *value,
+			 int32 slicelength);
+typedef void *(*cminitstate_function) (Oid acoid, List *options);
+
+/*
+ * API struct for a compression AM.
+ *
+ * 'cmcheck' - called when attribute is linking with compression method.
+ *  This function should check compability of compression method with
+ *  the attribute and its options.
+ *
+ * 'cminitstate' - called when CompressionAmOptions instance is created.
+ *  Should return pointer to a memory in a caller memory context, or NULL.
+ *  Could be used to pass some internal state between compression function
+ *  calls, like internal structure for parsed compression options.
  *
  * 'cmcompress' and 'cmdecompress' - varlena compression functions.
  */
-struct CompressionRoutine
+struct CompressionAmRoutine
 {
-	char	cmname[64];
+	NodeTag		type;
+
+	cmcheck_function cmcheck;	/* can be NULL */
+	cminitstate_function cminitstate;	/* can be NULL */
 	cmcompress_function cmcompress;
 	cmcompress_function cmdecompress;
 	cmdecompress_slice_function cmdecompress_slice;
 };
 
-int32 GetCompressionMethod(char *cmname);
-char *GetCompressionName(int32 cmid);
-CompressionRoutine *GetCompressionRoutine(int32 cmid);
-struct varlena *pglz_cmcompress(const struct varlena *value);
-struct varlena *pglz_cmdecompress(const struct varlena *value);
-struct varlena *pglz_cmdecompress_slice(const struct varlena *value,
-						int32 slicelength);
-struct varlena *zlib_cmcompress(const struct varlena *value);
-struct varlena *zlib_cmdecompress(const struct varlena *value);
+/* access/compression/cmapi.c */
+extern CompressionAmRoutine *InvokeCompressionAmHandler(Oid amhandler);
+extern List *GetAttrCompressionOptions(Oid acoid);
+extern Oid	GetAttrCompressionAmOid(Oid acoid);
+
 #endif							/* CMAPI_H */

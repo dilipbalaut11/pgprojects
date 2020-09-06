@@ -2810,33 +2810,33 @@ CREATE VIEW view_heap_psql AS SELECT f1 from tbl_heap_psql;
 CREATE MATERIALIZED VIEW mat_view_heap_psql USING heap_psql AS SELECT f1 from tbl_heap_psql;
 \d+ tbl_heap_psql
                               Table "tableam_display.tbl_heap_psql"
- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+--------------+-------------
- f1     | integer        |           |          |         | plain    |              | 
- f2     | character(100) |           |          |         | extended |              | 
+ Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |             |              | 
+ f2     | character(100) |           |          |         | extended | pglz        |              | 
 
 \d+ tbl_heap
                                  Table "tableam_display.tbl_heap"
- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+--------------+-------------
- f1     | integer        |           |          |         | plain    |              | 
- f2     | character(100) |           |          |         | extended |              | 
+ Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |             |              | 
+ f2     | character(100) |           |          |         | extended | pglz        |              | 
 
 \set HIDE_TABLEAM off
 \d+ tbl_heap_psql
                               Table "tableam_display.tbl_heap_psql"
- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+--------------+-------------
- f1     | integer        |           |          |         | plain    |              | 
- f2     | character(100) |           |          |         | extended |              | 
+ Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |             |              | 
+ f2     | character(100) |           |          |         | extended | pglz        |              | 
 Access method: heap_psql
 
 \d+ tbl_heap
                                  Table "tableam_display.tbl_heap"
- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+--------------+-------------
- f1     | integer        |           |          |         | plain    |              | 
- f2     | character(100) |           |          |         | extended |              | 
+ Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |             |              | 
+ f2     | character(100) |           |          |         | extended | pglz        |              | 
 Access method: heap
 
 -- AM is displayed for tables, indexes and materialized views.
@@ -4903,8 +4903,10 @@ List of access methods
  hash   | Index
  heap   | Table
  heap2  | Table
+ pglz   | 
  spgist | Index
-(8 rows)
+ zlib   | 
+(10 rows)
 
 \dA *
 List of access methods
@@ -4917,8 +4919,10 @@ List of access methods
  hash   | Index
  heap   | Table
  heap2  | Table
+ pglz   | 
  spgist | Index
-(8 rows)
+ zlib   | 
+(10 rows)
 
 \dA h*
 List of access methods
@@ -4953,8 +4957,10 @@ List of access methods
  hash   | Index | hashhandler          | hash index access method
  heap   | Table | heap_tableam_handler | heap table access method
  heap2  | Table | heap_tableam_handler | 
+ pglz   |       | pglzhandler          | pglz compression access method
  spgist | Index | spghandler           | SP-GiST index access method
-(8 rows)
+ zlib   |       | zlibhandler          | zlib compression access method
+(10 rows)
 
 \dA+ *
                              List of access methods
@@ -4967,8 +4973,10 @@ List of access methods
  hash   | Index | hashhandler          | hash index access method
  heap   | Table | heap_tableam_handler | heap table access method
  heap2  | Table | heap_tableam_handler | 
+ pglz   |       | pglzhandler          | pglz compression access method
  spgist | Index | spghandler           | SP-GiST index access method
-(8 rows)
+ zlib   |       | zlibhandler          | zlib compression access method
+(10 rows)
 
 \dA+ h*
                      List of access methods

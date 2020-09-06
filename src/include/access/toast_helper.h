@@ -32,6 +32,7 @@ typedef struct
 	struct varlena *tai_oldexternal;
 	int32		tai_size;
 	uint8		tai_colflags;
+	uint8		tai_compression;
 } ToastAttrInfo;
 
 /*

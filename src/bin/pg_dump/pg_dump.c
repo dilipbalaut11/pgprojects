@@ -39,6 +39,7 @@
 #endif
 
 #include "access/attnum.h"
+#include "access/cmapi.h"
 #include "access/sysattr.h"
 #include "access/transam.h"
 #include "catalog/pg_aggregate_d.h"
@@ -383,6 +384,7 @@ main(int argc, char **argv)
 		{"no-synchronized-snapshots", no_argument, &dopt.no_synchronized_snapshots, 1},
 		{"no-unlogged-table-data", no_argument, &dopt.no_unlogged_table_data, 1},
 		{"no-subscriptions", no_argument, &dopt.no_subscriptions, 1},
+		/*{"no-compression-methods", no_argument, &dopt.no_compression_methods, 1},*/
 		{"no-sync", no_argument, NULL, 7},
 		{"on-conflict-do-nothing", no_argument, &dopt.do_nothing, 1},
 		{"rows-per-insert", required_argument, NULL, 10},
@@ -888,6 +890,8 @@ main(int argc, char **argv)
 	 * We rely on dependency information to help us determine a safe order, so
 	 * the initial sort is mostly for cosmetic purposes: we sort by name to
 	 * ensure that logically identical schemas will dump identically.
+	 *
+	 * If we do a parallel dump, we want the largest tables to go first.
 	 */
 	sortDumpableObjectsByTypeName(dobjs, numObjs);
 
@@ -8474,6 +8478,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 {
 	DumpOptions *dopt = fout->dopt;
 	PQExpBuffer q = createPQExpBuffer();
+	bool createWithCompression;
 
 	for (int i = 0; i < numTables; i++)
 	{
@@ -8559,6 +8564,16 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			appendPQExpBufferStr(q,
 								 "'' AS attidentity,\n");
 
+		createWithCompression = (!dopt->binary_upgrade && fout->remoteVersion >= 120000);
+
+		if (createWithCompression)
+			appendPQExpBuffer(q,
+							  "c.amname AS attcmname,\n");
+		else
+			appendPQExpBuffer(q,
+							  "NULL AS attcmname,\n");
+
+
 		if (fout->remoteVersion >= 110000)
 			appendPQExpBufferStr(q,
 								 "CASE WHEN a.atthasmissing AND NOT a.attisdropped "
@@ -8577,7 +8592,13 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		/* need left join here to not fail on dropped columns ... */
 		appendPQExpBuffer(q,
 						  "FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_type t "
-						  "ON a.atttypid = t.oid\n"
+						  "ON a.atttypid = t.oid\n");
+
+		if (createWithCompression)
+			appendPQExpBuffer(q, "LEFT JOIN pg_catalog.pg_am c "
+								 "ON a.attcompression = c.oid\n");
+
+		appendPQExpBuffer(q,
 						  "WHERE a.attrelid = '%u'::pg_catalog.oid "
 						  "AND a.attnum > 0::pg_catalog.int2\n"
 						  "ORDER BY a.attnum",
@@ -8604,6 +8625,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		tbinfo->attcollation = (Oid *) pg_malloc(ntups * sizeof(Oid));
 		tbinfo->attfdwoptions = (char **) pg_malloc(ntups * sizeof(char *));
 		tbinfo->attmissingval = (char **) pg_malloc(ntups * sizeof(char *));
+		tbinfo->attcmnames = (char **) pg_malloc(ntups * sizeof(char *));
 		tbinfo->notnull = (bool *) pg_malloc(ntups * sizeof(bool));
 		tbinfo->inhNotNull = (bool *) pg_malloc(ntups * sizeof(bool));
 		tbinfo->attrdefs = (AttrDefInfo **) pg_malloc(ntups * sizeof(AttrDefInfo *));
@@ -8632,6 +8654,8 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			tbinfo->attcollation[j] = atooid(PQgetvalue(res, j, PQfnumber(res, "attcollation")));
 			tbinfo->attfdwoptions[j] = pg_strdup(PQgetvalue(res, j, PQfnumber(res, "attfdwoptions")));
 			tbinfo->attmissingval[j] = pg_strdup(PQgetvalue(res, j, PQfnumber(res, "attmissingval")));
+			tbinfo->attcmnames[j] = pg_strdup(PQgetvalue(res, j, PQfnumber(res, "attcmname")));
+			tbinfo->attrdefs[j] = NULL; /* fix below */
 			tbinfo->attrdefs[j] = NULL; /* fix below */
 			if (PQgetvalue(res, j, PQfnumber(res, "atthasdef"))[0] == 't')
 				hasdefaults = true;
@@ -15676,6 +15700,7 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 				{
 					bool		print_default;
 					bool		print_notnull;
+					bool		has_custom_compression;
 
 					/*
 					 * Default value --- suppress if to be printed separately.
@@ -15699,6 +15724,13 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 					if (tbinfo->reloftype && !print_default && !print_notnull &&
 						!dopt->binary_upgrade)
 						continue;
+
+					/*
+					 * Compression will require a record in
+					 * pg_attr_compression
+					 */
+					has_custom_compression = (tbinfo->attcmnames[j] &&
+						((strcmp(tbinfo->attcmnames[j], "pglz") != 0)));
 
 					/* Format properly if not first attr */
 					if (actual_atts == 0)
@@ -15734,7 +15766,23 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 						appendPQExpBuffer(q, " %s",
 										  tbinfo->atttypnames[j]);
 					}
-
+#if 0
+					/*
+					 * Compression
+					 *
+					 * In binary-upgrade mode, compression is assigned by
+					 * ALTER. Even if we're skipping compression the attribute
+					 * will get default compression. It's the task for ALTER
+					 * command to restore compression info.
+					 */
+					if (!dopt->no_compression_methods && !dopt->binary_upgrade &&
+						tbinfo->attcmnames[j] && strlen(tbinfo->attcmnames[j]) &&
+						has_custom_compression)
+					{
+						appendPQExpBuffer(q, " COMPRESSION %s",
+										  tbinfo->attcmnames[j]);
+					}
+#endif
 					if (print_default)
 					{
 						if (tbinfo->attgenerated[j] == ATTRIBUTE_GENERATED_STORED)

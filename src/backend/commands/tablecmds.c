@@ -15,6 +15,7 @@
 #include "postgres.h"
 
 #include "access/attmap.h"
+#include "access/cmapi.h"
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/heapam_xlog.h"
@@ -23,6 +24,7 @@
 #include "access/relscan.h"
 #include "access/sysattr.h"
 #include "access/tableam.h"
+#include "access/toast_internals.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/catalog.h"
@@ -41,6 +43,7 @@
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
+#include "catalog/pg_proc.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
@@ -88,6 +91,7 @@
 #include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/datum.h"
 #include "utils/fmgroids.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
@@ -852,6 +856,13 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 
 		if (colDef->generated)
 			attr->attgenerated = colDef->generated;
+
+		/* Store the compression method in pg_attribute. */
+		if (!IsBinaryUpgrade &&
+			(relkind == RELKIND_RELATION || relkind == RELKIND_PARTITIONED_TABLE))
+			attr->attcompression = GetCompressionMethod(attr, colDef->compression);
+		else
+			attr->attcompression = InvalidCompressionMethod;
 	}
 
 	/*
@@ -2391,6 +2402,22 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 									   storage_name(def->storage),
 									   storage_name(attribute->attstorage))));
 
+				/* Copy/check compression parameter */
+				if (IsValidCompression(attribute->attcompression))
+				{
+					char *compression =
+						GetCompressionName(attribute->attcompression);
+
+					if (!def->compression)
+						def->compression = compression;
+					else if (strcmp(def->compression, compression))
+							ereport(ERROR,
+								(errcode(ERRCODE_DATATYPE_MISMATCH),
+									errmsg("column \"%s\" has a compression method conflict",
+										attributeName),
+									errdetail("%s versus %s", def->compression, compression)));
+				}
+
 				def->inhcount++;
 				/* Merge of NOT NULL constraints = OR 'em together */
 				def->is_not_null |= attribute->attnotnull;
@@ -2425,6 +2452,7 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 				def->collOid = attribute->attcollation;
 				def->constraints = NIL;
 				def->location = -1;
+				def->compression = GetCompressionName(attribute->attcompression);
 				inhSchema = lappend(inhSchema, def);
 				newattmap->attnums[parent_attno - 1] = ++child_attno;
 			}
@@ -2669,6 +2697,19 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 							 errdetail("%s versus %s",
 									   storage_name(def->storage),
 									   storage_name(newdef->storage))));
+
+				/* Copy compression parameter */
+				if (!def->compression)
+					def->compression = newdef->compression;
+				else if (newdef->compression)
+				{
+					if (strcmp(def->compression, newdef->compression))
+						ereport(ERROR,
+							(errcode(ERRCODE_DATATYPE_MISMATCH),
+								errmsg("column \"%s\" has a compression method conflict",
+									attributeName),
+								errdetail("%s versus %s", def->compression, newdef->compression)));
+				}
 
 				/* Mark the column as locally defined */
 				def->is_local = true;
@@ -6211,6 +6252,15 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	attribute.attislocal = colDef->is_local;
 	attribute.attinhcount = colDef->inhcount;
 	attribute.attcollation = collOid;
+
+	/* create attribute compresssion record */
+	if (rel->rd_rel->relkind == RELKIND_RELATION ||
+		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		attribute.attcompression = GetCompressionMethod(&attribute,
+														colDef->compression);
+	else
+		attribute.attcompression = InvalidCompressionMethod;
+
 	/* attribute.attacl is handled by InsertPgAttributeTuples() */
 
 	ReleaseSysCache(typeTuple);
@@ -7633,6 +7683,11 @@ ATExecSetStorage(Relation rel, const char *colName, Node *newValue, LOCKMODE loc
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("column data type %s can only have storage PLAIN",
 						format_type_be(attrtuple->atttypid))));
+
+	/* use default compression if storage is not PLAIN */
+	if (!IsValidCompression(attrtuple->attcompression) &&
+		(newstorage != TYPSTORAGE_PLAIN))
+		attrtuple->attcompression = DefaultCompressionMethod;
 
 	CatalogTupleUpdate(attrelation, &tuple->t_self, tuple);
 
@@ -11710,6 +11765,18 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 	attTup->attstorage = tform->typstorage;
 
 	ReleaseSysCache(typeTuple);
+
+	if (rel->rd_rel->relkind == RELKIND_RELATION ||
+		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		/* Setup attribute compression */
+		if (attTup->attstorage == TYPSTORAGE_PLAIN)
+			attTup->attcompression = InvalidCompressionMethod;
+		else if (!IsValidCompression(attTup->attcompression))
+			attTup->attcompression = DefaultCompressionMethod;
+	}
+	else
+		attTup->attcompression = InvalidCompressionMethod;
 
 	CatalogTupleUpdate(attrelation, &heapTup->t_self, heapTup);
 

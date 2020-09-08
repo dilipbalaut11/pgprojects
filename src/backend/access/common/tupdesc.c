@@ -19,6 +19,7 @@
 
 #include "postgres.h"
 
+#include "access/cmapi.h"
 #include "access/htup_details.h"
 #include "access/tupdesc_details.h"
 #include "catalog/pg_collation.h"
@@ -650,6 +651,8 @@ TupleDescInitEntry(TupleDesc desc,
 	att->attisdropped = false;
 	att->attislocal = true;
 	att->attinhcount = 0;
+	att->attcompression = InvalidCompressionMethod;
+
 	/* attacl, attoptions and attfdwoptions are not present in tupledescs */
 
 	tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(oidtypeid));

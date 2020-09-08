@@ -13,22 +13,42 @@
 
 #include "postgres.h"
 
+#include "access/cmapi.h"
 #include "access/detoast.h"
 #include "access/genam.h"
 #include "access/heapam.h"
+#include "access/reloptions.h"
 #include "access/heaptoast.h"
 #include "access/table.h"
 #include "access/toast_internals.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
+#include "commands/defrem.h"
 #include "common/pg_lzcompress.h"
 #include "miscadmin.h"
 #include "utils/fmgroids.h"
+#include "utils/inval.h"
+#include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
+#include "utils/syscache.h"
 
 static bool toastrel_valueid_exists(Relation toastrel, Oid valueid);
 static bool toastid_valueid_exists(Oid toastrelid, Oid valueid);
+
+/* ---------
+ * toast_set_compressed_datum_info
+ *
+ * Save metadata in compressed datum. This information will required
+ * for decompression.
+ * --------
+ */
+void
+toast_set_compressed_datum_info(struct varlena *val, uint8 cm_method, int32 rawsize)
+{
+	TOAST_COMPRESS_SET_RAWSIZE(val, rawsize);
+	TOAST_COMPRESS_SET_COMPRESSION_METHOD(val, cm_method);
+}
 
 /* ----------
  * toast_compress_datum -
@@ -44,28 +64,31 @@ static bool toastid_valueid_exists(Oid toastrelid, Oid valueid);
  * ----------
  */
 Datum
-toast_compress_datum(Datum value)
+toast_compress_datum(Datum value, char cm)
 {
-	struct varlena *tmp;
-	int32		valsize = VARSIZE_ANY_EXHDR(DatumGetPointer(value));
-	int32		len;
+	struct	varlena *tmp = NULL;
+	int32	valsize;
+	uint32	cmid;
+	CompressionRoutine *cmroutine;
 
 	Assert(!VARATT_IS_EXTERNAL(DatumGetPointer(value)));
 	Assert(!VARATT_IS_COMPRESSED(DatumGetPointer(value)));
 
-	/*
-	 * No point in wasting a palloc cycle if value size is out of the allowed
-	 * range for compression
-	 */
-	if (valsize < PGLZ_strategy_default->min_input_size ||
-		valsize > PGLZ_strategy_default->max_input_size)
+	/* Fallback to default compression if not specified */
+	if (!IsValidCompression(cm))
+		cm = DefaultCompressionMethod;
+
+	/* Get the compression routine w.r.t the compression method */
+	cmid = GetCompressionMethodID(cm);
+	cmroutine = GetCompressionRoutine(cmid);
+
+	/* Call the actual compression function */
+	tmp = cmroutine->cmcompress((const struct varlena *) value);
+	if (!tmp)
 		return PointerGetDatum(NULL);
 
-	tmp = (struct varlena *) palloc(PGLZ_MAX_OUTPUT(valsize) +
-									TOAST_COMPRESS_HDRSZ);
-
 	/*
-	 * We recheck the actual size even if pglz_compress() reports success,
+	 * We recheck the actual size even if compression reports success,
 	 * because it might be satisfied with having saved as little as one byte
 	 * in the compressed data --- which could turn into a net loss once you
 	 * consider header and alignment padding.  Worst case, the compressed
@@ -74,16 +97,12 @@ toast_compress_datum(Datum value)
 	 * only one header byte and no padding if the value is short enough.  So
 	 * we insist on a savings of more than 2 bytes to ensure we have a gain.
 	 */
-	len = pglz_compress(VARDATA_ANY(DatumGetPointer(value)),
-						valsize,
-						TOAST_COMPRESS_RAWDATA(tmp),
-						PGLZ_strategy_default);
-	if (len >= 0 &&
-		len + TOAST_COMPRESS_HDRSZ < valsize - 2)
+	valsize = VARSIZE_ANY_EXHDR(DatumGetPointer(value));
+
+	if (VARSIZE(tmp) < valsize - 2)
 	{
-		TOAST_COMPRESS_SET_RAWSIZE(tmp, valsize);
-		SET_VARSIZE_COMPRESSED(tmp, len + TOAST_COMPRESS_HDRSZ);
 		/* successful compression */
+		toast_set_compressed_datum_info(tmp, cmid, valsize);
 		return PointerGetDatum(tmp);
 	}
 	else

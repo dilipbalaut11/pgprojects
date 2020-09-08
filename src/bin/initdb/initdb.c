@@ -1571,6 +1571,8 @@ setup_depend(FILE *cmdfd)
 		" FROM pg_rewrite;\n\n",
 		"INSERT INTO pg_depend SELECT 0,0,0, tableoid,oid,0, 'p' "
 		" FROM pg_trigger;\n\n",
+		"INSERT INTO pg_depend SELECT 0,0,0, tableoid,oid,0, 'p' "
+		" FROM pg_compression;\n\n",
 
 		/*
 		 * restriction here to avoid pinning the public namespace

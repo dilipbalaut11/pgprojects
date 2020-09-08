@@ -24,6 +24,7 @@
 #include <unistd.h>
 
 #include "access/amapi.h"
+#include "access/compressionapi.h"
 #include "access/heapam.h"
 #include "access/multixact.h"
 #include "access/reloptions.h"

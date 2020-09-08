@@ -19,6 +19,7 @@
 
 #include "postgres.h"
 
+#include "access/compressionapi.h"
 #include "access/htup_details.h"
 #include "access/tupdesc_details.h"
 #include "catalog/pg_collation.h"
@@ -470,6 +471,8 @@ equalTupleDescs(TupleDesc tupdesc1, TupleDesc tupdesc2)
 			return false;
 		if (attr1->attcollation != attr2->attcollation)
 			return false;
+		if (attr1->attcompression != attr2->attcompression)
+			return false;
 		/* attacl, attoptions and attfdwoptions are not even present... */
 	}
 
@@ -650,6 +653,7 @@ TupleDescInitEntry(TupleDesc desc,
 	att->attisdropped = false;
 	att->attislocal = true;
 	att->attinhcount = 0;
+
 	/* attacl, attoptions and attfdwoptions are not present in tupledescs */
 
 	tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(oidtypeid));
@@ -663,6 +667,8 @@ TupleDescInitEntry(TupleDesc desc,
 	att->attalign = typeForm->typalign;
 	att->attstorage = typeForm->typstorage;
 	att->attcollation = typeForm->typcollation;
+	att->attcompression = (att->attstorage == TYPSTORAGE_PLAIN) ?
+		InvalidCompressionMethod : DefaultCompressionMethod;
 
 	ReleaseSysCache(tuple);
 }

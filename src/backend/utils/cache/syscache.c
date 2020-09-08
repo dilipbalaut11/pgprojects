@@ -30,6 +30,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_cast.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_compression.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_conversion.h"
 #include "catalog/pg_database.h"
@@ -286,6 +287,28 @@ static const struct cachedesc cacheinfo[] = {
 			0
 		},
 		8
+	},
+	{CompressionRelationId,	/* CMNAME */
+		CompressionNameIndexId,
+		1,
+		{
+			Anum_pg_compression_cmname,
+			0,
+			0,
+			0
+		},
+		4
+	},
+	{CompressionRelationId,	/* CMOID */
+		CompressionIndexId,
+		1,
+		{
+			Anum_pg_compression_oid,
+			0,
+			0,
+			0
+		},
+		4
 	},
 	{CollationRelationId,		/* COLLNAMEENCNSP */
 		CollationNameEncNspIndexId,

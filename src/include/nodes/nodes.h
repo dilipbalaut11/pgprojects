@@ -492,6 +492,7 @@ typedef enum NodeTag
 	T_TimeLineHistoryCmd,
 	T_SQLCmd,
 
+	T_CompressionRoutine,		/* in access/compressionapi.h */
 	/*
 	 * TAGS FOR RANDOM OTHER STUFF
 	 *

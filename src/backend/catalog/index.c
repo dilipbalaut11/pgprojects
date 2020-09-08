@@ -24,6 +24,7 @@
 #include <unistd.h>
 
 #include "access/amapi.h"
+#include "access/cmapi.h"
 #include "access/heapam.h"
 #include "access/multixact.h"
 #include "access/reloptions.h"
@@ -374,6 +375,7 @@ ConstructTupleDescriptor(Relation heapRelation,
 			to->attstorage = typeTup->typstorage;
 			to->attalign = typeTup->typalign;
 			to->atttypmod = exprTypmod(indexkey);
+			to->attcompression = InvalidCompressionMethod;
 
 			ReleaseSysCache(tuple);
 
@@ -452,6 +454,7 @@ ConstructTupleDescriptor(Relation heapRelation,
 			to->attbyval = typeTup->typbyval;
 			to->attalign = typeTup->typalign;
 			to->attstorage = typeTup->typstorage;
+			to->attcompression = InvalidCompressionMethod;
 
 			ReleaseSysCache(tuple);
 		}

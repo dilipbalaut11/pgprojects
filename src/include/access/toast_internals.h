@@ -22,22 +22,36 @@
 typedef struct toast_compress_header
 {
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
-	int32		rawsize;
+	uint32		info;			/* 2 bits for compression method and
+								   30 bits rawsize */
 } toast_compress_header;
+
+#define RAWSIZEMASK (0x3FFFFFFFU)
 
 /*
  * Utilities for manipulation of header information for compressed
  * toast entries.
+ *
+ * Since version 11 TOAST_COMPRESS_SET_RAWSIZE also marks compressed
+ * varlenas as custom compressed. Such varlenas will contain 0x02 (0b10) in
+ * two highest bits.
  */
 #define TOAST_COMPRESS_HDRSZ		((int32) sizeof(toast_compress_header))
-#define TOAST_COMPRESS_RAWSIZE(ptr) (((toast_compress_header *) (ptr))->rawsize)
+#define TOAST_COMPRESS_RAWSIZE(ptr) (((toast_compress_header *) (ptr))->info & RAWSIZEMASK)
+#define TOAST_COMPRESS_METHOD(ptr)  (((toast_compress_header *) (ptr))->info >> 30)
 #define TOAST_COMPRESS_SIZE(ptr)	((int32) VARSIZE_ANY(ptr) - TOAST_COMPRESS_HDRSZ)
 #define TOAST_COMPRESS_RAWDATA(ptr) \
 	(((char *) (ptr)) + TOAST_COMPRESS_HDRSZ)
 #define TOAST_COMPRESS_SET_RAWSIZE(ptr, len) \
-	(((toast_compress_header *) (ptr))->rawsize = (len))
+do { \
+	Assert(len > 0 && len <= RAWSIZEMASK); \
+	((toast_compress_header *) (ptr))->info = (len); \
+} while (0)
 
-extern Datum toast_compress_datum(Datum value);
+#define TOAST_COMPRESS_SET_COMPRESSION_METHOD(ptr, cm_method) \
+	((toast_compress_header *) (ptr))->info |= ((cm_method) << 30);
+
+extern Datum toast_compress_datum(Datum value, char cm);
 extern Oid	toast_get_valid_index(Oid toastoid, LOCKMODE lock);
 
 extern void toast_delete_datum(Relation rel, Datum value, bool is_speculative);
@@ -51,5 +65,13 @@ extern int	toast_open_indexes(Relation toastrel,
 extern void toast_close_indexes(Relation *toastidxs, int num_indexes,
 								LOCKMODE lock);
 extern void init_toast_snapshot(Snapshot toast_snapshot);
+
+/*
+ * toast_set_compressed_datum_info -
+ *
+ * Save metadata in compressed datum
+ */
+extern void toast_set_compressed_datum_info(struct varlena *val, uint8 cm_method,
+											int32 rawsize);
 
 #endif							/* TOAST_INTERNALS_H */

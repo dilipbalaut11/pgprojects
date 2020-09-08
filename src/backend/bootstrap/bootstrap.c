@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <signal.h>
 
+#include "access/cmapi.h"
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/htup_details.h"
@@ -731,6 +732,7 @@ DefineAttr(char *name, char *type, int attnum, int nullness)
 	attrtypes[attnum]->attcacheoff = -1;
 	attrtypes[attnum]->atttypmod = -1;
 	attrtypes[attnum]->attislocal = true;
+	attrtypes[attnum]->attcompression = InvalidCompressionMethod;
 
 	if (nullness == BOOTCOL_NULL_FORCE_NOT_NULL)
 	{

@@ -19,6 +19,7 @@
 
 #include "postgres.h"
 
+#include "access/cmapi.h"
 #include "access/htup_details.h"
 #include "access/tupdesc_details.h"
 #include "catalog/pg_collation.h"
@@ -663,6 +664,7 @@ TupleDescInitEntry(TupleDesc desc,
 	att->attalign = typeForm->typalign;
 	att->attstorage = typeForm->typstorage;
 	att->attcollation = typeForm->typcollation;
+	att->attcompression = InvalidCompressionMethod;
 
 	ReleaseSysCache(tuple);
 }

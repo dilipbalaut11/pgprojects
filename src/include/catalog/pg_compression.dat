@@ -1,0 +1,21 @@
+#----------------------------------------------------------------------
+#
+# pg_compression.dat
+#    Initial contents of the pg_compression system relation.
+#
+# Predefined builtin compression  methods.
+#
+# Portions Copyright (c) 1996-2018, PostgreSQL Global Development Group
+# Portions Copyright (c) 1994, Regents of the University of California
+#
+# src/include/catalog/pg_compression.dat
+#
+#----------------------------------------------------------------------
+
+[
+
+{ oid => '4225', oid_symbol => 'PGLZ_COMPRESSION_OID', cmname => 'pglz', cmhandler => 'pglzhandler'},
+{ oid => '4226', oid_symbol => 'ZLIB_COMPRESSION_OID', cmname => 'zlib', cmhandler => 'zlibhandler'},
+
+]
+

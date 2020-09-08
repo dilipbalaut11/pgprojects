@@ -73,6 +73,7 @@ loop
   end if;
 end loop;
 end$$;
+NOTICE:  pg_compression contains unpinned initdb-created object(s)
 NOTICE:  pg_constraint contains unpinned initdb-created object(s)
 NOTICE:  pg_database contains unpinned initdb-created object(s)
 NOTICE:  pg_extension contains unpinned initdb-created object(s)

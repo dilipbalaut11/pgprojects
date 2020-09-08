@@ -37,9 +37,12 @@
 
 #include "postgres.h"
 
+#include "access/compressionapi.h"
+#include "access/detoast.h"
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/tableam.h"
+#include "access/toast_internals.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
 #include "commands/trigger.h"
@@ -2059,6 +2062,79 @@ tupconv_map_for_subplan(ModifyTableState *mtstate, int whichplan)
 	return mtstate->mt_per_subplan_tupconv_maps[whichplan];
 }
 
+/*
+ * Comppare the compression method of each compressed value with the
+ * compression method of the target attribute.  If the compression method
+ * of the compressed value is not supported in the target attribute the
+ * decompress the value.
+ */
+static void
+CompareCompressionMethodAndDecompress(TupleTableSlot *slot,
+									  TupleDesc targetTupDesc)
+{
+	int			i;
+	int			attnum;
+	int			natts = slot->tts_tupleDescriptor->natts;
+	bool		isnull = false;
+	bool		decompressed_any = false;
+	TupleDesc	tupleDesc = slot->tts_tupleDescriptor;
+
+	if (natts == 0)
+		return;
+
+	/*
+	 * Loop for all the attributes in the tuple and check if any of the
+	 * attribute is compressed in the source tuple and its compression method
+	 * is not same as the target compression method then we need to decompress
+	 * it.
+	 */
+	for (i = 0; i < natts; i++)
+	{
+		attnum = tupleDesc->attrs[i].attnum;
+
+		if (TupleDescAttr(tupleDesc, i)->attlen == -1)
+		{
+			struct varlena *new_value = (struct varlena *)
+			DatumGetPointer(slot_getattr(slot, attnum, &isnull));
+
+			/* nothing to be done, if the value is null */
+			if (isnull)
+				continue;
+
+			/* nothing to be done. if it is not compressed */
+			if (!VARATT_IS_COMPRESSED(new_value))
+				continue;
+
+			/*
+			 * Get the compression method stored in the toast header and
+			 * compare with the compression method of the target.
+			 */
+			if (targetTupDesc->attrs[i].attcompression !=
+				GetCompressionOidFromCompressionId(TOAST_COMPRESS_METHOD(new_value)))
+			{
+				new_value = detoast_attr(new_value);
+				slot->tts_values[attnum - 1] = PointerGetDatum(new_value);
+				decompressed_any = true;
+			}
+		}
+	}
+
+	/*
+	 * If we have decompressed any of the field in the source tuple then free
+	 * the existing tuple.
+	 */
+	if (decompressed_any)
+	{
+		/* deform complete tuple before we clear the existing tuple */
+		slot_getallattrs(slot);
+
+		/* FIXME : Is there a better way to handle this ?*/
+		ExecClearTuple(slot);
+		slot->tts_nvalid = natts;
+		slot->tts_flags &= ~TTS_FLAG_EMPTY;
+	}
+}
+
 /* ----------------------------------------------------------------
  *	   ExecModifyTable
  *
@@ -2274,6 +2350,14 @@ ExecModifyTable(PlanState *pstate)
 			if (operation != CMD_DELETE)
 				slot = ExecFilterJunk(junkfilter, slot);
 		}
+
+		/*
+		 * Compare the compression method of the compressed attribute in the
+		 * source tuple with target attribute and if those are different then
+		 * decompress those attributes.
+		 */
+		CompareCompressionMethodAndDecompress(
+							slot, resultRelInfo->ri_RelationDesc->rd_att);
 
 		switch (operation)
 		{

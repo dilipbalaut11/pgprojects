@@ -601,7 +601,9 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>		hash_partbound
 %type <defelt>		hash_partbound_elem
 
-%type <str>	optColumnCompression
+%type <node>	optColumnCompression alterColumnCompression
+%type <str>		compressionClause
+%type <list>	optCompressionPreserve
 
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
@@ -2267,7 +2269,7 @@ alter_table_cmd:
 					$$ = (Node *)n;
 				}
 			/* ALTER TABLE <name> ALTER [COLUMN] <colname> SET (COMPRESSION <cm>) */
-			| ALTER opt_column ColId SET optColumnCompression
+			| ALTER opt_column ColId SET alterColumnCompression
 				{
 					AlterTableCmd *n = makeNode(AlterTableCmd);
 					n->subtype = AT_SetCompression;
@@ -3449,6 +3451,36 @@ optColumnCompression:
 					}
 					| /*EMPTY*/	{ $$ = NULL; }
 				;
+
+optCompressionPreserve:
+			PRESERVE '(' name_list ')' { $$ = $3; }
+			| /*EMPTY*/ { $$ = NULL; }
+		;
+
+compressionClause:
+			COMPRESSION name { $$ = pstrdup($2); }
+		;
+
+optColumnCompression:
+			compressionClause
+				{
+					ColumnCompression *n = makeNode(ColumnCompression);
+					n->amname = $1;
+					n->preserve = NIL;
+					$$ = (Node *) n;
+				}
+			| /*EMPTY*/	{ $$ = NULL; }
+		;
+
+alterColumnCompression:
+			compressionClause optCompressionPreserve
+				{
+					ColumnCompression *n = makeNode(ColumnCompression);
+					n->amname = $1;
+					n->preserve = (List *) $2;
+					$$ = (Node *) n;
+				}
+		;
 
 ColQualList:
 			ColQualList ColConstraint				{ $$ = lappend($1, $2); }

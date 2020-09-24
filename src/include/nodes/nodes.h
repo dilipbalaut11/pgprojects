@@ -480,6 +480,7 @@ typedef enum NodeTag
 	T_PartitionBoundSpec,
 	T_PartitionRangeDatum,
 	T_PartitionCmd,
+	T_ColumnCompression,
 	T_VacuumRelation,
 
 	/*
@@ -501,23 +502,23 @@ typedef enum NodeTag
 	 * purposes (usually because they are involved in APIs where we want to
 	 * pass multiple object types through the same pointer).
 	 */
-	T_TriggerData,				/* in commands/trigger.h */
-	T_EventTriggerData,			/* in commands/event_trigger.h */
-	T_ReturnSetInfo,			/* in nodes/execnodes.h */
-	T_WindowObjectData,			/* private in nodeWindowAgg.c */
-	T_TIDBitmap,				/* in nodes/tidbitmap.h */
-	T_InlineCodeBlock,			/* in nodes/parsenodes.h */
-	T_FdwRoutine,				/* in foreign/fdwapi.h */
-	T_IndexAmRoutine,			/* in access/amapi.h */
-	T_TableAmRoutine,			/* in access/tableam.h */
-	T_TsmRoutine,				/* in access/tsmapi.h */
-	T_ForeignKeyCacheInfo,		/* in utils/rel.h */
-	T_CallContext,				/* in nodes/parsenodes.h */
-	T_SupportRequestSimplify,	/* in nodes/supportnodes.h */
-	T_SupportRequestSelectivity,	/* in nodes/supportnodes.h */
-	T_SupportRequestCost,		/* in nodes/supportnodes.h */
-	T_SupportRequestRows,		/* in nodes/supportnodes.h */
-	T_SupportRequestIndexCondition	/* in nodes/supportnodes.h */
+	T_TriggerData,				   /* in commands/trigger.h */
+	T_EventTriggerData,			   /* in commands/event_trigger.h */
+	T_ReturnSetInfo,			   /* in nodes/execnodes.h */
+	T_WindowObjectData,			   /* private in nodeWindowAgg.c */
+	T_TIDBitmap,				   /* in nodes/tidbitmap.h */
+	T_InlineCodeBlock,			   /* in nodes/parsenodes.h */
+	T_FdwRoutine,				   /* in foreign/fdwapi.h */
+	T_IndexAmRoutine,			   /* in access/amapi.h */
+	T_TableAmRoutine,			   /* in access/tableam.h */
+	T_TsmRoutine,				   /* in access/tsmapi.h */
+	T_ForeignKeyCacheInfo,		   /* in utils/rel.h */
+	T_CallContext,				   /* in nodes/parsenodes.h */
+	T_SupportRequestSimplify,	   /* in nodes/supportnodes.h */
+	T_SupportRequestSelectivity,   /* in nodes/supportnodes.h */
+	T_SupportRequestCost,		   /* in nodes/supportnodes.h */
+	T_SupportRequestRows,		   /* in nodes/supportnodes.h */
+	T_SupportRequestIndexCondition /* in nodes/supportnodes.h */
 } NodeTag;
 
 /*

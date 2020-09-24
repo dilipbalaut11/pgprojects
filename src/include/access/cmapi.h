@@ -57,6 +57,7 @@ struct CompressionRoutine
 	cmdecompress_slice_function cmdecompress_slice;
 };
 
+PGCompressionID GetCompressionMethodIDFromName(char *compression);
 char GetCompressionMethod(Form_pg_attribute att, char *compression);
 char GetCompressionMethodFromCMID(PGCompressionID cmid);
 PGCompressionID GetCompressionMethodID(char cm_method);

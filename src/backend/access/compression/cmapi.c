@@ -34,6 +34,25 @@ static struct CompressionRoutine BuiltInCMRoutine[] =
  * Search the array of built-in compression method and return the compression
  * method.
  */
+PGCompressionID
+GetCompressionMethodIDFromName(char *compression)
+{
+	int i;
+
+	/* Search in the built-in compression method array */
+	for (i = 0; i < MAX_BUILTIN_COMPRESSION_METHOD; i++)
+	{
+		if (strcmp(BuiltInCMRoutine[i].cmname, compression) == 0)
+			return i;
+	}
+
+	elog(ERROR, "Invalid compression method %s", compression);
+}
+
+/*
+ * GetCompressionMethod - Get attribute compression method from
+ * compression name
+ */
 char
 GetCompressionMethod(Form_pg_attribute att, char *compression)
 {

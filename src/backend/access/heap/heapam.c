@@ -1803,13 +1803,14 @@ UpdateXmaxHintBits(HeapTupleHeader tuple, Buffer buffer, TransactionId xid)
  * GetBulkInsertState - prepare status object for a bulk insert
  */
 BulkInsertState
-GetBulkInsertState(void)
+GetBulkInsertState(HTAB *preserved_cm_info)
 {
 	BulkInsertState bistate;
 
 	bistate = (BulkInsertState) palloc(sizeof(BulkInsertStateData));
 	bistate->strategy = GetAccessStrategy(BAS_BULKWRITE);
 	bistate->current_buf = InvalidBuffer;
+	bistate->preserved_cm_info = preserved_cm_info;
 	return bistate;
 }
 

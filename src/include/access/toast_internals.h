@@ -29,6 +29,16 @@ typedef struct toast_compress_header
 #define RAWSIZEMASK (0x3FFFFFFFU)
 
 /*
+ * Used to pass to preserved compression  methods from
+ * ALTER TABLE SET COMPRESSION into toast_insert_or_update.
+ */
+typedef struct AttrCmPreservedInfo
+{
+	AttrNumber attnum;
+	List *preserved_cmids;
+} AttrCmPreservedInfo;
+
+/*
  * Utilities for manipulation of header information for compressed
  * toast entries.
  *

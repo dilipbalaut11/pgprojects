@@ -38,7 +38,7 @@
  * perform any initialization of the array before calling this function.
  */
 void
-toast_tuple_init(ToastTupleContext *ttc)
+toast_tuple_init(ToastTupleContext *ttc, HTAB *preserved_cm_info)
 {
 	TupleDesc	tupleDesc = ttc->ttc_rel->rd_att;
 	int			numAttrs = tupleDesc->natts;
@@ -120,11 +120,29 @@ toast_tuple_init(ToastTupleContext *ttc)
 		 */
 		if (att->attlen == -1)
 		{
+			List *preserved_cmids = NIL;
+
 			/*
 			 * If the table's attribute says PLAIN always, force it so.
 			 */
 			if (att->attstorage == TYPSTORAGE_PLAIN)
 				ttc->ttc_attr[i].tai_colflags |= TOASTCOL_IGNORE;
+
+			/*
+			 * If it's ALTER SET COMPRESSION command we should check that
+			 * compression method in the preserved list.
+			 */
+			if (preserved_cm_info != NULL)
+			{
+				bool found;
+
+				AttrCmPreservedInfo *pinfo;
+
+				pinfo = hash_search(preserved_cm_info, &att->attnum,
+									HASH_FIND, &found);
+				if (found)
+					preserved_cmids = pinfo->preserved_cmids;
+			}
 
 			/*
 			 * We took care of UPDATE above, so any external value we find
@@ -159,15 +177,29 @@ toast_tuple_init(ToastTupleContext *ttc)
 							  att->attstorage == TYPSTORAGE_PLAIN);
 
 				if (!storage_ok ||
-					TOAST_COMPRESS_METHOD(new_value) != att->attcompression)
+					TOAST_COMPRESS_METHOD(new_value) != GetCompressionMethodID(att->attcompression))
 				{
-					/* just decompress the value */
-					new_value = detoast_attr(new_value);
+					if (preserved_cmids != NULL)
+					{
+						Oid cmid = TOAST_COMPRESS_METHOD(new_value);
+
+						/* decompress the value if it's not in preserved list */
+						if (!list_member_int(preserved_cmids, cmid))
+						{
+							new_value = detoast_attr(new_value);
+							ttc->ttc_attr[i].tai_colflags |= TOASTCOL_NEEDS_FREE;
+							ttc->ttc_flags |= (TOAST_NEEDS_CHANGE | TOAST_NEEDS_FREE);
+						}
+					}
+					else
+					{
+						/* just decompress the value */
+						new_value = detoast_attr(new_value);
+						ttc->ttc_attr[i].tai_colflags |= TOASTCOL_NEEDS_FREE;
+						ttc->ttc_flags |= (TOAST_NEEDS_CHANGE | TOAST_NEEDS_FREE);
+					}
 
 					ttc->ttc_values[i] = PointerGetDatum(new_value);
-					ttc->ttc_attr[i].tai_colflags |= TOASTCOL_NEEDS_FREE;
-					ttc->ttc_flags |= (TOAST_NEEDS_CHANGE | TOAST_NEEDS_FREE);
-
 				}
 			}
 

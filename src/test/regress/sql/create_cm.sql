@@ -48,4 +48,8 @@ ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION zlib;
 ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION pglz;
 \d+ cmmove2
 
+-- preserve old compression method
+ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION zlib PRESERVE (pglz);
+INSERT INTO cmmove2 VALUES (repeat('1234567890',1004));
+\d+ cmmove2
 DROP TABLE cmmove1, cmmove2, cmmove3, zlibtest;

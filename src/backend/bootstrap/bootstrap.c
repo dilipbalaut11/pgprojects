@@ -28,6 +28,7 @@
 #include "catalog/index.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
+#include "commands/defrem.h"
 #include "common/link-canary.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
@@ -732,9 +733,9 @@ DefineAttr(char *name, char *type, int attnum, int nullness)
 	attrtypes[attnum]->attcacheoff = -1;
 	attrtypes[attnum]->atttypmod = -1;
 	attrtypes[attnum]->attislocal = true;
-	attrtypes[attnum]->attcompression =
-		(attrtypes[attnum]->attstorage == TYPSTORAGE_PLAIN) ?
-		InvalidCompressionMethod : DefaultCompressionMethod;
+
+	/* initialize the attribute compression field based on the storage type */
+	InitAttributeCompression(attrtypes[attnum]);
 
 	if (nullness == BOOTCOL_NULL_FORCE_NOT_NULL)
 	{

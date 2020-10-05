@@ -1065,9 +1065,9 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 			def->storage = 0;
 
 		/* Likewise, copy compression if requested */
-		if (table_like_clause->options & CREATE_TABLE_LIKE_COMPRESSION
-			&& IsValidCompression(attribute->attcompression))
-			def->compression = GetCompressionName(attribute->attcompression);
+		if (table_like_clause->options & CREATE_TABLE_LIKE_COMPRESSION)
+			def->compression =
+					MakeColumnCompression(&attribute->attcompression);
 		else
 			def->compression = NULL;
 

@@ -145,6 +145,13 @@ extern Oid	get_table_am_oid(const char *amname, bool missing_ok);
 extern Oid	get_am_oid(const char *amname, bool missing_ok);
 extern char *get_am_name(Oid amOid);
 
+/* commands/compressioncmds.c */
+extern char *GetAttributeCompression(Form_pg_attribute att,
+									ColumnCompression *compression,
+									bool *need_rewrite);
+extern void InitAttributeCompression(Form_pg_attribute att);
+extern ColumnCompression *MakeColumnCompression(NameData *compression);
+
 /* support routines in commands/define.c */
 
 extern char *defGetString(DefElem *def);

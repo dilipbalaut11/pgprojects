@@ -531,7 +531,9 @@ static void ATExecEnableRowSecurity(Relation rel);
 static void ATExecDisableRowSecurity(Relation rel);
 static void ATExecForceNoForceRowSecurity(Relation rel, bool force_rls);
 static ObjectAddress ATExecSetCompression(AlteredTableInfo *tab, Relation rel,
-					 const char *column, Node *newValue, LOCKMODE lockmode);
+					 const char *column,
+					 ColumnCompression *compression,
+					 LOCKMODE lockmode);
 
 static void index_copy_data(Relation rel, RelFileNode newrnode);
 static const char *storage_name(char c);
@@ -562,8 +564,6 @@ static void refuseDupeIndexAttach(Relation parentIdx, Relation partIdx,
 								  Relation partitionTbl);
 static List *GetParentedForeignKeyRefs(Relation partition);
 static void ATDetachCheckNoForeignKeyRefs(Relation partition);
-static char GetAttributeCompressionMethod(Form_pg_attribute att,
-										  char *compression);
 
 /* ----------------------------------------------------------------
  *		DefineRelation
@@ -862,10 +862,16 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		if (!IsBinaryUpgrade &&
 			(relkind == RELKIND_RELATION ||
 			 relkind == RELKIND_PARTITIONED_TABLE))
-			attr->attcompression =
-					GetAttributeCompressionMethod(attr, colDef->compression);
+		{
+			char *cm = GetAttributeCompression(attr, colDef->compression, NULL);
+
+			if (cm == NULL)
+				MemSet(NameStr(attr->attcompression), 0, NAMEDATALEN);
+			else
+				namestrcpy(&attr->attcompression, cm);
+		}
 		else
-			attr->attcompression = InvalidCompressionMethod;
+			MemSet(NameStr(attr->attcompression), 0, NAMEDATALEN);
 	}
 
 	/*
@@ -2406,19 +2412,19 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 									   storage_name(attribute->attstorage))));
 
 				/* Copy/check compression parameter */
-				if (IsValidCompression(attribute->attcompression))
+				if (IsValidCompression(*(NameStr(attribute->attcompression))))
 				{
-					char *compression =
-						GetCompressionName(attribute->attcompression);
+					ColumnCompression *compression =
+						MakeColumnCompression(&attribute->attcompression);
 
-					if (!def->compression)
+					if (def->compression == NULL)
 						def->compression = compression;
-					else if (strcmp(def->compression, compression))
-							ereport(ERROR,
+					else if (strcmp(def->compression->cmname, compression->cmname))
+						ereport(ERROR,
 								(errcode(ERRCODE_DATATYPE_MISMATCH),
-									errmsg("column \"%s\" has a compression method conflict",
+								 errmsg("column \"%s\" has a compression method conflict",
 										attributeName),
-									errdetail("%s versus %s", def->compression, compression)));
+								 errdetail("%s versus %s", def->compression->cmname, compression->cmname)));
 				}
 
 				def->inhcount++;
@@ -2455,7 +2461,8 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 				def->collOid = attribute->attcollation;
 				def->constraints = NIL;
 				def->location = -1;
-				def->compression = GetCompressionName(attribute->attcompression);
+				def->compression =
+						MakeColumnCompression(&attribute->attcompression);
 				inhSchema = lappend(inhSchema, def);
 				newattmap->attnums[parent_attno - 1] = ++child_attno;
 			}
@@ -2706,12 +2713,12 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 					def->compression = newdef->compression;
 				else if (newdef->compression)
 				{
-					if (strcmp(def->compression, newdef->compression))
+					if (strcmp(def->compression->cmname, newdef->compression->cmname))
 						ereport(ERROR,
 							(errcode(ERRCODE_DATATYPE_MISMATCH),
 								errmsg("column \"%s\" has a compression method conflict",
 									attributeName),
-								errdetail("%s versus %s", def->compression, newdef->compression)));
+								errdetail("%s versus %s", def->compression->cmname, newdef->compression->cmname)));
 				}
 
 				/* Mark the column as locally defined */
@@ -4779,7 +4786,8 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			ATExecDetachPartition(rel, ((PartitionCmd *) cmd->def)->name);
 			break;
 		case AT_SetCompression:
-			address = ATExecSetCompression(tab, rel, cmd->name, cmd->def,
+			address = ATExecSetCompression(tab, rel, cmd->name,
+										   (ColumnCompression *) cmd->def,
 										   lockmode);
 			break;
 		default:				/* oops */
@@ -6269,10 +6277,17 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	/* create attribute compresssion record */
 	if (rel->rd_rel->relkind == RELKIND_RELATION ||
 		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		attribute.attcompression = GetAttributeCompressionMethod(&attribute,
-																 colDef->compression);
+	{
+		char *compression =
+			GetAttributeCompression(&attribute, colDef->compression, NULL);
+
+		if (compression == NULL)
+			MemSet(NameStr(attribute.attcompression), 0, NAMEDATALEN);
+		else
+			namestrcpy(&(attribute.attcompression), compression);
+	}
 	else
-		attribute.attcompression = InvalidCompressionMethod;
+		MemSet(NameStr(attribute.attcompression), 0, NAMEDATALEN);
 
 	/* attribute.attacl is handled by InsertPgAttributeTuples() */
 
@@ -7698,9 +7713,9 @@ ATExecSetStorage(Relation rel, const char *colName, Node *newValue, LOCKMODE loc
 						format_type_be(attrtuple->atttypid))));
 
 	/* use default compression if storage is not PLAIN */
-	if (!IsValidCompression(attrtuple->attcompression) &&
+	if (!IsValidCompression(*NameStr(attrtuple->attcompression)) &&
 		(newstorage != TYPSTORAGE_PLAIN))
-		attrtuple->attcompression = DefaultCompressionMethod;
+		InitAttributeCompression(attrtuple);
 
 	CatalogTupleUpdate(attrelation, &tuple->t_self, tuple);
 
@@ -11783,13 +11798,10 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
 		/* Setup attribute compression */
-		if (attTup->attstorage == TYPSTORAGE_PLAIN)
-			attTup->attcompression = InvalidCompressionMethod;
-		else if (!IsValidCompression(attTup->attcompression))
-			attTup->attcompression = DefaultCompressionMethod;
+		InitAttributeCompression(attTup);
 	}
 	else
-		attTup->attcompression = InvalidCompressionMethod;
+		MemSet(NameStr(attTup->attcompression), 0, NAMEDATALEN);
 
 	CatalogTupleUpdate(attrelation, &heapTup->t_self, heapTup);
 
@@ -14972,22 +14984,16 @@ static ObjectAddress
 ATExecSetCompression(AlteredTableInfo *tab,
 					 Relation rel,
 					 const char *column,
-					 Node *newValue,
+					 ColumnCompression *compression,
 					 LOCKMODE lockmode)
 {
 	Relation	attrel;
 	HeapTuple	atttuple;
 	Form_pg_attribute atttableform;
 	AttrNumber	attnum;
-	char	   *compression;
-	char		cmethod;
-	Datum		values[Natts_pg_attribute];
-	bool		nulls[Natts_pg_attribute];
-	bool		replace[Natts_pg_attribute];
+	char	   *cm;
+	bool		need_rewrite;
 	ObjectAddress address;
-
-	Assert(IsA(newValue, String));
-	compression = strVal(newValue);
 
 	attrel = table_open(AttributeRelationId, RowExclusiveLock);
 
@@ -15007,24 +15013,20 @@ ATExecSetCompression(AlteredTableInfo *tab,
 				 errmsg("cannot alter system column \"%s\"", column)));
 
 	/* Prevent from altering untoastable attributes with PLAIN storage */
-	if (atttableform->attstorage == 'p' && !TypeIsToastable(atttableform->atttypid))
+	if (atttableform->attstorage == TYPSTORAGE_PLAIN &&
+		!TypeIsToastable(atttableform->atttypid))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("column data type %s does not support compression",
 						format_type_be(atttableform->atttypid))));
 
-	/* Initialize buffers for new tuple values */
-	memset(values, 0, sizeof(values));
-	memset(nulls, false, sizeof(nulls));
-	memset(replace, false, sizeof(replace));
-
 	/* Get the attribute compression method. */
-	cmethod = GetAttributeCompressionMethod(atttableform, compression);
-
-	if (atttableform->attcompression != cmethod)
+	cm = GetAttributeCompression(atttableform, compression, &need_rewrite);
+	if (need_rewrite)
 		tab->rewrite |= AT_REWRITE_ALTER_COMPRESSION;
 
-	atttableform->attcompression = cmethod;
+	namestrcpy(&atttableform->attcompression, cm);
+
 	CatalogTupleUpdate(attrel, &atttuple->t_self, atttuple);
 
 	InvokeObjectPostAlterHook(RelationRelationId,
@@ -17729,28 +17731,4 @@ ATDetachCheckNoForeignKeyRefs(Relation partition)
 
 		table_close(rel, NoLock);
 	}
-}
-
-/*
- * GetAttributeCompressionMethod - Get compression method from compression name
- */
-static char
-GetAttributeCompressionMethod(Form_pg_attribute att, char *compression)
-{
-	char cm;
-
-	/* no compression for the plain storage */
-	if (att->attstorage == TYPSTORAGE_PLAIN)
-		return InvalidCompressionMethod;
-
-	/* fallback to default compression if it's not specified */
-	if (compression == NULL)
-		return DefaultCompressionMethod;
-
-	cm = GetCompressionMethod(compression);
-	if (!IsValidCompression(cm))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("compression type \"%s\" not recognized", compression)));
-	return cm;
 }

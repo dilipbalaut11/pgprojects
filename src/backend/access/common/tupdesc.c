@@ -24,6 +24,7 @@
 #include "access/tupdesc_details.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
+#include "commands/defrem.h"
 #include "common/hashfn.h"
 #include "miscadmin.h"
 #include "parser/parse_type.h"
@@ -471,7 +472,7 @@ equalTupleDescs(TupleDesc tupdesc1, TupleDesc tupdesc2)
 			return false;
 		if (attr1->attcollation != attr2->attcollation)
 			return false;
-		if (attr1->attcompression != attr2->attcompression)
+		if (strcmp(NameStr(attr1->attcompression), NameStr(attr2->attcompression)) != 0)
 			return false;
 		/* attacl, attoptions and attfdwoptions are not even present... */
 	}
@@ -667,8 +668,9 @@ TupleDescInitEntry(TupleDesc desc,
 	att->attalign = typeForm->typalign;
 	att->attstorage = typeForm->typstorage;
 	att->attcollation = typeForm->typcollation;
-	att->attcompression = (att->attstorage == TYPSTORAGE_PLAIN) ?
-		InvalidCompressionMethod : DefaultCompressionMethod;
+
+	/* initialize the attribute compression field based on the storage type */
+	InitAttributeCompression(att);
 
 	ReleaseSysCache(tuple);
 }

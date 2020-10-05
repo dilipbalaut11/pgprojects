@@ -2013,7 +2013,7 @@ tupconv_map_for_subplan(ModifyTableState *mtstate, int whichplan)
  * tuple with target attribute and if those are different then decompress
  * those attributes.
  */
-static void
+void
 CheckTargetCMAndDecompress(TupleTableSlot *slot, TupleDesc targetTupDesc)
 {
 	int			i;

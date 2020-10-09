@@ -391,6 +391,7 @@ static bool check_for_column_name_collision(Relation rel, const char *colname,
 											bool if_not_exists);
 static void add_column_datatype_dependency(Oid relid, int32 attnum, Oid typid);
 static void add_column_collation_dependency(Oid relid, int32 attnum, Oid collid);
+static void add_column_compression_dependency(Oid relid, int32 attnum, Oid cmoid);
 static void ATPrepDropNotNull(Relation rel, bool recurse, bool recursing);
 static ObjectAddress ATExecDropNotNull(Relation rel, const char *colName, LOCKMODE lockmode);
 static void ATPrepSetNotNull(List **wqueue, Relation rel,
@@ -531,7 +532,9 @@ static void ATExecEnableRowSecurity(Relation rel);
 static void ATExecDisableRowSecurity(Relation rel);
 static void ATExecForceNoForceRowSecurity(Relation rel, bool force_rls);
 static ObjectAddress ATExecSetCompression(AlteredTableInfo *tab, Relation rel,
-					 const char *column, Node *newValue, LOCKMODE lockmode);
+										  const char *column,
+										  ColumnCompression *compression,
+										  LOCKMODE lockmode);
 
 static void index_copy_data(Relation rel, RelFileNode newrnode);
 static const char *storage_name(char c);
@@ -562,8 +565,6 @@ static void refuseDupeIndexAttach(Relation parentIdx, Relation partIdx,
 								  Relation partitionTbl);
 static List *GetParentedForeignKeyRefs(Relation partition);
 static void ATDetachCheckNoForeignKeyRefs(Relation partition);
-static Oid GetAttributeCompressionMethod(Form_pg_attribute att,
-										 char *compression);
 
 /* ----------------------------------------------------------------
  *		DefineRelation
@@ -588,6 +589,7 @@ ObjectAddress
 DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 			   ObjectAddress *typaddress, const char *queryString)
 {
+	int			i;
 	char		relname[NAMEDATALEN];
 	Oid			namespaceId;
 	Oid			relationId;
@@ -863,7 +865,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 			(relkind == RELKIND_RELATION ||
 			 relkind == RELKIND_PARTITIONED_TABLE))
 			attr->attcompression =
-					GetAttributeCompressionMethod(attr, colDef->compression);
+					GetAttributeCompression(attr, colDef->compression, NULL);
 		else
 			attr->attcompression = InvalidOid;
 	}
@@ -932,6 +934,20 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	 * complaining about deadlock risks.
 	 */
 	rel = relation_open(relationId, AccessExclusiveLock);
+
+	/*
+	 * Specify relation Oid in attribute compression tuples, and create
+	 * dependencies.
+	 */
+	for (i = 0; i < (RelationGetDescr(rel))->natts; i++)
+	{
+		Form_pg_attribute attr;
+
+		attr = TupleDescAttr(RelationGetDescr(rel), i);
+		if (OidIsValid(attr->attcompression))
+			add_column_compression_dependency(attr->attrelid, attr->attnum,
+											  attr->attcompression);
+	}
 
 	/*
 	 * Now add any newly specified column default and generation expressions
@@ -2411,17 +2427,17 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 				/* Copy/check compression parameter */
 				if (OidIsValid(attribute->attcompression))
 				{
-					char *compression =
-						GetCompressionNameFromOid(attribute->attcompression);
+					ColumnCompression *compression =
+							MakeColumnCompression(attribute->attcompression);
 
 					if (!def->compression)
 						def->compression = compression;
-					else if (strcmp(def->compression, compression))
+					else if (strcmp(def->compression->cmname, compression->cmname))
 						ereport(ERROR,
 								(errcode(ERRCODE_DATATYPE_MISMATCH),
 								 errmsg("column \"%s\" has a compression method conflict",
 										attributeName),
-								 errdetail("%s versus %s", def->compression, compression)));
+								 errdetail("%s versus %s", def->compression->cmname, compression->cmname)));
 				}
 
 				def->inhcount++;
@@ -2458,7 +2474,7 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 				def->collOid = attribute->attcollation;
 				def->constraints = NIL;
 				def->location = -1;
-				def->compression = GetCompressionNameFromOid(attribute->attcompression);
+				def->compression = MakeColumnCompression(attribute->attcompression);
 				inhSchema = lappend(inhSchema, def);
 				newattmap->attnums[parent_attno - 1] = ++child_attno;
 			}
@@ -2709,12 +2725,12 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 					def->compression = newdef->compression;
 				else if (newdef->compression)
 				{
-					if (strcmp(def->compression, newdef->compression))
+					if (strcmp(def->compression->cmname, newdef->compression->cmname))
 						ereport(ERROR,
 							(errcode(ERRCODE_DATATYPE_MISMATCH),
 								errmsg("column \"%s\" has a compression method conflict",
 									attributeName),
-								errdetail("%s versus %s", def->compression, newdef->compression)));
+								errdetail("%s versus %s", def->compression->cmname, newdef->compression->cmname)));
 				}
 
 				/* Mark the column as locally defined */
@@ -4782,7 +4798,8 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			ATExecDetachPartition(rel, ((PartitionCmd *) cmd->def)->name);
 			break;
 		case AT_SetCompression:
-			address = ATExecSetCompression(tab, rel, cmd->name, cmd->def,
+			address = ATExecSetCompression(tab, rel, cmd->name,
+										   (ColumnCompression *) cmd->def,
 										   lockmode);
 			break;
 		default:				/* oops */
@@ -6272,8 +6289,8 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	/* create attribute compresssion record */
 	if (rel->rd_rel->relkind == RELKIND_RELATION ||
 		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		attribute.attcompression = GetAttributeCompressionMethod(&attribute,
-																 colDef->compression);
+		attribute.attcompression = GetAttributeCompression(&attribute,
+										colDef->compression, NULL);
 	else
 		attribute.attcompression = InvalidOid;
 
@@ -6448,6 +6465,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	 */
 	add_column_datatype_dependency(myrelid, newattnum, attribute.atttypid);
 	add_column_collation_dependency(myrelid, newattnum, attribute.attcollation);
+	add_column_compression_dependency(myrelid, newattnum, attribute.attcompression);
 
 	/*
 	 * Propagate to children as appropriate.  Unlike most other ALTER
@@ -6593,6 +6611,28 @@ add_column_collation_dependency(Oid relid, int32 attnum, Oid collid)
 		referenced.objectSubId = 0;
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 	}
+}
+
+/*
+ * Install a dependency for compression on its column.
+ *
+ * This is used to determine connection between column and builtin
+ * compression in ALTER SET COMPRESSION command.
+ *
+ * If dependency is already there the whole thing is skipped.
+ */
+static void
+add_column_compression_dependency(Oid relid, int32 attnum, Oid cmoid)
+{
+	ObjectAddress acref,
+		attref;
+
+	Assert(relid > 0 && attnum > 0);
+
+	ObjectAddressSet(acref, CompressionRelationId, cmoid);
+	ObjectAddressSubSet(attref, RelationRelationId, relid, attnum);
+
+	recordDependencyOn(&attref, &acref, DEPENDENCY_NORMAL);
 }
 
 /*
@@ -11580,7 +11620,11 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 								   getObjectDescription(&foundObject, false),
 								   colName)));
 				break;
+			case OCLASS_COMPRESSION:
 
+				/* Just check that dependency is the right type */
+				Assert(foundDep->deptype == DEPENDENCY_NORMAL);
+				break;
 			case OCLASS_DEFAULT:
 
 				/*
@@ -11691,7 +11735,8 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 			  foundDep->refobjid == attTup->attcollation) &&
 			!(foundDep->refclassid == RelationRelationId &&
 			  foundDep->refobjid == RelationGetRelid(rel) &&
-			  foundDep->refobjsubid != 0)
+			  foundDep->refobjsubid != 0) &&
+			  foundDep->refclassid != CompressionRelationId
 			)
 			elog(ERROR, "found unexpected dependency for column: %s",
 				 getObjectDescription(&foundObject, false));
@@ -11801,6 +11846,11 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 	/* Install dependencies on new datatype and collation */
 	add_column_datatype_dependency(RelationGetRelid(rel), attnum, targettype);
 	add_column_collation_dependency(RelationGetRelid(rel), attnum, targetcollid);
+
+	/* Create dependency for new attribute compression */
+	if (OidIsValid(attTup->attcompression))
+		add_column_compression_dependency(RelationGetRelid(rel), attnum,
+										  attTup->attcompression);
 
 	/*
 	 * Drop any pg_statistic entry for the column, since it's now wrong type
@@ -14975,22 +15025,19 @@ static ObjectAddress
 ATExecSetCompression(AlteredTableInfo *tab,
 					 Relation rel,
 					 const char *column,
-					 Node *newValue,
+					 ColumnCompression *compression,
 					 LOCKMODE lockmode)
 {
 	Relation	attrel;
 	HeapTuple	atttuple;
 	Form_pg_attribute atttableform;
 	AttrNumber	attnum;
-	char	   *compression;
 	Oid			cmoid;
+	bool		need_rewrite;
 	Datum		values[Natts_pg_attribute];
 	bool		nulls[Natts_pg_attribute];
 	bool		replace[Natts_pg_attribute];
 	ObjectAddress address;
-
-	Assert(IsA(newValue, String));
-	compression = strVal(newValue);
 
 	attrel = table_open(AttributeRelationId, RowExclusiveLock);
 
@@ -15022,9 +15069,12 @@ ATExecSetCompression(AlteredTableInfo *tab,
 	memset(replace, false, sizeof(replace));
 
 	/* Get the attribute compression method. */
-	cmoid = GetAttributeCompressionMethod(atttableform, compression);
+	cmoid = GetAttributeCompression(atttableform, compression, &need_rewrite);
 
 	if (atttableform->attcompression != cmoid)
+		add_column_compression_dependency(atttableform->attrelid,
+										  atttableform->attnum, cmoid);
+	if (need_rewrite)
 		tab->rewrite |= AT_REWRITE_ALTER_COMPRESSION;
 
 	atttableform->attcompression = cmoid;
@@ -17734,26 +17784,3 @@ ATDetachCheckNoForeignKeyRefs(Relation partition)
 	}
 }
 
-/*
- * GetAttributeCompressionMethod - Get compression method from compression name
- */
-static Oid
-GetAttributeCompressionMethod(Form_pg_attribute att, char *compression)
-{
-	Oid cmoid;
-
-	/* no compression for the plain storage */
-	if (att->attstorage == TYPSTORAGE_PLAIN)
-		return InvalidOid;
-
-	/* fallback to default compression if it's not specified */
-	if (compression == NULL)
-		return DefaultCompressionOid;
-
-	cmoid = GetCompressionOid(compression);
-	if (!OidIsValid(cmoid))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("compression type \"%s\" not recognized", compression)));
-	return cmoid;
-}

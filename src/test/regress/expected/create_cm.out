@@ -98,4 +98,13 @@ ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION pglz;
 --------+------+-----------+----------+---------+----------+-------------+--------------+-------------
  f1     | text |           |          |         | extended | pglz        |              | 
 
+-- preserve old compression method
+ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION zlib PRESERVE (pglz);
+INSERT INTO cmmove2 VALUES (repeat('1234567890',1004));
+\d+ cmmove2
+                                        Table "public.cmmove2"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | zlib        |              | 
+
 DROP TABLE cmmove1, cmmove2, cmmove3, zlibtest;

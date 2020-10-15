@@ -89,4 +89,12 @@ extern Size toast_raw_datum_size(Datum value);
  */
 extern Size toast_datum_size(Datum value);
 
+/* ----------
+ * toast_get_compression_oid -
+ *
+ *	Return the Oid of the stored compression method
+ * ----------
+ */
+extern Oid toast_get_compression_oid(struct varlena *attr);
+
 #endif							/* DETOAST_H */

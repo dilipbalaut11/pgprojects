@@ -38,7 +38,7 @@ typedef struct
  * Returns the compressed varlena, or NULL if compression fails.
  */
 static struct varlena *
-zlib_cmcompress(const struct varlena *value)
+zlib_cmcompress(const struct varlena *value, int32 header_size)
 {
 	int32		valsize,
 				len;
@@ -58,11 +58,11 @@ zlib_cmcompress(const struct varlena *value)
 		elog(ERROR, "could not initialize compression library: %s", zp->msg);
 
 	valsize = VARSIZE_ANY_EXHDR(DatumGetPointer(value));
-	tmp = (struct varlena *) palloc(valsize + TOAST_COMPRESS_HDRSZ);
+	tmp = (struct varlena *) palloc(valsize + header_size);
 	zp->next_in = (void *) VARDATA_ANY(value);
 	zp->avail_in = valsize;
 	zp->avail_out = valsize;
-	zp->next_out = (void *) ((char *) tmp + TOAST_COMPRESS_HDRSZ);
+	zp->next_out = (void *) ((char *) tmp + header_size);
 
 	do
 	{
@@ -80,7 +80,7 @@ zlib_cmcompress(const struct varlena *value)
 
 	if (len > 0)
 	{
-		SET_VARSIZE_COMPRESSED(tmp, len + TOAST_COMPRESS_HDRSZ);
+		SET_VARSIZE_COMPRESSED(tmp, len + header_size);
 		return tmp;
 	}
 
@@ -94,7 +94,7 @@ zlib_cmcompress(const struct varlena *value)
  * Returns the decompressed varlena.
  */
 static struct varlena *
-zlib_cmdecompress(const struct varlena *value)
+zlib_cmdecompress(const struct varlena *value, int32 header_size)
 {
 	struct varlena *result;
 	z_streamp	zp;
@@ -108,8 +108,8 @@ zlib_cmdecompress(const struct varlena *value)
 	if (inflateInit(zp) != Z_OK)
 		elog(ERROR, "could not initialize compression library: %s", zp->msg);
 
-	zp->next_in = (void *) ((char *) value + TOAST_COMPRESS_HDRSZ);
-	zp->avail_in = VARSIZE(value) - TOAST_COMPRESS_HDRSZ;
+	zp->next_in = (void *) ((char *) value + header_size);
+	zp->avail_in = VARSIZE(value) - header_size;
 	zp->avail_out = VARRAWSIZE_4B_C(value);
 
 	result = (struct varlena *) palloc(zp->avail_out + VARHDRSZ);

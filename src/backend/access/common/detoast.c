@@ -439,6 +439,35 @@ toast_fetch_datum_slice(struct varlena *attr, int32 sliceoffset,
 }
 
 /* ----------
+ * toast_get_compression_oid -
+ *
+ * Return the Oid of the compresion method stored in the compressed attribute.
+ */
+Oid
+toast_get_compression_oid(struct varlena *attr)
+{
+	CompressionId cmid;
+
+	/*
+	 * Get the compression id from the toast header and check whether the
+	 * value is custom compressed or not.  If it is custom compressed then
+	 * fetch the oid from the custome compression header.  Otherwise it is
+	 * compressed with the built-in compression method so get the oid of the
+	 * built-in compression methods.
+	 */
+	cmid = TOAST_COMPRESS_METHOD(attr);
+	if (IsCustomeCompressionID(cmid))
+	{
+		toast_compress_header_custom *hdr;
+
+		hdr = (toast_compress_header_custom *) attr;
+		return hdr->cmoid;
+	}
+	else
+		return GetCompressionOidFromCompressionId(cmid);
+}
+
+/* ----------
  * toast_decompress_datum -
  *
  * Decompress a compressed version of a varlena datum
@@ -447,16 +476,20 @@ static struct varlena *
 toast_decompress_datum(struct varlena *attr)
 {
 	CompressionRoutine *cmroutine;
-	Oid	cmoid;
+	Oid			cmoid;
 
 	Assert(VARATT_IS_COMPRESSED(attr));
 
-	cmoid = GetCompressionOidFromCompressionId(TOAST_COMPRESS_METHOD(attr));
+	/* get the compression method oid */
+	cmoid = toast_get_compression_oid(attr);
 
-	/* Get compression method handler routines */
+	/* get compression method handler routines */
 	cmroutine = GetCompressionRoutine(cmoid);
 
-	return cmroutine->cmdecompress(attr);
+	/* call the decompression routine */
+	return cmroutine->cmdecompress(attr,
+								   IsCustomeCompressionID(GetCompressionId(cmoid)) ?
+								   TOAST_CUSTOM_COMPRESS_HDRSZ : TOAST_COMPRESS_HDRSZ);
 }
 
 
@@ -471,23 +504,28 @@ static struct varlena *
 toast_decompress_datum_slice(struct varlena *attr, int32 slicelength)
 {
 	CompressionRoutine *cmroutine;
-	Oid	cmoid;
+	Oid			cmoid;
+	int32		header_sz;
 
 	Assert(VARATT_IS_COMPRESSED(attr));
 
-	cmoid = GetCompressionOidFromCompressionId(TOAST_COMPRESS_METHOD(attr));
+	cmoid = toast_get_compression_oid(attr);
 
 	/* Get compression method handler routines */
 	cmroutine = GetCompressionRoutine(cmoid);
+
+	/* get the compression header size */
+	header_sz = IsCustomeCompressionID(GetCompressionId(cmoid)) ?
+		TOAST_CUSTOM_COMPRESS_HDRSZ : TOAST_COMPRESS_HDRSZ;
 
 	/*
 	 * If the handler supports the slice decompression then only decompress
 	 * the slice otherwise decompress complete data.
 	 */
 	if (cmroutine->cmdecompress_slice)
-		return cmroutine->cmdecompress_slice(attr, slicelength);
+		return cmroutine->cmdecompress_slice(attr, header_sz, slicelength);
 	else
-		return cmroutine->cmdecompress(attr);
+		return cmroutine->cmdecompress(attr, header_sz);
 }
 
 /* ----------

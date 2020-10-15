@@ -191,6 +191,20 @@ static const ObjectPropertyType ObjectProperty[] =
 		true
 	},
 	{
+		"compression method",
+		CompressionRelationId,
+		CompressionIndexId,
+		CMOID,
+		CMNAME,
+		Anum_pg_compression_oid,
+		Anum_pg_compression_cmname,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		-1,
+		true
+	},	
+	{
 		"constraint",
 		ConstraintRelationId,
 		ConstraintOidIndexId,
@@ -1010,6 +1024,7 @@ get_object_address(ObjectType objtype, Node *object,
 			case OBJECT_FOREIGN_SERVER:
 			case OBJECT_EVENT_TRIGGER:
 			case OBJECT_ACCESS_METHOD:
+			case OBJECT_COMPRESSION_METHOD:
 			case OBJECT_PUBLICATION:
 			case OBJECT_SUBSCRIPTION:
 				address = get_object_address_unqualified(objtype,
@@ -1259,6 +1274,11 @@ get_object_address_unqualified(ObjectType objtype,
 		case OBJECT_ACCESS_METHOD:
 			address.classId = AccessMethodRelationId;
 			address.objectId = get_am_oid(name, missing_ok);
+			address.objectSubId = 0;
+			break;
+		case OBJECT_COMPRESSION_METHOD:
+			address.classId = CompressionRelationId;
+			address.objectId = get_cm_oid(name, missing_ok);
 			address.objectSubId = 0;
 			break;
 		case OBJECT_DATABASE:
@@ -2272,6 +2292,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 			objnode = (Node *) name;
 			break;
 		case OBJECT_ACCESS_METHOD:
+		case OBJECT_COMPRESSION_METHOD:
 		case OBJECT_DATABASE:
 		case OBJECT_EVENT_TRIGGER:
 		case OBJECT_EXTENSION:
@@ -2565,6 +2586,7 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 		case OBJECT_TSPARSER:
 		case OBJECT_TSTEMPLATE:
 		case OBJECT_ACCESS_METHOD:
+		case OBJECT_COMPRESSION_METHOD:
 			/* We treat these object types as being owned by superusers */
 			if (!superuser_arg(roleid))
 				ereport(ERROR,

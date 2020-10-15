@@ -4319,6 +4319,17 @@ _copyCreateAmStmt(const CreateAmStmt *from)
 	return newnode;
 }
 
+static CreateCmStmt *
+_copyCreateCmStmt(const CreateCmStmt *from)
+{
+	CreateCmStmt *newnode = makeNode(CreateCmStmt);
+
+	COPY_STRING_FIELD(cmname);
+	COPY_NODE_FIELD(handler_name);
+
+	return newnode;
+}
+
 static CreateTrigStmt *
 _copyCreateTrigStmt(const CreateTrigStmt *from)
 {
@@ -5483,6 +5494,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_CreateAmStmt:
 			retval = _copyCreateAmStmt(from);
+			break;
+		case T_CreateCmStmt:
+			retval = _copyCreateCmStmt(from);
 			break;
 		case T_CreateTrigStmt:
 			retval = _copyCreateTrigStmt(from);

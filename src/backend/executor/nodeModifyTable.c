@@ -2109,8 +2109,7 @@ CheckTargetCMAndDecompress(TupleTableSlot *slot, TupleDesc targetTupDesc)
 			 * Get the compression method stored in the toast header and
 			 * compare with the compression method of the target.
 			 */
-			cmoid = GetCompressionOidFromCompressionId(
-									TOAST_COMPRESS_METHOD(new_value));
+			cmoid = toast_get_compression_oid(new_value);
 			if (!IsCompressionSupported(&targetTupDesc->attrs[i], cmoid))
 			{
 				new_value = detoast_attr(new_value);

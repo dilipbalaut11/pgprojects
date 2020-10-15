@@ -26,18 +26,22 @@
  */
 typedef enum CompressionId
 {
-	PGLZ_COMPRESSION_ID,
-	ZLIB_COMPRESSION_ID
+	PGLZ_COMPRESSION_ID = 0,
+	ZLIB_COMPRESSION_ID = 1,
+	CUSTOME_COMPRESSION_ID = 3
 } CompressionId;
 
-
-#define DefaultCompressionOid	PGLZ_COMPRESSION_OID
+#define DefaultCompressionOid PGLZ_COMPRESSION_OID
+#define IsCustomeCompressionID(cmid) ((cmid) == CUSTOME_COMPRESSION_ID)
 
 typedef struct CompressionRoutine CompressionRoutine;
 
-typedef struct varlena *(*cmcompress_function) (const struct varlena *value);
+typedef struct varlena *(*cmcompress_function) (const struct varlena *value,
+												int32 toast_header_size);
 typedef struct varlena *(*cmdecompress_slice_function)
-			(const struct varlena *value, int32 slicelength);
+						(const struct varlena *value,
+						int32 toast_header_size,
+						int32 slicelength);
 
 /*
  * API struct for a compression routine.

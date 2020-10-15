@@ -149,6 +149,14 @@ typedef union
 								 * flags */
 		char		va_data[FLEXIBLE_ARRAY_MEMBER]; /* Compressed data */
 	}			va_compressed;
+	struct						/* Compressed-in-line format */
+	{
+		uint32		va_header;
+		uint32		va_info;	/* Original data size (excludes header) and
+								 * flags */
+		Oid			va_cmid;	/* Oid of compression method */
+		char		va_data[FLEXIBLE_ARRAY_MEMBER]; /* Compressed data */
+	}			va_custom_compressed;
 } varattrib_4b;
 
 typedef struct

@@ -52,4 +52,13 @@ ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION pglz;
 ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION zlib PRESERVE (pglz);
 INSERT INTO cmmove2 VALUES (repeat('1234567890',1004));
 \d+ cmmove2
+
+-- create compression method
+CREATE COMPRESSION METHOD pglz2 HANDLER pglzhandler;
+ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION pglz2;
+INSERT INTO cmmove2 VALUES (repeat('1234567890',1004));
+SELECT length(f1) FROM cmmove2;
+\d+ cmmove2
+
+
 DROP TABLE cmmove1, cmmove2, cmmove3, zlibtest;

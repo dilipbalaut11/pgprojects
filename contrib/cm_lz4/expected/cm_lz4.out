@@ -1,0 +1,45 @@
+CREATE EXTENSION cm_lz4;
+-- zlib compression
+CREATE TABLE lz4test(f1 TEXT COMPRESSION lz4);
+INSERT INTO lz4test VALUES(repeat('1234567890',1004));
+INSERT INTO lz4test VALUES(repeat('1234567890 one two three',1004));
+SELECT length(f1) FROM lz4test;
+ length 
+--------
+  10040
+  24096
+(2 rows)
+
+-- alter compression method with rewrite
+ALTER TABLE lz4test ALTER COLUMN f1 SET COMPRESSION zlib;
+\d+ lz4test
+                                        Table "public.lz4test"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | zlib        |              | 
+
+ALTER TABLE lz4test ALTER COLUMN f1 SET COMPRESSION lz4;
+\d+ lz4test
+                                        Table "public.lz4test"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | lz4         |              | 
+
+-- preserve old compression method
+ALTER TABLE lz4test ALTER COLUMN f1 SET COMPRESSION zlib PRESERVE (lz4);
+INSERT INTO lz4test VALUES (repeat('1234567890',1004));
+\d+ lz4test
+                                        Table "public.lz4test"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | zlib        |              | 
+
+SELECT length(f1) FROM lz4test;
+ length 
+--------
+  10040
+  24096
+  10040
+(3 rows)
+
+DROP TABLE lz4test;

@@ -15,6 +15,7 @@
 
 #include "postgres.h"
 
+#include "access/compressionapi.h"
 #include "access/genam.h"
 #include "access/htup_details.h"
 #include "access/relation.h"
@@ -30,6 +31,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_cast.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_compression.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_conversion.h"
 #include "catalog/pg_database.h"
@@ -3907,6 +3909,15 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				break;
 			}
 
+		case OCLASS_COMPRESSION:
+			{
+				char *cmname = GetCompressionNameFromOid(object->objectId);
+
+				if (cmname)
+					appendStringInfo(&buffer, _("compression %s"), cmname);
+				break;
+			}
+
 		case OCLASS_TRANSFORM:
 			{
 				HeapTuple	trfTup;
@@ -4477,6 +4488,10 @@ getObjectTypeDescription(const ObjectAddress *object, bool missing_ok)
 
 		case OCLASS_TRANSFORM:
 			appendStringInfoString(&buffer, "transform");
+			break;
+
+		case OCLASS_COMPRESSION:
+			appendStringInfoString(&buffer, "compression");
 			break;
 
 			/*
@@ -5762,6 +5777,15 @@ getObjectIdentityParts(const ObjectAddress *object,
 				table_close(transformDesc, AccessShareLock);
 			}
 			break;
+
+		case OCLASS_COMPRESSION:
+			{
+				appendStringInfo(&buffer, "%u",
+								 object->objectId);
+				if (objname)
+					*objname = list_make1(psprintf("%u", object->objectId));
+				break;
+			}
 
 			/*
 			 * There's intentionally no default: case here; we want the

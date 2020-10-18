@@ -601,7 +601,9 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>		hash_partbound
 %type <defelt>		hash_partbound_elem
 
-%type <str>	optColumnCompression
+%type <node>	optColumnCompression alterColumnCompression
+%type <str>		compressionClause
+%type <list>	optCompressionPreserve
 
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
@@ -2267,12 +2269,12 @@ alter_table_cmd:
 					$$ = (Node *)n;
 				}
 			/* ALTER TABLE <name> ALTER [COLUMN] <colname> SET (COMPRESSION <cm>) */
-			| ALTER opt_column ColId SET optColumnCompression
+			| ALTER opt_column ColId SET alterColumnCompression
 				{
 					AlterTableCmd *n = makeNode(AlterTableCmd);
 					n->subtype = AT_SetCompression;
 					n->name = $3;
-					n->def = (Node *) makeString($5);;
+					n->def = $5;
 					$$ = (Node *)n;
 				}
 			/* ALTER TABLE <name> DROP [COLUMN] IF EXISTS <colname> [RESTRICT|CASCADE] */
@@ -3387,7 +3389,7 @@ columnDef:	ColId Typename optColumnCompression create_generic_options ColQualLis
 					ColumnDef *n = makeNode(ColumnDef);
 					n->colname = $1;
 					n->typeName = $2;
-					n->compression = $3;
+					n->compression = (ColumnCompression *) $3;
 					n->inhcount = 0;
 					n->is_local = true;
 					n->is_not_null = false;
@@ -3442,13 +3444,35 @@ columnOptions:	ColId ColQualList
 				}
 		;
 
+optCompressionPreserve:
+			PRESERVE '(' name_list ')' { $$ = $3; }
+			| /*EMPTY*/ { $$ = NULL; }
+		;
+
+compressionClause:
+			COMPRESSION name { $$ = pstrdup($2); }
+		;
+
 optColumnCompression:
-					COMPRESSION name
-					{
-						$$ = $2;
-					}
-					| /*EMPTY*/	{ $$ = NULL; }
-				;
+			compressionClause
+				{
+					ColumnCompression *n = makeNode(ColumnCompression);
+					n->cmname = $1;
+					n->preserve = NIL;
+					$$ = (Node *) n;
+				}
+			| /*EMPTY*/	{ $$ = NULL; }
+		;
+
+alterColumnCompression:
+			compressionClause optCompressionPreserve
+				{
+					ColumnCompression *n = makeNode(ColumnCompression);
+					n->cmname = $1;
+					n->preserve = (List *) $2;
+					$$ = (Node *) n;
+				}
+		;
 
 ColQualList:
 			ColQualList ColConstraint				{ $$ = lappend($1, $2); }

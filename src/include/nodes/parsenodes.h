@@ -1716,6 +1716,7 @@ typedef enum ObjectType
 	OBJECT_CAST,
 	OBJECT_COLUMN,
 	OBJECT_COLLATION,
+	OBJECT_COMPRESSION_METHOD,
 	OBJECT_CONVERSION,
 	OBJECT_DATABASE,
 	OBJECT_DEFAULT,
@@ -2437,6 +2438,17 @@ typedef struct CreateAmStmt
 	List	   *handler_name;	/* handler function name */
 	char		amtype;			/* type of access method */
 } CreateAmStmt;
+
+/*----------------------
+ *		Create COMPRESSION METHOD Statement
+ *----------------------
+ */
+typedef struct CreateCmStmt
+{
+	NodeTag		type;
+	char	   *cmname;			/* compression method name */
+	List	   *handler_name;	/* handler function name */
+} CreateCmStmt;
 
 /* ----------------------
  *		Create TRIGGER Statement

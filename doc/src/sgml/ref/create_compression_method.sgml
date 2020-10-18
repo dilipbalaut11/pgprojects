@@ -1,0 +1,87 @@
+<!--
+doc/src/sgml/ref/create_compression_method.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-create-compression-method">
+ <indexterm zone="sql-create-compression-method">
+  <primary>CREATE COMPRESSION METHOD</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>CREATE COMPRESSION METHOD</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>CREATE COMPRESSION METHOD</refname>
+  <refpurpose>define a new compresion method</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+CREATE COMPRESSION METHOD <replaceable class="parameter">name</replaceable>
+    HANDLER <replaceable class="parameter">handler_function</replaceable>
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>CREATE COMPRESSION METHOD</command> creates a new compression method.
+   <productname>PostgreSQL</productname> supports two internal
+   built-in compression methods (<literal>pglz</literal>
+   and <literal>zlib</literal>), and also allows to add more custom compression
+   methods through this interface.
+  </para>
+  </para>
+
+  <para>
+   The compression method name must be unique within the database.
+  </para>
+
+  <para>
+   Only superusers can define new compression methods.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><replaceable class="parameter">name</replaceable></term>
+    <listitem>
+     <para>
+      The name of the compression method to be created.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">handler_function</replaceable></term>
+    <listitem>
+     <para>
+      <replaceable class="parameter">handler_function</replaceable> is the
+      name (possibly schema-qualified) of a previously registered function
+      that represents the access method. The handler function must be declared
+      to accept a single argument of type <type>internal</type> and to return
+      the pseudo-type <type>compression_handler</type>. The argument is a
+      dummy value that simply serves to prevent handler functions from being
+      called directly from SQL commands. The result of the function must be a
+      palloc'd struct of type <structname>CompressionRoutine</structname>,
+      which contains everything that the core code needs to know to make use of
+      the compression access method.
+      The <structname>CompressionRoutine</structname> struct, also called the
+      access method's <firstterm>API struct</firstterm>, contains pointers to
+      support functions for the compression method. These support functions are
+      plain C functions and are not visible or callable at the SQL level.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </refsect1>
+
+</refentry>

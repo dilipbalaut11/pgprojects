@@ -2068,7 +2068,7 @@ tupconv_map_for_subplan(ModifyTableState *mtstate, int whichplan)
  * of the compressed value is not supported in the target attribute the
  * decompress the value.
  */
-static void
+void
 CompareCompressionMethodAndDecompress(TupleTableSlot *slot,
 									  TupleDesc targetTupDesc)
 {

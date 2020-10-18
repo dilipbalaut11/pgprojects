@@ -42,4 +42,10 @@ INSERT INTO zlibtest VALUES(repeat('1234567890',1004));
 INSERT INTO zlibtest VALUES(repeat('1234567890 one two three',1004));
 SELECT length(f1) FROM zlibtest;
 
+-- alter compression method with rewrite
+ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION zlib;
+\d+ cmmove2
+ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION pglz;
+\d+ cmmove2
+
 DROP TABLE cmmove1, cmmove2, cmmove3, zlibtest;

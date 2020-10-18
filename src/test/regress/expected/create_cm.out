@@ -83,4 +83,19 @@ SELECT length(f1) FROM zlibtest;
   24096
 (2 rows)
 
+-- alter compression method with rewrite
+ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION zlib;
+\d+ cmmove2
+                                        Table "public.cmmove2"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | zlib        |              | 
+
+ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION pglz;
+\d+ cmmove2
+                                        Table "public.cmmove2"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | pglz        |              | 
+
 DROP TABLE cmmove1, cmmove2, cmmove3, zlibtest;

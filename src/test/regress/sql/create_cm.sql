@@ -46,5 +46,9 @@ ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION lz4;
 ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION lz4;
 \d+ cmmove2
 
+-- preserve old compression method
+ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION pglz PRESERVE (lz4);
+INSERT INTO cmmove2 VALUES (repeat('1234567890',1004));
+\d+ cmmove2
 
 DROP TABLE cmmove1, cmmove2, cmmove3, lz4test;

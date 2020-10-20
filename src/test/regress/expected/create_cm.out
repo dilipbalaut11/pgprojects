@@ -79,4 +79,19 @@ SELECT length(f1) FROM lz4test;
   24096
 (2 rows)
 
+-- alter compression method with rewrite
+ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION lz4;
+\d+ cmmove2
+                                        Table "public.cmmove2"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | lz4         |              | 
+
+ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION lz4;
+\d+ cmmove2
+                                        Table "public.cmmove2"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | lz4         |              | 
+
 DROP TABLE cmmove1, cmmove2, cmmove3, lz4test;

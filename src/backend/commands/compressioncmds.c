@@ -20,11 +20,115 @@
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
+#include "catalog/objectaccess.h"
 #include "catalog/pg_attribute.h"
+#include "catalog/pg_compression.h"
 #include "catalog/pg_depend.h"
+#include "catalog/pg_proc.h"
 #include "commands/defrem.h"
+#include "miscadmin.h"
 #include "nodes/parsenodes.h"
+#include "parser/parse_func.h"
 #include "utils/fmgroids.h"
+#include "utils/fmgrprotos.h"
+#include "utils/syscache.h"
+
+/*
+ * CreateCompressionMethod
+ *		Registers a new compression method.
+ */
+ObjectAddress
+CreateCompressionMethod(CreateCmStmt *stmt)
+{
+	Relation	rel;
+	ObjectAddress myself;
+	ObjectAddress referenced;
+	Oid			cmoid;
+	Oid			cmhandler;
+	bool		nulls[Natts_pg_compression];
+	Datum		values[Natts_pg_compression];
+	HeapTuple	tup;
+	Oid			funcargtypes[1] = {INTERNALOID};
+
+	rel = table_open(CompressionRelationId, RowExclusiveLock);
+
+	/* Must be super user */
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("permission denied to create compression method \"%s\"",
+						stmt->cmname),
+				 errhint("Must be superuser to create an access method.")));
+
+	/* Check if name is used */
+	cmoid = GetSysCacheOid1(CMNAME, Anum_pg_compression_oid,
+							CStringGetDatum(stmt->cmname));
+	if (OidIsValid(cmoid))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_DUPLICATE_OBJECT),
+				 errmsg("compression method \"%s\" already exists",
+						stmt->cmname)));
+	}
+
+	if (stmt->handler_name == NIL)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_FUNCTION),
+				 errmsg("handler function is not specified")));
+
+	/* Get the handler function oid */
+	cmhandler = LookupFuncName(stmt->handler_name, 1, funcargtypes, false);
+
+	/*
+	 * Insert tuple into pg_compression.
+	 */
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+
+	cmoid = GetNewOidWithIndex(rel, CompressionIndexId, Anum_pg_compression_oid);
+	values[Anum_pg_compression_oid - 1] = ObjectIdGetDatum(cmoid);
+	values[Anum_pg_compression_cmname - 1] =
+		DirectFunctionCall1(namein, CStringGetDatum(stmt->cmname));
+	values[Anum_pg_compression_cmhandler - 1] = ObjectIdGetDatum(cmhandler);
+
+	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
+
+	CatalogTupleInsert(rel, tup);
+	heap_freetuple(tup);
+
+	myself.classId = CompressionRelationId;
+	myself.objectId = cmoid;
+	myself.objectSubId = 0;
+
+	/* Record dependency on handler function */
+	referenced.classId = ProcedureRelationId;
+	referenced.objectId = cmhandler;
+	referenced.objectSubId = 0;
+
+	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+
+	recordDependencyOnCurrentExtension(&myself, false);
+
+	InvokeObjectPostCreateHook(CompressionRelationId, cmoid, 0);
+
+	table_close(rel, RowExclusiveLock);
+
+	return myself;
+}
+
+Oid
+get_cm_oid(const char *cmname, bool missing_ok)
+{
+	Oid			cmoid;
+
+	cmoid = GetCompressionOid(cmname);
+	if (!OidIsValid(cmoid) && !missing_ok)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("compression type \"%s\" not recognized", cmname)));
+
+	return cmoid;
+}
 
 /*
  * get list of all supported compression methods for the given attribute.

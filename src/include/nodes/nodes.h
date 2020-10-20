@@ -415,6 +415,7 @@ typedef enum NodeTag
 	T_AlterPolicyStmt,
 	T_CreateTransformStmt,
 	T_CreateAmStmt,
+	T_CreateCmStmt,
 	T_CreatePublicationStmt,
 	T_AlterPublicationStmt,
 	T_CreateSubscriptionStmt,
@@ -493,7 +494,7 @@ typedef enum NodeTag
 	T_TimeLineHistoryCmd,
 	T_SQLCmd,
 
-	T_CompressionRoutine,		/* in access/compressionapi.h */
+	T_CompressionRoutine, /* in access/compressionapi.h */
 	/*
 	 * TAGS FOR RANDOM OTHER STUFF
 	 *

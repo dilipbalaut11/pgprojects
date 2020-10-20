@@ -103,4 +103,22 @@ INSERT INTO cmmove2 VALUES (repeat('1234567890',1004));
 --------+------+-----------+----------+---------+----------+-------------+--------------+-------------
  f1     | text |           |          |         | extended | pglz        |              | 
 
+-- create compression method
+CREATE COMPRESSION METHOD pglz2 HANDLER pglzhandler;
+ALTER TABLE cmmove2 ALTER COLUMN f1 SET COMPRESSION pglz2;
+INSERT INTO cmmove2 VALUES (repeat('1234567890',1004));
+SELECT length(f1) FROM cmmove2;
+ length 
+--------
+  10000
+  10040
+  10040
+(3 rows)
+
+\d+ cmmove2
+                                        Table "public.cmmove2"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | pglz2       |              | 
+
 DROP TABLE cmmove1, cmmove2, cmmove3, lz4test;

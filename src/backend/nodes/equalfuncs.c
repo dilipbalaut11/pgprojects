@@ -2009,6 +2009,15 @@ _equalCreateAmStmt(const CreateAmStmt *a, const CreateAmStmt *b)
 }
 
 static bool
+_equalCreateCmStmt(const CreateCmStmt *a, const CreateCmStmt *b)
+{
+	COMPARE_STRING_FIELD(cmname);
+	COMPARE_NODE_FIELD(handler_name);
+
+	return true;
+}
+
+static bool
 _equalCreateTrigStmt(const CreateTrigStmt *a, const CreateTrigStmt *b)
 {
 	COMPARE_SCALAR_FIELD(replace);
@@ -3527,6 +3536,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_CreateAmStmt:
 			retval = _equalCreateAmStmt(a, b);
+			break;
+		case T_CreateCmStmt:
+			retval = _equalCreateCmStmt(a, b);
 			break;
 		case T_CreateTrigStmt:
 			retval = _equalCreateTrigStmt(a, b);

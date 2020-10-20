@@ -23,23 +23,31 @@
  * this in the first 2 bits of the raw length.  These built-in compression
  * method-id are directly mapped to the built-in compression method oid.  And,
  * using that oid we can get the compression handler routine by fetching the
- * pg_compression catalog row.
+ * pg_compression catalog row.  If it is custome compression id then the
+ * compressed data will store special custom compression header wherein it will
+ * directly store the oid of the custom compression method.
  */
 typedef enum CompressionId
 {
-	PGLZ_COMPRESSION_ID,
-	LZ4_COMPRESSION_ID
+	PGLZ_COMPRESSION_ID = 0,
+	LZ4_COMPRESSION_ID = 1,
+	/* one free slot for the future built-in method */
+	CUSTOM_COMPRESSION_ID = 3
 } CompressionId;
 
-/* Use default compression method if it is not specified. */
-#define DefaultCompressionOid	PGLZ_COMPRESSION_OID
+/* Use default compression method if it is not specified */
+#define DefaultCompressionOid		PGLZ_COMPRESSION_OID
+#define IsCustomCompression(cmid)	((cmid) == CUSTOM_COMPRESSION_ID)
 
 typedef struct CompressionRoutine CompressionRoutine;
 
 /* compresion handler routines */
-typedef struct varlena *(*cmcompress_function) (const struct varlena *value);
-typedef struct varlena *(*cmdecompress_slice_function)
-			(const struct varlena *value, int32 slicelength);
+typedef struct varlena *(*cmcompress_function)(const struct varlena *value,
+											   int32 toast_header_size);
+typedef struct varlena *(*cmdecompress_slice_function)(
+												const struct varlena *value,
+												int32 slicelength,
+												int32 toast_header_size);
 
 /*
  * API struct for a compression.

@@ -90,6 +90,7 @@
    &createAggregate;
    &createCast;
    &createCollation;
+   &createCompressionMethod;
    &createConversion;
    &createDatabase;
    &createDomain;
@@ -137,6 +138,7 @@
    &dropAggregate;
    &dropCast;
    &dropCollation;
+   &dropCompressionMethod;
    &dropConversion;
    &dropDatabase;
    &dropDomain;

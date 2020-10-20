@@ -146,6 +146,8 @@ extern Oid	get_am_oid(const char *amname, bool missing_ok);
 extern char *get_am_name(Oid amOid);
 
 /* commands/compressioncmds.c */
+extern ObjectAddress CreateCompressionMethod(CreateCmStmt *stmt);
+extern Oid get_cm_oid(const char *cmname, bool missing_ok);
 extern Oid GetAttributeCompression(Form_pg_attribute att,
 								   ColumnCompression *compression,
 								   bool *need_rewrite);

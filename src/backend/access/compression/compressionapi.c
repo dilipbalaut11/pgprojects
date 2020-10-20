@@ -129,6 +129,6 @@ GetCompressionId(Oid cmoid)
 		case LZ4_COMPRESSION_OID:
 			return LZ4_COMPRESSION_ID;
 		default:
-			elog(ERROR, "Invalid compression method %d", cmoid);
+			return CUSTOM_COMPRESSION_ID;
 	}
 }

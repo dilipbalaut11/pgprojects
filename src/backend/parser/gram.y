@@ -289,7 +289,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		DeallocateStmt PrepareStmt ExecuteStmt
 		DropOwnedStmt ReassignOwnedStmt
 		AlterTSConfigurationStmt AlterTSDictionaryStmt
-		CreateMatViewStmt RefreshMatViewStmt CreateAmStmt
+		CreateMatViewStmt RefreshMatViewStmt CreateAmStmt CreateCmStmt
 		CreatePublicationStmt AlterPublicationStmt
 		CreateSubscriptionStmt AlterSubscriptionStmt DropSubscriptionStmt
 
@@ -881,6 +881,7 @@ stmt :
 			| CreateAsStmt
 			| CreateAssertionStmt
 			| CreateCastStmt
+			| CreateCmStmt
 			| CreateConversionStmt
 			| CreateDomainStmt
 			| CreateExtensionStmt
@@ -5265,6 +5266,22 @@ am_type:
 
 /*****************************************************************************
  *
+ *		QUERY:
+ *             CREATE COMPRESSION METHOD name HANDLER handler_name
+ *
+ *****************************************************************************/
+
+CreateCmStmt: CREATE COMPRESSION METHOD name HANDLER handler_name
+				{
+					CreateCmStmt *n = makeNode(CreateCmStmt);
+					n->cmname = $4;
+					n->handler_name = $6;
+					$$ = (Node *) n;
+				}
+		;
+
+/*****************************************************************************
+ *
  *		QUERIES :
  *				CREATE TRIGGER ...
  *
@@ -6271,6 +6288,7 @@ object_type_name:
 
 drop_type_name:
 			ACCESS METHOD							{ $$ = OBJECT_ACCESS_METHOD; }
+			| COMPRESSION METHOD					{ $$ = OBJECT_COMPRESSION_METHOD; }
 			| EVENT TRIGGER							{ $$ = OBJECT_EVENT_TRIGGER; }
 			| EXTENSION								{ $$ = OBJECT_EXTENSION; }
 			| FOREIGN DATA_P WRAPPER				{ $$ = OBJECT_FDW; }

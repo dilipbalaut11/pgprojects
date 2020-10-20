@@ -1566,6 +1566,7 @@ doDeletion(const ObjectAddress *object, int flags)
 		case OCLASS_AM:
 		case OCLASS_AMOP:
 		case OCLASS_AMPROC:
+		case OCLASS_COMPRESSION:
 		case OCLASS_SCHEMA:
 		case OCLASS_TSPARSER:
 		case OCLASS_TSDICT:
@@ -1587,7 +1588,6 @@ doDeletion(const ObjectAddress *object, int flags)
 		case OCLASS_DATABASE:
 		case OCLASS_TBLSPACE:
 		case OCLASS_SUBSCRIPTION:
-		case OCLASS_COMPRESSION:
 			elog(ERROR, "global objects cannot be deleted by doDeletion");
 			break;
 

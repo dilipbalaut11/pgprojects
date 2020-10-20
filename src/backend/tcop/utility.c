@@ -168,6 +168,7 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 		case T_CompositeTypeStmt:
 		case T_CreateAmStmt:
 		case T_CreateCastStmt:
+		case T_CreateCmStmt:
 		case T_CreateConversionStmt:
 		case T_CreateDomainStmt:
 		case T_CreateEnumStmt:
@@ -1803,6 +1804,10 @@ ProcessUtilitySlow(ParseState *pstate,
 				address = CreateAccessMethod((CreateAmStmt *) parsetree);
 				break;
 
+			case T_CreateCmStmt:
+				address = CreateCompressionMethod((CreateCmStmt *) parsetree);
+				break;
+
 			case T_CreatePublicationStmt:
 				address = CreatePublication((CreatePublicationStmt *) parsetree);
 				break;
@@ -2560,6 +2565,9 @@ CreateCommandTag(Node *parsetree)
 				case OBJECT_ACCESS_METHOD:
 					tag = CMDTAG_DROP_ACCESS_METHOD;
 					break;
+				case OBJECT_COMPRESSION_METHOD:
+					tag = CMDTAG_DROP_COMPRESSION_METHOD;
+					break;
 				case OBJECT_PUBLICATION:
 					tag = CMDTAG_DROP_PUBLICATION;
 					break;
@@ -2965,6 +2973,10 @@ CreateCommandTag(Node *parsetree)
 
 		case T_CreateAmStmt:
 			tag = CMDTAG_CREATE_ACCESS_METHOD;
+			break;
+
+		case T_CreateCmStmt:
+			tag = CMDTAG_CREATE_COMPRESSION_METHOD;
 			break;
 
 		case T_CreatePublicationStmt:
@@ -3568,6 +3580,10 @@ GetCommandLogLevel(Node *parsetree)
 			break;
 
 		case T_CreateAmStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
+		case T_CreateCmStmt:
 			lev = LOGSTMT_DDL;
 			break;
 

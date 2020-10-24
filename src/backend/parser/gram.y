@@ -415,6 +415,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				transform_element_list transform_type_list
 				TriggerTransitions TriggerReferencing
 				publication_name_list
+				optCompressionParameters
 				vacuum_relation_list opt_vacuum_relation_list
 				drop_option_list
 
@@ -3461,11 +3462,17 @@ compressionClause:
 			COMPRESSION name { $$ = pstrdup($2); }
 		;
 
+optCompressionParameters:
+			WITH '(' generic_option_list ')' { $$ = $3; }
+			| /*EMPTY*/	{ $$ = NULL; }
+		;
+
 optColumnCompression:
-			compressionClause
+			compressionClause optCompressionParameters
 				{
 					ColumnCompression *n = makeNode(ColumnCompression);
 					n->cmname = $1;
+					n->options = (List *) $2;
 					n->preserve = NIL;
 					$$ = (Node *) n;
 				}
@@ -3473,14 +3480,15 @@ optColumnCompression:
 		;
 
 alterColumnCompression:
-			compressionClause optCompressionPreserve
+			compressionClause optCompressionParameters optCompressionPreserve
 				{
 					ColumnCompression *n = makeNode(ColumnCompression);
 					n->cmname = $1;
-					n->preserve = (List *) $2;
+					n->options = (List *) $2;
+					n->preserve = (List *) $3;
 					$$ = (Node *) n;
 				}
-			|	compressionClause PRESERVE ALL
+			|	compressionClause optCompressionParameters PRESERVE ALL
 				{
 					ColumnCompression *n = makeNode(ColumnCompression);
 					n->cmname = $1;

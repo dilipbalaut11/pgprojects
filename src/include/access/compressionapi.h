@@ -17,6 +17,7 @@
 
 #include "catalog/pg_compression_d.h"
 #include "nodes/nodes.h"
+#include "nodes/pg_list.h"
 
 /*
  * Built-in compression method-id.  The toast compression header will store
@@ -42,7 +43,12 @@ typedef enum CompressionId
 typedef struct CompressionRoutine CompressionRoutine;
 
 /* compresion handler routines */
+typedef void (*cmcheck_function) (List *options);
+typedef void *(*cminitstate_function) (List *options);
 typedef struct varlena *(*cmcompress_function)(const struct varlena *value,
+											   int32 toast_header_size,
+											   void *options);
+typedef struct varlena *(*cmdecompress_function)(const struct varlena *value,
 											   int32 toast_header_size);
 typedef struct varlena *(*cmdecompress_slice_function)(
 												const struct varlena *value,
@@ -61,11 +67,17 @@ struct CompressionRoutine
 	/* name of the compression method */
 	char		cmname[64];
 
+	/* compression option check, can be NULL */
+	cmcheck_function cmcheck;
+
+	/* compression option intialize, can be NULL */
+	cminitstate_function cminitstate;
+
 	/* compression routine for the compression method */
 	cmcompress_function cmcompress;
 
 	/* decompression routine for the compression method */
-	cmcompress_function cmdecompress;
+	cmdecompress_function cmdecompress;
 
 	/* slice decompression routine for the compression method */
 	cmdecompress_slice_function cmdecompress_slice;

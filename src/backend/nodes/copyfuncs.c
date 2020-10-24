@@ -2956,6 +2956,7 @@ _copyColumnCompression(const ColumnCompression *from)
 
 	COPY_STRING_FIELD(cmname);
 	COPY_SCALAR_FIELD(preserve_all);
+	COPY_NODE_FIELD(options);
 	COPY_NODE_FIELD(preserve);
 
 	return newnode;

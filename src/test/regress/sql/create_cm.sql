@@ -58,4 +58,12 @@ INSERT INTO cmmove2 VALUES (repeat('1234567890',1004));
 SELECT length(f1) FROM cmmove2;
 \d+ cmmove2
 
+-- compression options
+DROP TABLE cmmove1;
+CREATE TABLE cmmove1(f1 TEXT COMPRESSION pglz WITH (min_input_size '100'));
+INSERT INTO cmmove1 VALUES (repeat('1234567890',1004));
+ALTER TABLE cmmove1 ALTER COLUMN f1 SET COMPRESSION lz4 WITH (acceleration '50');
+ALTER TABLE cmmove1 ALTER COLUMN f1 SET COMPRESSION pglz WITH (min_input_size '200') PRESERVE (lz4);
+SELECT length(f1) FROM cmmove2;
+
 DROP TABLE cmmove1, cmmove2, cmmove3, lz4test;

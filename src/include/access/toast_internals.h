@@ -67,7 +67,7 @@ do { \
 #define TOAST_COMPRESS_SET_CMID(ptr, oid) \
 	(((toast_compress_header_custom *) (ptr))->cmoid = (oid))
 
-extern Datum toast_compress_datum(Datum value, Oid cmoid);
+extern Datum toast_compress_datum(Datum value, Oid cmoid, List *cmoptions);
 extern Oid	toast_get_valid_index(Oid toastoid, LOCKMODE lock);
 
 extern void toast_delete_datum(Relation rel, Datum value, bool is_speculative);

@@ -229,7 +229,7 @@ IsCompressionSupported(Form_pg_attribute att, Oid cmoid)
  */
 Oid
 GetAttributeCompression(Form_pg_attribute att, ColumnCompression *compression,
-						bool *need_rewrite)
+						Datum *acoptions, bool *need_rewrite)
 {
 	Oid			cmoid;
 	ListCell   *cell;
@@ -247,6 +247,22 @@ GetAttributeCompression(Form_pg_attribute att, ColumnCompression *compression,
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("compression type \"%s\" not recognized", compression->cmname)));
+
+	/* if compression options are given then check them */
+	if (compression->options)
+	{
+		CompressionRoutine *routine = GetCompressionRoutine(cmoid);
+
+		/* we need routine only to call cmcheck function */
+		if (routine->cmcheck != NULL)
+			routine->cmcheck(compression->options);
+
+		pfree(routine);
+
+		*acoptions = optionListToArray(compression->options);
+	}
+	else
+		*acoptions = PointerGetDatum(NULL);
 
 	/*
 	 * Determine if the column needs rewrite or not. Rewrite conditions: SET
@@ -323,4 +339,35 @@ MakeColumnCompression(Oid attcompression)
 	node->cmname = GetCompressionNameFromOid(attcompression);
 
 	return node;
+}
+
+/*
+ * Fetch atttributes compression options
+ */
+List *
+GetAttributeCompressionOptions(Form_pg_attribute att)
+{
+	HeapTuple	attr_tuple;
+	Datum		attcmoptions;
+	List	   *acoptions;
+	bool		isNull;
+
+	attr_tuple = SearchSysCache2(ATTNUM,
+								 ObjectIdGetDatum(att->attrelid),
+								 Int16GetDatum(att->attnum));
+	if (!HeapTupleIsValid(attr_tuple))
+		elog(ERROR, "cache lookup failed for attribute %d of relation %u",
+			 att->attnum, att->attrelid);
+
+	attcmoptions = SysCacheGetAttr(ATTNUM, attr_tuple,
+								   Anum_pg_attribute_attcmoptions,
+								   &isNull);
+	if (isNull)
+		acoptions = NULL;
+	else
+		acoptions = untransformRelOptions(attcmoptions);
+
+	ReleaseSysCache(attr_tuple);
+
+	return acoptions;
 }

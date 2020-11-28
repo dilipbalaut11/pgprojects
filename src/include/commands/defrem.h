@@ -137,6 +137,7 @@ extern Datum transformGenericOptions(Oid catalogId,
 									 Datum oldOptions,
 									 List *options,
 									 Oid fdwvalidator);
+extern Datum optionListToArray(List *options);
 
 /* commands/amcmds.c */
 extern ObjectAddress CreateAccessMethod(CreateAmStmt *stmt);
@@ -149,9 +150,10 @@ extern char *get_am_name(Oid amOid);
 /* commands/compressioncmds.c */
 extern Oid GetAttributeCompression(Form_pg_attribute att,
 								   ColumnCompression *compression,
-								   bool *need_rewrite);
+								   Datum *acoptions, bool *need_rewrite);
 extern ColumnCompression *MakeColumnCompression(Oid atttcompression);
 extern bool IsCompressionSupported(Form_pg_attribute att, Oid cmoid);
+extern List *GetAttributeCompressionOptions(Form_pg_attribute att);
 
 /* support routines in commands/define.c */
 

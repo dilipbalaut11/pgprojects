@@ -25,6 +25,7 @@
 #include "commands/defrem.h"
 #include "nodes/parsenodes.h"
 #include "utils/fmgroids.h"
+#include "utils/syscache.h"
 
 /*
  * get list of all supported compression methods for the given attribute.
@@ -125,7 +126,7 @@ IsCompressionSupported(Form_pg_attribute att, Oid cmoid)
  */
 Oid
 GetAttributeCompression(Form_pg_attribute att, ColumnCompression *compression,
-						bool *need_rewrite)
+						Datum *acoptions, bool *need_rewrite)
 {
 	Oid			cmoid;
 	ListCell   *cell;
@@ -139,6 +140,20 @@ GetAttributeCompression(Form_pg_attribute att, ColumnCompression *compression,
 		return DefaultCompressionOid;
 
 	cmoid = get_compression_am_oid(compression->cmname, false);
+
+	/* if compression options are given then check them */
+	if (compression->options)
+	{
+		CompressionAmRoutine *routine = GetCompressionAmRoutineByAmId(cmoid);
+
+		/* we need routine only to call cmcheck function */
+		if (routine->datum_check != NULL)
+			routine->datum_check(compression->options);
+
+		*acoptions = optionListToArray(compression->options);
+	}
+	else
+		*acoptions = PointerGetDatum(NULL);
 
 	/*
 	 * Determine if the column needs rewrite or not. Rewrite conditions: SET
@@ -215,4 +230,35 @@ MakeColumnCompression(Oid attcompression)
 	node->cmname = get_am_name(attcompression);
 
 	return node;
+}
+
+/*
+ * Fetch atttributes compression options
+ */
+List *
+GetAttributeCompressionOptions(Form_pg_attribute att)
+{
+	HeapTuple	attr_tuple;
+	Datum		attcmoptions;
+	List	   *acoptions;
+	bool		isNull;
+
+	attr_tuple = SearchSysCache2(ATTNUM,
+								 ObjectIdGetDatum(att->attrelid),
+								 Int16GetDatum(att->attnum));
+	if (!HeapTupleIsValid(attr_tuple))
+		elog(ERROR, "cache lookup failed for attribute %d of relation %u",
+			 att->attnum, att->attrelid);
+
+	attcmoptions = SysCacheGetAttr(ATTNUM, attr_tuple,
+								   Anum_pg_attribute_attcmoptions,
+								   &isNull);
+	if (isNull)
+		acoptions = NULL;
+	else
+		acoptions = untransformRelOptions(attcmoptions);
+
+	ReleaseSysCache(attr_tuple);
+
+	return acoptions;
 }

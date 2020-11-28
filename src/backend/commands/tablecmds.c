@@ -611,6 +611,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	LOCKMODE	parentLockmode;
 	const char *accessMethod = NULL;
 	Oid			accessMethodId = InvalidOid;
+	Datum	   *acoptions;
 
 	/*
 	 * Truncate relname to appropriate length (probably a waste of time, as
@@ -815,6 +816,8 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	cookedDefaults = NIL;
 	attnum = 0;
 
+	acoptions = (Datum *) palloc0(sizeof(Datum) * descriptor->natts);
+
 	foreach(listptr, stmt->tableElts)
 	{
 		ColumnDef  *colDef = lfirst(listptr);
@@ -867,8 +870,9 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		 */
 		if (relkind == RELKIND_RELATION ||
 			relkind == RELKIND_PARTITIONED_TABLE)
-			attr->attcompression =
-					GetAttributeCompression(attr, colDef->compression, NULL);
+			attr->attcompression = GetAttributeCompression(attr,
+												colDef->compression,
+												&acoptions[attnum - 1], NULL);
 		else
 			attr->attcompression = InvalidOid;
 	}
@@ -922,7 +926,10 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 										  allowSystemTableMods,
 										  false,
 										  InvalidOid,
+										  acoptions,
 										  typaddress);
+
+	pfree(acoptions);
 
 	/*
 	 * We must bump the command counter to make the newly-created relation
@@ -6152,6 +6159,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	AclResult	aclresult;
 	ObjectAddress address;
 	TupleDesc	tupdesc;
+	Datum		acoptions = PointerGetDatum(NULL);
 	FormData_pg_attribute *aattr[] = {&attribute};
 
 	/* At top level, permission check was done in ATPrepCmd, else do it */
@@ -6315,6 +6323,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 		attribute.attcompression = GetAttributeCompression(&attribute,
 														   colDef->compression,
+														   &acoptions,
 														   NULL);
 	else
 		attribute.attcompression = InvalidOid;
@@ -6325,7 +6334,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 
 	tupdesc = CreateTupleDesc(lengthof(aattr), (FormData_pg_attribute **) &aattr);
 
-	InsertPgAttributeTuples(attrdesc, tupdesc, myrelid, NULL, NULL);
+	InsertPgAttributeTuples(attrdesc, tupdesc, myrelid, NULL, &acoptions, NULL);
 
 	table_close(attrdesc, RowExclusiveLock);
 
@@ -15077,9 +15086,11 @@ ATExecSetCompression(AlteredTableInfo *tab,
 	AttrNumber	attnum;
 	Oid			cmoid;
 	bool		need_rewrite;
+	HeapTuple	newtuple;
 	Datum		values[Natts_pg_attribute];
 	bool		nulls[Natts_pg_attribute];
 	bool		replace[Natts_pg_attribute];
+	Datum		acoptions;
 	ObjectAddress address;
 	ListCell   *lc;
 
@@ -15113,12 +15124,24 @@ ATExecSetCompression(AlteredTableInfo *tab,
 	memset(replace, false, sizeof(replace));
 
 	/* Get the attribute compression method. */
-	cmoid = GetAttributeCompression(atttableform, compression, &need_rewrite);
+	cmoid = GetAttributeCompression(atttableform, compression, &acoptions,
+									&need_rewrite);
 	if (need_rewrite)
 		tab->rewrite |= AT_REWRITE_ALTER_COMPRESSION;
 
 	atttableform->attcompression = cmoid;
-	CatalogTupleUpdate(attrel, &atttuple->t_self, atttuple);
+
+	/* update existing entry */
+	if (acoptions)
+	{
+		values[Anum_pg_attribute_attcmoptions - 1] = PointerGetDatum(acoptions);
+		replace[Anum_pg_attribute_attcmoptions - 1] = true;
+		newtuple = heap_modify_tuple(atttuple, RelationGetDescr(attrel),
+									values, nulls, replace);
+		CatalogTupleUpdate(attrel, &newtuple->t_self, newtuple);
+	}
+	else
+		CatalogTupleUpdate(attrel, &atttuple->t_self, atttuple);
 
 	InvokeObjectPostAlterHook(RelationRelationId,
 							  RelationGetRelid(rel),
@@ -15157,7 +15180,22 @@ ATExecSetCompression(AlteredTableInfo *tab,
 			atttableform = (Form_pg_attribute) GETSTRUCT(atttuple);
 			atttableform->attcompression = cmoid;
 
-			CatalogTupleUpdate(attrel, &atttuple->t_self, atttuple);
+			/* update existing entry */
+			if (acoptions)
+			{
+				/* Initialize buffers for new tuple values */
+				memset(values, 0, sizeof(values));
+				memset(nulls, false, sizeof(nulls));
+				memset(replace, false, sizeof(replace));
+
+				values[Anum_pg_attribute_attcmoptions - 1] = PointerGetDatum(acoptions);
+				replace[Anum_pg_attribute_attcmoptions - 1] = true;
+				newtuple = heap_modify_tuple(atttuple, RelationGetDescr(attrel),
+											 values, nulls, replace);
+				CatalogTupleUpdate(attrel, &newtuple->t_self, newtuple);
+			}
+			else
+				CatalogTupleUpdate(attrel, &atttuple->t_self, atttuple);
 
 			InvokeObjectPostAlterHook(RelationRelationId,
 									  RelationGetRelid(rel),

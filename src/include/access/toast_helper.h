@@ -33,6 +33,7 @@ typedef struct
 	int32		tai_size;
 	uint8		tai_colflags;
 	Oid		tai_compression;
+	List   *tai_cmoptions;
 } ToastAttrInfo;
 
 /*

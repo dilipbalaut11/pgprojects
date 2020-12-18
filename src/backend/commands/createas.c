@@ -589,7 +589,8 @@ intorel_receive(TupleTableSlot *slot, DestReceiver *self)
 		 */
 		slot = CompareCompressionMethodAndDecompress(slot,
 													 &myState->decompress_tuple_slot,
-													 myState->rel->rd_att);
+													 myState->rel->rd_att,
+													 NULL);
 
 		/*
 		 * Note that the input slot might not be of the type of the target

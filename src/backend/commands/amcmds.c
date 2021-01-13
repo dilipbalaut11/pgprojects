@@ -241,6 +241,8 @@ get_am_type_string(char amtype)
 			return "INDEX";
 		case AMTYPE_TABLE:
 			return "TABLE";
+		case AMTYPE_COMPRESSION:
+			return "TABLE";
 		default:
 			/* shouldn't happen */
 			elog(ERROR, "invalid access method type '%c'", amtype);
@@ -277,6 +279,9 @@ lookup_am_handler_func(List *handler_name, char amtype)
 			break;
 		case AMTYPE_TABLE:
 			expectedType = TABLE_AM_HANDLEROID;
+			break;
+		case AMTYPE_COMPRESSION:
+			expectedType = COMPRESSION_AM_HANDLEROID;
 			break;
 		default:
 			elog(ERROR, "unrecognized access method type \"%c\"", amtype);

@@ -19,6 +19,7 @@
 #include "access/htup_details.h"
 #include "access/reloptions.h"
 #include "access/table.h"
+#include "catalog/pg_am.h"
 #include "utils/fmgroids.h"
 #include "utils/syscache.h"
 
@@ -58,4 +59,30 @@ CompressionIdToOid(CompressionId cmid)
 		default:
 			elog(ERROR, "Invalid compression method id %d", cmid);
 	}
+}
+
+/*
+ * GetCompressionAmRoutineByAmId - look up the handler of the compression access
+ * method with the given OID, and get its CompressionAmRoutine struct.
+ */
+CompressionAmRoutine *
+GetCompressionAmRoutineByAmId(Oid amoid)
+{
+	regproc		amhandler;
+	Datum		datum;
+	CompressionAmRoutine *routine;
+
+	/* Get handler function OID for the access method */
+	amhandler = GetAmHandlerByAmId(amoid, AMTYPE_COMPRESSION, false);
+	Assert(OidIsValid(amhandler));
+
+	/* And finally, call the handler function to get the API struct */
+	datum = OidFunctionCall0(amhandler);
+	routine = (CompressionAmRoutine *) DatumGetPointer(datum);
+
+	if (routine == NULL || !IsA(routine, CompressionAmRoutine))
+		elog(ERROR, "compression access method handler function %u did not return an CompressionAmRoutine struct",
+			 amhandler);
+
+	return routine;
 }

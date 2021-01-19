@@ -328,6 +328,8 @@ typedef struct _tableInfo
 	char	   *amname;			/* relation access method */
 
 	char	   **attcmnames; /* per-attribute current compression method */
+	char       **attcmoptions;      /* per-attribute current compression
+									options */
 	struct _attrCompressionInfo **attcompression; /* per-attribute all compression data */
 	/*
 	 * Stuff computed only for dumpable tables.

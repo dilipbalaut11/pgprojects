@@ -8709,10 +8709,17 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 
 		if (createWithCompression)
 			appendPQExpBuffer(q,
-							  "am.amname AS attcmname,\n");
+							  "am.amname AS attcmname,\n"
+							  "pg_catalog.array_to_string(ARRAY("
+							  "SELECT pg_catalog.quote_ident(option_name) || "
+							  "' ' || pg_catalog.quote_literal(option_value) "
+							  "FROM pg_catalog.pg_options_to_table(a.attcmoptions) "
+							  "ORDER BY option_name"
+							  "), E',\n    ') AS attcmoptions,\n");
 		else
 			appendPQExpBuffer(q,
-							  "NULL AS attcmname,\n");
+							   "NULL AS attcmname,\n"
+							   "NULL AS attcmoptions,\n");
 
 		if (fout->remoteVersion >= 110000)
 			appendPQExpBufferStr(q,
@@ -8765,6 +8772,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		tbinfo->attfdwoptions = (char **) pg_malloc(ntups * sizeof(char *));
 		tbinfo->attmissingval = (char **) pg_malloc(ntups * sizeof(char *));
 		tbinfo->attcmnames = (char **) pg_malloc(ntups * sizeof(char *));
+		tbinfo->attcmoptions = (char **) pg_malloc(ntups * sizeof(char *));
 		tbinfo->notnull = (bool *) pg_malloc(ntups * sizeof(bool));
 		tbinfo->inhNotNull = (bool *) pg_malloc(ntups * sizeof(bool));
 		tbinfo->attrdefs = (AttrDefInfo **) pg_malloc(ntups * sizeof(AttrDefInfo *));
@@ -8794,6 +8802,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			tbinfo->attfdwoptions[j] = pg_strdup(PQgetvalue(res, j, PQfnumber(res, "attfdwoptions")));
 			tbinfo->attmissingval[j] = pg_strdup(PQgetvalue(res, j, PQfnumber(res, "attmissingval")));
 			tbinfo->attcmnames[j] = pg_strdup(PQgetvalue(res, j, PQfnumber(res, "attcmname")));
+			tbinfo->attcmoptions[j] = pg_strdup(PQgetvalue(res, j, PQfnumber(res, "attcmoptions")));
 			tbinfo->attrdefs[j] = NULL; /* fix below */
 			if (PQgetvalue(res, j, PQfnumber(res, "atthasdef"))[0] == 't')
 				hasdefaults = true;
@@ -15932,7 +15941,8 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 						continue;
 
 					has_non_default_compression = (tbinfo->attcmnames[j] &&
-												   (strcmp(tbinfo->attcmnames[j], "pglz") != 0));
+												   ((strcmp(tbinfo->attcmnames[j], "pglz") != 0) ||
+													nonemptyReloptions(tbinfo->attcmoptions[j])));
 
 					/* Format properly if not first attr */
 					if (actual_atts == 0)
@@ -15983,6 +15993,10 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 					{
 						appendPQExpBuffer(q, " COMPRESSION %s",
 										  tbinfo->attcmnames[j]);
+
+						if (nonemptyReloptions(tbinfo->attcmoptions[j]))
+							appendPQExpBuffer(q, " WITH (%s)",
+											  tbinfo->attcmoptions[j]);
 					}
 
 					if (print_default)
@@ -16413,6 +16427,9 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 
 				appendPQExpBuffer(q, "ALTER TABLE %s ALTER COLUMN %s\nSET COMPRESSION %s",
 									qualrelname, fmtId(tbinfo->attnames[j]), tbinfo->attcmnames[j]);
+
+				if (nonemptyReloptions(tbinfo->attcmoptions[j]))
+					appendPQExpBuffer(q, "\nWITH (%s) ", tbinfo->attcmoptions[j]);
 
 				if (cminfo->nitems > 0)
 				{

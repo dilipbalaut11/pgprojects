@@ -732,8 +732,9 @@ DefineAttr(char *name, char *type, int attnum, int nullness)
 	attrtypes[attnum]->attcacheoff = -1;
 	attrtypes[attnum]->atttypmod = -1;
 	attrtypes[attnum]->attislocal = true;
+
 	if (IsStorageCompressible(attrtypes[attnum]->attstorage))
-		attrtypes[attnum]->attcompression = DefaultCompressionOid;
+		attrtypes[attnum]->attcompression = GetDefaultToastCompression();
 	else
 		attrtypes[attnum]->attcompression = InvalidOid;
 

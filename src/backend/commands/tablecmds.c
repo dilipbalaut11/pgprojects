@@ -11924,7 +11924,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 		if (!IsStorageCompressible(tform->typstorage))
 			attTup->attcompression = InvalidOid;
 		else if (!OidIsValid(attTup->attcompression))
-			attTup->attcompression = DefaultCompressionOid;
+			attTup->attcompression = GetDefaultToastCompression();
 	}
 	else
 		attTup->attcompression = InvalidOid;
@@ -17738,7 +17738,7 @@ GetAttributeCompression(Form_pg_attribute att, char *compression)
 
 	/* fallback to default compression if it's not specified */
 	if (compression == NULL)
-		return DefaultCompressionOid;
+		return GetDefaultToastCompression();
 
 	amoid = get_compression_am_oid(compression, false);
 

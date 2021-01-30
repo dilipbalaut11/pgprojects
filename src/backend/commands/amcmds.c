@@ -13,8 +13,10 @@
  */
 #include "postgres.h"
 
+#include "access/compressamapi.h"
 #include "access/htup_details.h"
 #include "access/table.h"
+#include "access/xact.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
@@ -30,10 +32,13 @@
 #include "utils/rel.h"
 #include "utils/syscache.h"
 
-
 static Oid	lookup_am_handler_func(List *handler_name, char amtype);
 static const char *get_am_type_string(char amtype);
 
+/* Compile-time default */
+char	*default_toast_compression = DEFAULT_TOAST_COMPRESSION;
+/* Invalid means need to lookup the text value in the catalog */
+static Oid	default_toast_compression_oid = InvalidOid;
 
 /*
  * CreateAccessMethod
@@ -276,4 +281,96 @@ lookup_am_handler_func(List *handler_name, char amtype)
 						format_type_extended(expectedType, -1, 0))));
 
 	return handlerOid;
+}
+
+/* check_hook: validate new default_toast_compression */
+bool
+check_default_toast_compression(char **newval, void **extra, GucSource source)
+{
+	if (**newval == '\0')
+	{
+		GUC_check_errdetail("%s cannot be empty.",
+							"default_toast_compression");
+		return false;
+	}
+
+	if (strlen(*newval) >= NAMEDATALEN)
+	{
+		GUC_check_errdetail("%s is too long (maximum %d characters).",
+							"default_toast_compression", NAMEDATALEN - 1);
+		return false;
+	}
+
+	/*
+	 * If we aren't inside a transaction, or not connected to a database, we
+	 * cannot do the catalog access necessary to verify the method.  Must
+	 * accept the value on faith.
+	 */
+	if (IsTransactionState() && MyDatabaseId != InvalidOid)
+	{
+		if (!OidIsValid(get_compression_am_oid(*newval, true)))
+		{
+			/*
+			 * When source == PGC_S_TEST, don't throw a hard error for a
+			 * nonexistent table access method, only a NOTICE. See comments in
+			 * guc.h.
+			 */
+			if (source == PGC_S_TEST)
+			{
+				ereport(NOTICE,
+						(errcode(ERRCODE_UNDEFINED_OBJECT),
+						 errmsg("compression access method \"%s\" does not exist",
+								*newval)));
+			}
+			else
+			{
+				GUC_check_errdetail("Compression access method \"%s\" does not exist.",
+									*newval);
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+/*
+ * assign_default_toast_compression: GUC assign_hook for default_toast_compression
+ */
+void
+assign_default_toast_compression(const char *newval, void *extra)
+{
+	/*
+	 * Invalidate setting, forcing it to be looked up as needed.
+	 * This avoids trying to do database access during GUC initialization,
+	 * or outside a transaction.
+	 */
+	default_toast_compression_oid = InvalidOid;
+}
+
+
+/*
+ * GetDefaultToastCompression -- get the OID of the current toast compression
+ *
+ * This exists to hide and optimize the use of the default_toast_compression
+ * GUC variable.
+ */
+Oid
+GetDefaultToastCompression(void)
+{
+	/* use pglz as default in bootstrap mode */
+	if (IsBootstrapProcessingMode())
+		return PGLZ_COMPRESSION_AM_OID;
+
+	Assert(!IsBootstrapProcessingMode());
+
+	/*
+	 * If cached value isn't valid, look up the current default value, caching
+	 * the result.
+	 */
+	if (!OidIsValid(default_toast_compression_oid))
+		default_toast_compression_oid =
+			get_compression_am_oid(default_toast_compression, false);
+
+	return default_toast_compression_oid;
 }

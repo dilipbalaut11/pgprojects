@@ -668,7 +668,7 @@ TupleDescInitEntry(TupleDesc desc,
 	att->attcollation = typeForm->typcollation;
 
 	if (IsStorageCompressible(typeForm->typstorage))
-		att->attcompression = DefaultCompressionOid;
+		att->attcompression = GetDefaultToastCompression();
 	else
 		att->attcompression = InvalidOid;
 

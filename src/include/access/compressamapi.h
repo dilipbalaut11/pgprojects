@@ -17,6 +17,7 @@
 
 #include "catalog/pg_am_d.h"
 #include "nodes/nodes.h"
+#include "utils/guc.h"
 
 /*
  * Built-in compression method-id.  The toast compression header will store
@@ -29,8 +30,17 @@ typedef enum CompressionId
 	LZ4_COMPRESSION_ID = 1
 } CompressionId;
 
-/* Use default compression method if it is not specified. */
+/* Default compression method if not specified. */
+#define DEFAULT_TOAST_COMPRESSION "pglz"
 #define DefaultCompressionOid	PGLZ_COMPRESSION_AM_OID
+
+/* GUC */
+extern char	*default_toast_compression;
+extern void assign_default_toast_compression(const char *newval, void *extra);
+extern bool check_default_toast_compression(char **newval, void **extra, GucSource source);
+
+extern Oid GetDefaultToastCompression(void);
+
 #define IsStorageCompressible(storage) ((storage) != TYPSTORAGE_PLAIN && \
 										(storage) != TYPSTORAGE_EXTERNAL)
 /* compression handler routines */

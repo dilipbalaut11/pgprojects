@@ -145,7 +145,8 @@ typedef union
 	struct						/* Compressed-in-line format */
 	{
 		uint32		va_header;
-		uint32		va_rawsize; /* Original data size (excludes header) */
+		uint32		va_info;	/* Original data size (excludes header) and
+								 * flags */
 		char		va_data[FLEXIBLE_ARRAY_MEMBER]; /* Compressed data */
 	}			va_compressed;
 } varattrib_4b;
@@ -274,14 +275,21 @@ typedef struct
 	(VARSIZE(PTR) - VARHDRSZ + VARHDRSZ_SHORT)
 
 #define VARHDRSZ_EXTERNAL		offsetof(varattrib_1b_e, va_data)
+#define VARHDRSZ_COMPRESS		offsetof(varattrib_4b, va_compressed.va_data)
 
 #define VARDATA_4B(PTR)		(((varattrib_4b *) (PTR))->va_4byte.va_data)
 #define VARDATA_4B_C(PTR)	(((varattrib_4b *) (PTR))->va_compressed.va_data)
 #define VARDATA_1B(PTR)		(((varattrib_1b *) (PTR))->va_data)
 #define VARDATA_1B_E(PTR)	(((varattrib_1b_e *) (PTR))->va_data)
 
+#define VARLENA_RAWSIZE_BITS	30
+#define VARLENA_RAWSIZE_MASK	((1U << VARLENA_RAWSIZE_BITS) - 1)
+
+/* va_info in va_compress contains raw size of datum and optional flags */
 #define VARRAWSIZE_4B_C(PTR) \
-	(((varattrib_4b *) (PTR))->va_compressed.va_rawsize)
+	(((varattrib_4b *) (PTR))->va_compressed.va_info & VARLENA_RAWSIZE_MASK)
+#define VARFLAGS_4B_C(PTR) \
+	(((varattrib_4b *) (PTR))->va_compressed.va_info >> VARLENA_RAWSIZE_BITS)
 
 /* Externally visible macros */
 

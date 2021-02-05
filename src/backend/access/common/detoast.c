@@ -13,6 +13,7 @@
 
 #include "postgres.h"
 
+#include "access/compressamapi.h"
 #include "access/detoast.h"
 #include "access/table.h"
 #include "access/tableam.h"
@@ -457,6 +458,67 @@ toast_fetch_datum_slice(struct varlena *attr, int32 sliceoffset,
 }
 
 /* ----------
+ * toast_get_compression_oid -
+ *
+ * Returns the Oid of the compression method stored in the compressed data.  If
+ * the varlena is not compressed then returns InvalidOid.
+ */
+Oid
+toast_get_compression_oid(struct varlena *attr)
+{
+	if (VARATT_IS_EXTERNAL_ONDISK(attr))
+	{
+		struct varatt_external toast_pointer;
+
+		VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
+
+		/* fast path for non-compressed external datums */
+		if (!VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer))
+			return InvalidOid;
+
+		/*
+		 * Fetch just enough of the value to examine the compression header,
+		 * so that we can find out the compression method.
+		 */
+		attr = toast_fetch_datum_slice(attr, 0, VARHDRSZ);
+	}
+	else if (!VARATT_IS_COMPRESSED(attr))
+		return InvalidOid;
+
+	return CompressionIdToOid(TOAST_COMPRESS_METHOD(attr));
+}
+
+/* ----------
+ * toast_get_compression_handler - get the compression handler routines
+ *
+ * helper function for toast_decompress_datum and toast_decompress_datum_slice
+ */
+static inline const CompressionAmRoutine *
+toast_get_compression_handler(struct varlena *attr)
+{
+	const CompressionAmRoutine *cmroutine;
+	CompressionId cmid;
+
+	Assert(VARATT_IS_COMPRESSED(attr));
+
+	cmid = TOAST_COMPRESS_METHOD(attr);
+
+	switch (cmid)
+	{
+		case PGLZ_COMPRESSION_ID:
+			cmroutine = &pglz_compress_methods;
+			break;
+		case LZ4_COMPRESSION_ID:
+			cmroutine = &lz4_compress_methods;
+			break;
+		default:
+			elog(ERROR, "invalid compression method id %d", cmid);
+	}
+
+	return cmroutine;
+}
+
+/* ----------
  * toast_decompress_datum -
  *
  * Decompress a compressed version of a varlena datum
@@ -464,21 +526,9 @@ toast_fetch_datum_slice(struct varlena *attr, int32 sliceoffset,
 static struct varlena *
 toast_decompress_datum(struct varlena *attr)
 {
-	struct varlena *result;
+	const CompressionAmRoutine *cmroutine = toast_get_compression_handler(attr);
 
-	Assert(VARATT_IS_COMPRESSED(attr));
-
-	result = (struct varlena *)
-		palloc(TOAST_COMPRESS_RAWSIZE(attr) + VARHDRSZ);
-	SET_VARSIZE(result, TOAST_COMPRESS_RAWSIZE(attr) + VARHDRSZ);
-
-	if (pglz_decompress(TOAST_COMPRESS_RAWDATA(attr),
-						TOAST_COMPRESS_SIZE(attr),
-						VARDATA(result),
-						TOAST_COMPRESS_RAWSIZE(attr), true) < 0)
-		elog(ERROR, "compressed data is corrupted");
-
-	return result;
+	return cmroutine->datum_decompress(attr);
 }
 
 
@@ -492,22 +542,9 @@ toast_decompress_datum(struct varlena *attr)
 static struct varlena *
 toast_decompress_datum_slice(struct varlena *attr, int32 slicelength)
 {
-	struct varlena *result;
-	int32		rawsize;
+	const CompressionAmRoutine *cmroutine = toast_get_compression_handler(attr);
 
-	Assert(VARATT_IS_COMPRESSED(attr));
-
-	result = (struct varlena *) palloc(slicelength + VARHDRSZ);
-
-	rawsize = pglz_decompress(TOAST_COMPRESS_RAWDATA(attr),
-							  VARSIZE(attr) - TOAST_COMPRESS_HDRSZ,
-							  VARDATA(result),
-							  slicelength, false);
-	if (rawsize < 0)
-		elog(ERROR, "compressed data is corrupted");
-
-	SET_VARSIZE(result, rawsize + VARHDRSZ);
-	return result;
+	return cmroutine->datum_decompress_slice(attr, slicelength);
 }
 
 /* ----------

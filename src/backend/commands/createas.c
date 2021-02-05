@@ -61,6 +61,7 @@ typedef struct
 	CommandId	output_cid;		/* cmin to insert in output tuples */
 	int			ti_options;		/* table_tuple_insert performance options */
 	BulkInsertState bistate;	/* bulk insert state */
+	TupleTableSlot *decompress_tuple_slot;	/* to hold the decompress tuple */
 } DR_intorel;
 
 /* utility functions for CTAS definition creation */
@@ -582,6 +583,15 @@ intorel_receive(TupleTableSlot *slot, DestReceiver *self)
 	if (!myState->into->skipData)
 	{
 		/*
+		 * Compare the compression method of the compressed attribute in the
+		 * source tuple with target attribute and if those are different then
+		 * decompress those attributes.
+		 */
+		slot = CompareCompressionMethodAndDecompress(slot,
+													 &myState->decompress_tuple_slot,
+													 myState->rel->rd_att);
+
+		/*
 		 * Note that the input slot might not be of the type of the target
 		 * relation. That's supported by table_tuple_insert(), but slightly
 		 * less efficient than inserting with the right slot - but the
@@ -619,6 +629,10 @@ intorel_shutdown(DestReceiver *self)
 	/* close rel, but keep lock until commit */
 	table_close(myState->rel, NoLock);
 	myState->rel = NULL;
+
+	/* release the slot used for decompressing the tuple */
+	if (myState->decompress_tuple_slot)
+		ExecDropSingleTupleTableSlot(myState->decompress_tuple_slot);
 }
 
 /*

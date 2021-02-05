@@ -697,9 +697,9 @@ ER_get_flat_size(ExpandedObjectHeader *eohptr)
 			 VARATT_IS_COMPRESSED(DatumGetPointer(erh->dvalues[i]))))
 		{
 			/*
-				* expanded_record_set_field_internal can do the actual work
-				* of detoasting.  It needn't recheck domain constraints.
-				*/
+			 * expanded_record_set_field_internal can do the actual work
+			 * of detoasting.  It needn't recheck domain constraints.
+			 */
 			expanded_record_set_field_internal(erh, i + 1,
 												erh->dvalues[i], false,
 												true,

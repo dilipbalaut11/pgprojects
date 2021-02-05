@@ -56,6 +56,7 @@ typedef struct
 	CommandId	output_cid;		/* cmin to insert in output tuples */
 	int			ti_options;		/* table_tuple_insert performance options */
 	BulkInsertState bistate;	/* bulk insert state */
+	TupleTableSlot *decompress_tuple_slot;	/* to hold the decompress tuple */
 } DR_transientrel;
 
 static int	matview_maintenance_depth = 0;
@@ -487,6 +488,15 @@ transientrel_receive(TupleTableSlot *slot, DestReceiver *self)
 	DR_transientrel *myState = (DR_transientrel *) self;
 
 	/*
+	 * Compare the compression method of the compressed attribute in the
+	 * source tuple with target attribute and if those are different then
+	 * decompress those attributes.
+	 */
+	slot = CompareCompressionMethodAndDecompress(slot,
+												 &myState->decompress_tuple_slot,
+												 myState->transientrel->rd_att);
+
+	/*
 	 * Note that the input slot might not be of the type of the target
 	 * relation. That's supported by table_tuple_insert(), but slightly less
 	 * efficient than inserting with the right slot - but the alternative
@@ -521,6 +531,10 @@ transientrel_shutdown(DestReceiver *self)
 	/* close transientrel, but keep lock until commit */
 	table_close(myState->transientrel, NoLock);
 	myState->transientrel = NULL;
+
+	/* release the slot used for decompressing the tuple */
+	if (myState->decompress_tuple_slot)
+		ExecDropSingleTupleTableSlot(myState->decompress_tuple_slot);
 }
 
 /*

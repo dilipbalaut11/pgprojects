@@ -134,6 +134,7 @@ typedef struct _psqlSettings
 	bool		quiet;
 	bool		singleline;
 	bool		singlestep;
+	bool		hide_compressam;
 	bool		hide_tableam;
 	int			fetch_count;
 	int			histsize;

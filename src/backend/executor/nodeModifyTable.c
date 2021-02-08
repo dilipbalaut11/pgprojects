@@ -2103,7 +2103,7 @@ CompareCompressionMethodAndDecompress(TupleTableSlot *slot,
 			 * compression method is not supported by the target attribute then
 			 * we need to decompress it.
 			 */
-			cmoid = CompressionIdToOid(VARFLAGS_4B_C(new_value));
+			cmoid = toast_get_compression_oid(new_value);
 			if (!IsCompressionSupported(&targetTupDesc->attrs[i], cmoid))
 			{
 				new_value = detoast_attr(new_value);

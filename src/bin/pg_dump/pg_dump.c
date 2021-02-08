@@ -13136,6 +13136,11 @@ dumpAccessMethod(Archive *fout, AccessMethodInfo *aminfo)
 
 	qamname = pg_strdup(fmtId(aminfo->dobj.name));
 
+	if (dopt->binary_upgrade && aminfo->amtype == AMTYPE_COMPRESSION)
+		appendPQExpBuffer(q,
+						  "SELECT pg_catalog.binary_upgrade_set_next_pg_am_oid('%u'::pg_catalog.oid);\n",
+						  aminfo->dobj.catId.oid);
+
 	appendPQExpBuffer(q, "CREATE ACCESS METHOD %s ", qamname);
 
 	switch (aminfo->amtype)
@@ -13145,6 +13150,9 @@ dumpAccessMethod(Archive *fout, AccessMethodInfo *aminfo)
 			break;
 		case AMTYPE_TABLE:
 			appendPQExpBufferStr(q, "TYPE TABLE ");
+			break;
+		case AMTYPE_COMPRESSION:
+			appendPQExpBufferStr(q, "TYPE COMPRESSION ");
 			break;
 		default:
 			pg_log_warning("invalid type \"%c\" of access method \"%s\"",

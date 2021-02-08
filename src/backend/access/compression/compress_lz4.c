@@ -27,7 +27,7 @@
  * compressed varlena, or NULL if compression fails.
  */
 static struct varlena *
-lz4_cmcompress(const struct varlena *value)
+lz4_cmcompress(const struct varlena *value, int32 header_size)
 {
 #ifndef HAVE_LIBLZ4
 	ereport(ERROR,
@@ -46,10 +46,10 @@ lz4_cmcompress(const struct varlena *value)
 	 * and allocate the memory for holding the compressed data and the header.
 	 */
 	max_size = LZ4_compressBound(valsize);
-	tmp = (struct varlena *) palloc(max_size + VARHDRSZ_COMPRESS);
+	tmp = (struct varlena *) palloc(max_size + header_size);
 
 	len = LZ4_compress_default(VARDATA_ANY(value),
-							   (char *) tmp + VARHDRSZ_COMPRESS,
+							   (char *) tmp + header_size,
 							   valsize, max_size);
 	if (len <= 0)
 		elog(ERROR, "could not compress data with lz4");
@@ -61,7 +61,7 @@ lz4_cmcompress(const struct varlena *value)
 		return NULL;
 	}
 
-	SET_VARSIZE_COMPRESSED(tmp, len + VARHDRSZ_COMPRESS);
+	SET_VARSIZE_COMPRESSED(tmp, len + header_size);
 
 	return tmp;
 #endif
@@ -73,7 +73,7 @@ lz4_cmcompress(const struct varlena *value)
  * Returns the decompressed varlena.
  */
 static struct varlena *
-lz4_cmdecompress(const struct varlena *value)
+lz4_cmdecompress(const struct varlena *value, int32 header_size)
 {
 #ifndef HAVE_LIBLZ4
 	ereport(ERROR,
@@ -87,9 +87,9 @@ lz4_cmdecompress(const struct varlena *value)
 	result = (struct varlena *) palloc(VARRAWSIZE_4B_C(value) + VARHDRSZ);
 
 	/* decompress data using lz4 routine */
-	rawsize = LZ4_decompress_safe((char *) value + VARHDRSZ_COMPRESS,
+	rawsize = LZ4_decompress_safe((char *) value + header_size,
 								  VARDATA(result),
-								  VARSIZE(value) - VARHDRSZ_COMPRESS,
+								  VARSIZE(value) - header_size,
 								  VARRAWSIZE_4B_C(value));
 	if (rawsize < 0)
 		ereport(ERROR,
@@ -109,7 +109,8 @@ lz4_cmdecompress(const struct varlena *value)
  * Decompresses part of the data. Returns the decompressed varlena.
  */
 static struct varlena *
-lz4_cmdecompress_slice(const struct varlena *value, int32 slicelength)
+lz4_cmdecompress_slice(const struct varlena *value, int32 header_size,
+					  int32 slicelength)
 {
 #ifndef HAVE_LIBLZ4
 	ereport(ERROR,
@@ -123,9 +124,9 @@ lz4_cmdecompress_slice(const struct varlena *value, int32 slicelength)
 	result = (struct varlena *) palloc(VARRAWSIZE_4B_C(value) + VARHDRSZ);
 
 	/* decompress partial data using lz4 routine */
-	rawsize = LZ4_decompress_safe_partial((char *) value + VARHDRSZ_COMPRESS,
+	rawsize = LZ4_decompress_safe_partial((char *) value + header_size,
 										  VARDATA(result),
-										  VARSIZE(value) - VARHDRSZ_COMPRESS,
+										  VARSIZE(value) - header_size,
 										  slicelength,
 										  VARRAWSIZE_4B_C(value));
 	if (rawsize < 0)

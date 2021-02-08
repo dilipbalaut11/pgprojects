@@ -15,8 +15,11 @@
 
 #include "postgres.h"
 
+#include "fmgr.h"
+#include "access/amapi.h"
 #include "catalog/pg_am_d.h"
 #include "nodes/nodes.h"
+
 
 /*
  * Built-in compression method-id.  The toast compression header will store
@@ -26,18 +29,25 @@
 typedef enum CompressionId
 {
 	PGLZ_COMPRESSION_ID = 0,
-	LZ4_COMPRESSION_ID = 1
+	LZ4_COMPRESSION_ID = 1,
+	/* one free slot for the future built-in method */
+	CUSTOM_COMPRESSION_ID = 3
 } CompressionId;
 
 /* Use default compression method if it is not specified. */
 #define DefaultCompressionOid	PGLZ_COMPRESSION_AM_OID
+#define IsCustomCompression(cmid)     ((cmid) == CUSTOM_COMPRESSION_ID)
 #define IsStorageCompressible(storage) ((storage) != TYPSTORAGE_PLAIN && \
 										(storage) != TYPSTORAGE_EXTERNAL)
 /* compression handler routines */
-typedef struct varlena *(*cmcompress_function) (const struct varlena *value);
-typedef struct varlena *(*cmdecompress_function) (const struct varlena *value);
+typedef struct varlena *(*cmcompress_function) (const struct varlena *value,
+												int32 toast_header_size);
+typedef struct varlena *(*cmdecompress_function) (const struct varlena *value,
+												  int32 toast_header_size);
 typedef struct varlena *(*cmdecompress_slice_function)
-			(const struct varlena *value, int32 slicelength);
+												(const struct varlena *value,
+												 int32 toast_header_size,
+												 int32 slicelength);
 
 /*
  * API struct for a compression AM.
@@ -94,6 +104,32 @@ CompressionIdToOid(CompressionId cmid)
 		default:
 			elog(ERROR, "invalid compression method id %d", cmid);
 	}
+}
+
+/*
+ * GetCompressionAmRoutineByAmId - look up the handler of the compression access
+ * method with the given OID, and get its CompressionAmRoutine struct.
+ */
+static inline CompressionAmRoutine *
+GetCompressionAmRoutineByAmId(Oid amoid)
+{
+	regproc		amhandler;
+	Datum		datum;
+	CompressionAmRoutine *routine;
+
+	/* Get handler function OID for the access method */
+	amhandler = GetAmHandlerByAmId(amoid, AMTYPE_COMPRESSION, false);
+	Assert(OidIsValid(amhandler));
+
+	/* And finally, call the handler function to get the API struct */
+	datum = OidFunctionCall0(amhandler);
+	routine = (CompressionAmRoutine *) DatumGetPointer(datum);
+
+	if (routine == NULL || !IsA(routine, CompressionAmRoutine))
+		elog(ERROR, "compression access method handler function %u did not return an CompressionAmRoutine struct",
+			 amhandler);
+
+	return routine;
 }
 
 #endif							/* COMPRESSAMAPI_H */

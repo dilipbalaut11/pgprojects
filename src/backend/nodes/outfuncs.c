@@ -2888,6 +2888,7 @@ _outColumnCompression(StringInfo str, const ColumnCompression *node)
 
 	WRITE_STRING_FIELD(cmname);
 	WRITE_BOOL_FIELD(preserve_all);
+	WRITE_NODE_FIELD(options);
 	WRITE_NODE_FIELD(preserve);
 }
 

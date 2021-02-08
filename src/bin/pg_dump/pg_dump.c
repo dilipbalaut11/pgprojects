@@ -9037,6 +9037,80 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			}
 			PQclear(res);
 		}
+
+		/*
+		 * Get compression info
+		 */
+		if (fout->remoteVersion >= 140000 && dopt->binary_upgrade)
+		{
+			int			i_amname;
+			int			i_amoid;
+			int			i_curattnum;
+			int			start;
+
+			pg_log_info("finding compression info for table \"%s.%s\"",
+						tbinfo->dobj.namespace->dobj.name,
+						tbinfo->dobj.name);
+
+			tbinfo->attcompression = pg_malloc0(tbinfo->numatts * sizeof(AttrCompressionInfo *));
+
+			resetPQExpBuffer(q);
+			appendPQExpBuffer(q,
+				" SELECT attrelid::pg_catalog.regclass AS relname, attname,"
+				" amname, am.oid as amoid, d.objsubid AS curattnum"
+				" FROM pg_depend d"
+				" JOIN pg_attribute a ON"
+				"	(classid = 'pg_class'::pg_catalog.regclass::pg_catalog.oid AND a.attrelid = d.objid"
+				"		AND a.attnum = d.objsubid AND d.deptype = 'n'"
+				"		AND d.refclassid = 'pg_am'::pg_catalog.regclass::pg_catalog.oid)"
+				" JOIN pg_am am ON"
+				"	(d.deptype = 'n' AND d.refobjid = am.oid)"
+				" WHERE (deptype = 'n' AND d.objid = %d AND a.attcompression != am.oid);",
+				tbinfo->dobj.catId.oid);
+
+			res = ExecuteSqlQuery(fout, q->data, PGRES_TUPLES_OK);
+			ntups = PQntuples(res);
+
+			if (ntups > 0)
+			{
+				int		j;
+				int		k;
+
+				i_amname = PQfnumber(res, "amname");
+				i_amoid = PQfnumber(res, "amoid");
+				i_curattnum = PQfnumber(res, "curattnum");
+
+				start = 0;
+
+				for (j = 0; j < ntups; j++)
+				{
+					int		attnum = atoi(PQgetvalue(res, j, i_curattnum));
+
+					if ((j == ntups - 1) || atoi(PQgetvalue(res, j + 1, i_curattnum)) != attnum)
+					{
+						AttrCompressionInfo *cminfo = pg_malloc(sizeof(AttrCompressionInfo));
+
+						cminfo->nitems = j - start + 1;
+						cminfo->items = pg_malloc(sizeof(AttrCompressionItem *) * cminfo->nitems);
+
+						for (k = start; k < start + cminfo->nitems; k++)
+						{
+							AttrCompressionItem	*cmitem = pg_malloc0(sizeof(AttrCompressionItem));
+
+							cmitem->amname = pg_strdup(PQgetvalue(res, k, i_amname));
+							cmitem->amoid = atooid(PQgetvalue(res, k, i_amoid));
+
+							cminfo->items[k - start] = cmitem;
+						}
+
+						tbinfo->attcompression[attnum - 1] = cminfo;
+						start = j + 1;	/* start from next */
+					}
+				}
+			}
+
+			PQclear(res);
+		}
 	}
 
 	destroyPQExpBuffer(q);
@@ -16343,6 +16417,33 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 								  qualrelname,
 								  fmtId(tbinfo->attnames[j]),
 								  tbinfo->attfdwoptions[j]);
+
+			/*
+			 * Dump per-column compression options
+			 */
+			if (tbinfo->attcompression && tbinfo->attcompression[j])
+			{
+				AttrCompressionInfo *cminfo = tbinfo->attcompression[j];
+
+				appendPQExpBuffer(q, "ALTER TABLE %s ALTER COLUMN %s\nSET COMPRESSION %s",
+									qualrelname, fmtId(tbinfo->attnames[j]), tbinfo->attcmnames[j]);
+
+				if (cminfo->nitems > 0)
+				{
+					appendPQExpBuffer(q, "\nPRESERVE (");
+					for (int i = 0; i < cminfo->nitems; i++)
+					{
+						AttrCompressionItem *item = cminfo->items[i];
+
+						if (i == 0)
+							appendPQExpBuffer(q, "%s", item->amname);
+						else
+							appendPQExpBuffer(q, ", %s", item->amname);
+					}
+					appendPQExpBuffer(q, ")");
+				}
+				appendPQExpBuffer(q, ";\n");
+			}
 		}
 
 		if (ftoptions)

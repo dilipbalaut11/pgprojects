@@ -103,6 +103,16 @@ SELECT pg_column_compression(f1) FROM cmdata;
 ALTER TABLE cmdata ALTER COLUMN f1 SET COMPRESSION lz4 PRESERVE ALL;
 SELECT pg_column_compression(f1) FROM cmdata;
 
+-- create compression method
+CREATE ACCESS METHOD pglz2 TYPE COMPRESSION HANDLER pglzhandler;
+ALTER TABLE cmdata ALTER COLUMN f1 SET COMPRESSION pglz2 PRESERVE ALL;
+INSERT INTO cmdata VALUES (repeat('1234567890',1004));
+\d+ cmdata
+SELECT pg_column_compression(f1) FROM cmdata;
+ALTER TABLE cmdata ALTER COLUMN f1 SET COMPRESSION lz4 PRESERVE (pglz2);
+SELECT pg_column_compression(f1) FROM cmdata;
+\d+ cmdata
+
 -- check data is ok
 SELECT length(f1) FROM cmdata;
 SELECT length(f1) FROM cmdata1;

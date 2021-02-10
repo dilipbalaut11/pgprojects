@@ -28,15 +28,31 @@ typedef struct toast_compress_header
 } toast_compress_header;
 
 /*
+ * If the compression method were used, then data also contains
+ * Oid of compression options
+ */
+typedef struct toast_compress_header_custom
+{
+	int32		vl_len_;		/* varlena header (do not touch directly!) */
+	uint32		info;			/*  2 bits for compression method + rawsize */
+	Oid			cmoid;			/* Oid from pg_am */
+} toast_compress_header_custom;
+
+/*
  * Utilities for manipulation of header information for compressed
  * toast entries.
  */
+#define TOAST_COMPRESS_HDRSZ		((int32) sizeof(toast_compress_header))
+#define TOAST_CUSTOM_COMPRESS_HDRSZ ((int32)sizeof(toast_compress_header_custom))
 #define TOAST_COMPRESS_METHOD(ptr)  (((toast_compress_header *) (ptr))->info >> VARLENA_RAWSIZE_BITS)
 #define TOAST_COMPRESS_SET_SIZE_AND_METHOD(ptr, len, cm_method) \
 	do { \
 		Assert((len) > 0 && (len) <= VARLENA_RAWSIZE_MASK); \
 		((toast_compress_header *) (ptr))->info = ((len) | (cm_method) << VARLENA_RAWSIZE_BITS); \
 	} while (0)
+
+#define TOAST_COMPRESS_SET_CMOID(ptr, oid) \
+	(((toast_compress_header_custom *)(ptr))->cmoid = (oid))
 
 extern Datum toast_compress_datum(Datum value, Oid cmoid);
 extern Oid	toast_get_valid_index(Oid toastoid, LOCKMODE lock);

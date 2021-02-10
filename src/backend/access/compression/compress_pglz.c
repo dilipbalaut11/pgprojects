@@ -26,7 +26,7 @@
  * compressed varlena, or NULL if compression fails.
  */
 static struct varlena *
-pglz_cmcompress(const struct varlena *value)
+pglz_cmcompress(const struct varlena *value, int32 header_size)
 {
 	int32		valsize,
 				len;
@@ -47,11 +47,11 @@ pglz_cmcompress(const struct varlena *value)
 	 * and allocate the memory for holding the compressed data and the header.
 	 */
 	tmp = (struct varlena *) palloc(PGLZ_MAX_OUTPUT(valsize) +
-									VARHDRSZ_COMPRESS);
+									header_size);
 
 	len = pglz_compress(VARDATA_ANY(value),
 						valsize,
-						(char *) tmp + VARHDRSZ_COMPRESS,
+						(char *) tmp + header_size,
 						NULL);
 	if (len < 0)
 	{
@@ -59,7 +59,7 @@ pglz_cmcompress(const struct varlena *value)
 		return NULL;
 	}
 
-	SET_VARSIZE_COMPRESSED(tmp, len + VARHDRSZ_COMPRESS);
+	SET_VARSIZE_COMPRESSED(tmp, len + header_size);
 
 	return tmp;
 }
@@ -70,15 +70,15 @@ pglz_cmcompress(const struct varlena *value)
  * Returns the decompressed varlena.
  */
 static struct varlena *
-pglz_cmdecompress(const struct varlena *value)
+pglz_cmdecompress(const struct varlena *value, int32 header_size)
 {
 	struct varlena *result;
 	int32		rawsize;
 
 	result = (struct varlena *) palloc(VARRAWSIZE_4B_C(value) + VARHDRSZ);
 
-	rawsize = pglz_decompress((char *) value + VARHDRSZ_COMPRESS,
-							  VARSIZE(value) - VARHDRSZ_COMPRESS,
+	rawsize = pglz_decompress((char *) value + header_size,
+							  VARSIZE(value) - header_size,
 							  VARDATA(result),
 							  VARRAWSIZE_4B_C(value), true);
 	if (rawsize < 0)
@@ -97,7 +97,7 @@ pglz_cmdecompress(const struct varlena *value)
  * Decompresses part of the data. Returns the decompressed varlena.
  */
 static struct varlena *
-pglz_cmdecompress_slice(const struct varlena *value,
+pglz_cmdecompress_slice(const struct varlena *value, int32 header_size,
 						int32 slicelength)
 {
 	struct varlena *result;
@@ -105,8 +105,8 @@ pglz_cmdecompress_slice(const struct varlena *value,
 
 	result = (struct varlena *) palloc(slicelength + VARHDRSZ);
 
-	rawsize = pglz_decompress((char *) value + VARHDRSZ_COMPRESS,
-							  VARSIZE(value) - VARHDRSZ_COMPRESS,
+	rawsize = pglz_decompress((char *) value + header_size,
+							  VARSIZE(value) - header_size,
 							  VARDATA(result),
 							  slicelength, false);
 	if (rawsize < 0)

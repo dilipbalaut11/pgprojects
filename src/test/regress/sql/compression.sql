@@ -113,6 +113,24 @@ ALTER TABLE cmdata ALTER COLUMN f1 SET COMPRESSION lz4 PRESERVE (pglz2);
 SELECT pg_column_compression(f1) FROM cmdata;
 \d+ cmdata
 
+-- compression options
+CREATE TABLE cmdata3(f1 TEXT COMPRESSION pglz WITH (min_input_size '100'));
+CREATE INDEX idx1 ON cmdata3(f1);
+INSERT INTO cmdata3 VALUES(repeat('1234567890',1000));
+SELECT attcmoptions FROM pg_attribute WHERE attrelid = 'cmdata3'::regclass AND attname='f1';
+SELECT attcmoptions FROM pg_attribute WHERE attrelid = 'idx1'::regclass AND attname='f1';
+
+ALTER TABLE cmdata3 ALTER COLUMN f1 SET COMPRESSION lz4 WITH (acceleration '50');
+INSERT INTO cmdata3 VALUES(repeat('1234567890',1004));
+SELECT attcmoptions FROM pg_attribute WHERE attrelid = 'cmdata3'::regclass AND attname='f1';
+SELECT attcmoptions FROM pg_attribute WHERE attrelid = 'idx1'::regclass AND attname='f1';
+
+ALTER TABLE cmdata3 ALTER COLUMN f1 SET COMPRESSION pglz WITH (min_input_size '200') PRESERVE (lz4);
+INSERT INTO cmdata3 VALUES(repeat('1234567890',1008));
+SELECT attcmoptions FROM pg_attribute WHERE attrelid = 'cmdata3'::regclass AND attname='f1';
+SELECT attcmoptions FROM pg_attribute WHERE attrelid = 'idx1'::regclass AND attname='f1';
+SELECT pg_column_compression(f1) FROM cmdata3;
+
 -- check data is ok
 SELECT length(f1) FROM cmdata;
 SELECT length(f1) FROM cmdata1;

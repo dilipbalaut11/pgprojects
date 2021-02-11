@@ -54,7 +54,7 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> SET ( <replaceable class="parameter">attribute_option</replaceable> = <replaceable class="parameter">value</replaceable> [, ... ] )
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> RESET ( <replaceable class="parameter">attribute_option</replaceable> [, ... ] )
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> SET STORAGE { PLAIN | EXTERNAL | EXTENDED | MAIN }
-    ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> SET COMPRESSION <replaceable class="parameter">compression_method</replaceable> [ PRESERVE (<replaceable class="parameter">compression_preserve_list</replaceable>) | PRESERVE ALL ]
+    ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> SET COMPRESSION <replaceable class="parameter">compression_method</replaceable> [ WITH (<replaceable class="parameter">compression_method_options</replaceable>) ] [ PRESERVE (<replaceable class="parameter">compression_preserve_list</replaceable>) | PRESERVE ALL ]
     ADD <replaceable class="parameter">table_constraint</replaceable> [ NOT VALID ]
     ADD <replaceable class="parameter">table_constraint_using_index</replaceable>
     ALTER CONSTRAINT <replaceable class="parameter">constraint_name</replaceable> [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
@@ -396,7 +396,9 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       it can be set to any available compression method.  The supported buit-in
       compression methods are <literal>pglz</literal> and <literal>lz4</literal>.
       <literal>lz4</literal> is available only if <literal>--with-lz4</literal>
-      was used when building <productname>PostgreSQL</productname>.
+      was used when building <productname>PostgreSQL</productname>.  If the
+      compression method has options they can be specified with the <literal>WITH
+      </literal> parameter.
       The <literal>PRESERVE</literal> list contains a list of compression
       methods used in the column and determines which of them may be kept.
       Without <literal>PRESERVE</literal> or if any of the pre-existing

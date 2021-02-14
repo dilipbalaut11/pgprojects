@@ -480,7 +480,7 @@ toast_get_compression_oid(struct varlena *attr)
 		 * Fetch just enough of the value to examine the compression header,
 		 * so that we can find out the compression method.
 		 */
-		attr = toast_fetch_datum_slice(attr, 0, VARHDRSZ_COMPRESS);
+		attr = toast_fetch_datum_slice(attr, 0, VARHDRSZ);
 	}
 	else if (!VARATT_IS_COMPRESSED(attr))
 		return InvalidOid;

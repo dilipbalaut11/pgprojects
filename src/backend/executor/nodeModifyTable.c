@@ -2061,6 +2061,7 @@ CompareCompressionMethodAndDecompress(TupleTableSlot *slot,
 	bool		slot_tup_deformed = false;
 	Oid			cmoid;
 	TupleDesc	tupleDesc = slot->tts_tupleDescriptor;
+	TupleTableSlot *newslot = *outslot;
 
 	if (natts == 0)
 		return slot;
@@ -2100,49 +2101,55 @@ CompareCompressionMethodAndDecompress(TupleTableSlot *slot,
 			if (OidIsValid(cmoid) &&
 				targetTupDesc->attrs[i].attcompression != cmoid)
 			{
+				if (!decompressed_any)
+				{
+					/*
+					 * If the caller has passed an invalid slot then create a
+					 * new slot. Otherwise, just clear the existing tuple from
+					 * the slot.  This slot should be stored by the caller so
+					 * that it can be reused for decompressing the subsequent
+					 * tuples.
+					 */
+					if (newslot == NULL)
+						newslot = MakeSingleTupleTableSlot(tupleDesc, slot->tts_ops);
+					else
+						ExecClearTuple(newslot);
+					/*
+					 * Copy the value/null array to the new slot and materialize it,
+					 * before clearing the tuple from the old slot.
+					 */
+					memcpy(newslot->tts_values, slot->tts_values, natts * sizeof(Datum));
+					memcpy(newslot->tts_isnull, slot->tts_isnull, natts * sizeof(bool));
+
+				}
 				new_value = detoast_attr(new_value);
-				slot->tts_values[attnum - 1] = PointerGetDatum(new_value);
+				newslot->tts_values[attnum - 1] = PointerGetDatum(new_value);
 				decompressed_any = true;
 			}
 		}
 	}
 
 	/*
-	 * If we have decompressed any of the fields then we need to copy the
-	 * values/null array from oldslot to the new slot and materialize the new
-	 * slot.
+	 * If we have decompressed any of the fields then return the new slot
+	 * otherwise return the original slot.
 	 */
 	if (decompressed_any)
 	{
-		TupleTableSlot *newslot = *outslot;
-
-		/*
-		 * If the called has passed an invalid slot then create a new slot.
-		 * Otherwise, just clear the existing tuple from the slot.  This slot
-		 * should be stored by the caller so that it can be reused for
-		 * decompressing the subsequent tuples.
-		 */
-		if (newslot == NULL)
-			newslot = MakeSingleTupleTableSlot(tupleDesc, slot->tts_ops);
-		else
-			ExecClearTuple(newslot);
-
-		/*
-		 * Copy the value/null array to the new slot and materialize it,
-		 * before clearing the tuple from the old slot.
-		 */
-		memcpy(newslot->tts_values, slot->tts_values, natts * sizeof(Datum));
-		memcpy(newslot->tts_isnull, slot->tts_isnull, natts * sizeof(bool));
 		ExecStoreVirtualTuple(newslot);
-		ExecMaterializeSlot(newslot);
-		ExecClearTuple(slot);
+
+		/*
+		 * If the original slot was materialized then materialize the new slot
+		 * as well.
+		 */
+		if (TTS_SHOULDFREE(slot))
+			ExecMaterializeSlot(newslot);
 
 		*outslot = newslot;
 
 		return newslot;
 	}
-
-	return slot;
+	else
+		return slot;
 }
 
 /* ----------------------------------------------------------------

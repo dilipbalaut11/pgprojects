@@ -2813,20 +2813,21 @@ CREATE TABLE tbl_heap(f1 int, f2 char(100)) using heap;
 CREATE VIEW view_heap_psql AS SELECT f1 from tbl_heap_psql;
 CREATE MATERIALIZED VIEW mat_view_heap_psql USING heap_psql AS SELECT f1 from tbl_heap_psql;
 \d+ tbl_heap_psql
-                                     Table "tableam_display.tbl_heap_psql"
- Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
- f1     | integer        |           |          |         | plain    |             |              | 
- f2     | character(100) |           |          |         | extended | pglz        |              | 
+                              Table "tableam_display.tbl_heap_psql"
+ Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |              | 
+ f2     | character(100) |           |          |         | extended |              | 
 
 \d+ tbl_heap
-                                        Table "tableam_display.tbl_heap"
- Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
- f1     | integer        |           |          |         | plain    |             |              | 
- f2     | character(100) |           |          |         | extended | pglz        |              | 
+                                 Table "tableam_display.tbl_heap"
+ Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |              | 
+ f2     | character(100) |           |          |         | extended |              | 
 
 \set HIDE_TABLEAM off
+\set HIDE_COMPRESSAM off
 \d+ tbl_heap_psql
                                      Table "tableam_display.tbl_heap_psql"
  Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
@@ -2878,6 +2879,7 @@ Access method: heap
 (1 row)
 
 \set HIDE_TABLEAM on
+\set HIDE_COMPRESSAM on
 \d+
                                                    List of relations
      Schema      |        Name        |       Type        |        Owner         | Persistence |  Size   | Description 

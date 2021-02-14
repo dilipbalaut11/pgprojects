@@ -1,3 +1,4 @@
+\set HIDE_COMPRESSAM false
 -- test creating table with compression method
 CREATE TABLE cmdata(f1 text COMPRESSION pglz);
 CREATE INDEX idx ON cmdata(f1);
@@ -79,3 +80,5 @@ SELECT length(f1) FROM cmdata1;
 SELECT length(f1) FROM cmmove1;
 SELECT length(f1) FROM cmmove2;
 SELECT length(f1) FROM cmmove3;
+
+\set HIDE_COMPRESSAM false

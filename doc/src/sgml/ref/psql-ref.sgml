@@ -3875,6 +3875,17 @@ bar
       </varlistentry>
 
       <varlistentry>
+        <term><varname>HIDE_COMPRESSAM</varname></term>
+        <listitem>
+        <para>
+         If this variable is set to <literal>true</literal>, a column's
+         compression method is not displayed. This is mainly useful for
+         regression tests.
+        </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><varname>HISTCONTROL</varname></term>
         <listitem>
         <para>

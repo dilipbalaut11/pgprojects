@@ -475,6 +475,7 @@ CREATE MATERIALIZED VIEW mat_view_heap_psql USING heap_psql AS SELECT f1 from tb
 \d+ tbl_heap_psql
 \d+ tbl_heap
 \set HIDE_TABLEAM off
+\set HIDE_COMPRESSAM off
 \d+ tbl_heap_psql
 \d+ tbl_heap
 -- AM is displayed for tables, indexes and materialized views.
@@ -484,6 +485,7 @@ CREATE MATERIALIZED VIEW mat_view_heap_psql USING heap_psql AS SELECT f1 from tb
 -- But not for views and sequences.
 \dv+
 \set HIDE_TABLEAM on
+\set HIDE_COMPRESSAM on
 \d+
 RESET ROLE;
 RESET search_path;

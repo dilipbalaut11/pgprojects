@@ -1165,6 +1165,12 @@ hide_tableam_hook(const char *newval)
 	return ParseVariableBool(newval, "HIDE_TABLEAM", &pset.hide_tableam);
 }
 
+static bool
+hide_compressam_hook(const char *newval)
+{
+	return ParseVariableBool(newval, "HIDE_COMPRESSAM", &pset.hide_compressam);
+}
+
 static void
 EstablishVariableSpace(void)
 {
@@ -1230,4 +1236,7 @@ EstablishVariableSpace(void)
 	SetVariableHooks(pset.vars, "HIDE_TABLEAM",
 					 bool_substitute_hook,
 					 hide_tableam_hook);
+	SetVariableHooks(pset.vars, "HIDE_COMPRESSAM",
+					 bool_substitute_hook,
+					 hide_compressam_hook);					 
 }

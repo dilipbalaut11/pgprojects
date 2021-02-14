@@ -377,6 +377,8 @@ helpVariables(unsigned short int pager)
 					  "    the number of result rows to fetch and display at a time (0 = unlimited)\n"));
 	fprintf(output, _("  HIDE_TABLEAM\n"
 					  "    if set, table access methods are not displayed\n"));
+	fprintf(output, _("  HIDE_COMPRESSAM\n"
+					  "    if set, table compression methods are not displayed\n"));					  
 	fprintf(output, _("  HISTCONTROL\n"
 					  "    controls command history [ignorespace, ignoredups, ignoreboth]\n"));
 	fprintf(output, _("  HISTFILE\n"

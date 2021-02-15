@@ -29,6 +29,7 @@
 #include "access/commit_ts.h"
 #include "access/gin.h"
 #include "access/rmgr.h"
+#include "access/slru.h"
 #include "access/tableam.h"
 #include "access/transam.h"
 #include "access/twophase.h"
@@ -2259,6 +2260,28 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&NBuffers,
 		1024, 16, INT_MAX / 2,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"multixact_offsets_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared memory buffers used for the MultiXact offset SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&multixact_offsets_buffers,
+		8, 2, SLRU_MAX_ALLOWED_BUFFERS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"multixact_members_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared memory buffers used for the MultiXact member SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&multixact_members_buffers,
+		16, 2, SLRU_MAX_ALLOWED_BUFFERS,
 		NULL, NULL, NULL
 	},
 

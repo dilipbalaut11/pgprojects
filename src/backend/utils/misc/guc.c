@@ -2286,6 +2286,17 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"subtrans_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared memory buffers used for the sub-transaction SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&subtrans_buffers,
+		32, 2, SLRU_MAX_ALLOWED_BUFFERS,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"temp_buffers", PGC_USERSET, RESOURCES_MEM,
 			gettext_noop("Sets the maximum number of temporary buffers used by each session."),
 			NULL,

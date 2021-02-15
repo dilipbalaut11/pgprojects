@@ -152,3 +152,4 @@ double		vacuum_cleanup_index_scale_factor;
 
 int			multixact_offsets_buffers = 8;
 int			multixact_members_buffers = 16;
+int			subtrans_buffers = 32;

@@ -175,6 +175,7 @@ extern PGDLLIMPORT int max_worker_processes;
 extern PGDLLIMPORT int max_parallel_workers;
 extern PGDLLIMPORT int multixact_offsets_buffers;
 extern PGDLLIMPORT int multixact_members_buffers;
+extern PGDLLIMPORT int subtrans_buffers;
 
 extern PGDLLIMPORT int MyProcPid;
 extern PGDLLIMPORT pg_time_t MyStartTime;

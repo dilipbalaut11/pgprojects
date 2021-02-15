@@ -189,6 +189,7 @@
 
 # - SLRU Buffers (change requires restart) -
 
+#subtrans_buffers = 32				# memory for pg_subtrans
 #multixact_offsets_buffers = 8		# memory for pg_multixact/offsets
 #multixact_members_buffers = 16		# memory for pg_multixact/members
 

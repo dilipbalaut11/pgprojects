@@ -31,6 +31,7 @@
 #include "access/slru.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
+#include "miscadmin.h"
 #include "pg_trace.h"
 #include "utils/snapmgr.h"
 
@@ -184,14 +185,14 @@ SubTransGetTopmostTransaction(TransactionId xid)
 Size
 SUBTRANSShmemSize(void)
 {
-	return SimpleLruShmemSize(NUM_SUBTRANS_BUFFERS, 0);
+	return SimpleLruShmemSize(subtrans_buffers, 0);
 }
 
 void
 SUBTRANSShmemInit(void)
 {
 	SubTransCtl->PagePrecedes = SubTransPagePrecedes;
-	SimpleLruInit(SubTransCtl, "Subtrans", NUM_SUBTRANS_BUFFERS, 0,
+	SimpleLruInit(SubTransCtl, "Subtrans", subtrans_buffers, 0,
 				  SubtransSLRULock, "pg_subtrans",
 				  LWTRANCHE_SUBTRANS_BUFFER);
 	/* Override default assumption that writes should be fsync'd */

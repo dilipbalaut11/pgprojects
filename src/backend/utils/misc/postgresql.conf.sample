@@ -187,6 +187,10 @@
 					# (change requires restart)
 #backend_flush_after = 0		# measured in pages, 0 disables
 
+# - SLRU Buffers (change requires restart) -
+
+#multixact_offsets_buffers = 8		# memory for pg_multixact/offsets
+#multixact_members_buffers = 16		# memory for pg_multixact/members
 
 #------------------------------------------------------------------------------
 # WRITE-AHEAD LOG

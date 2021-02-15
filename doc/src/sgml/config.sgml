@@ -1828,7 +1828,45 @@ include_dir 'conf.d'
        </para>
       </listitem>
      </varlistentry>
+     
+    <varlistentry id="guc-multixact-offsets-buffers" xreflabel="multixact_offsets_buffers">
+      <term><varname>multixact_offsets_buffers</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>multixact_offsets_buffers</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the amount of shared memory to use to cache the contents
+        of <literal>pg_multixact/offsets</literal> (see
+        <xref linkend="pgdata-contents-table"/>).
+        If this value is specified without units, it is taken as blocks,
+        that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+        The default value is <literal>8</literal>.
+        This parameter can only be set at server start.
+       </para>
+      </listitem>
+     </varlistentry>
 
+    <varlistentry id="guc-multixact-members-buffers" xreflabel="multixact_members_buffers">
+      <term><varname>multixact_members_buffers</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>multixact_members_buffers</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the amount of shared memory to use to cache the contents
+        of <literal>pg_multixact/members</literal> (see
+        <xref linkend="pgdata-contents-table"/>).
+        If this value is specified without units, it is taken as blocks,
+        that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+        The default value is <literal>16</literal>.
+        This parameter can only be set at server start.
+       </para>
+      </listitem>
+     </varlistentry>
+     
      <varlistentry id="guc-max-stack-depth" xreflabel="max_stack_depth">
       <term><varname>max_stack_depth</varname> (<type>integer</type>)
       <indexterm>

@@ -214,5 +214,5 @@ test_predtest(PG_FUNCTION_ARGS)
 	values[6] = BoolGetDatum(s_r_holds);
 	values[7] = BoolGetDatum(w_r_holds);
 
-	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+	PG_RETURN_DATUM(HeapTupleGetRawDatum(heap_form_tuple(tupdesc, values, nulls)));
 }

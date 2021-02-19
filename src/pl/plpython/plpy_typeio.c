@@ -1414,7 +1414,7 @@ PLyMapping_ToComposite(PLyObToDatum *arg, TupleDesc desc, PyObject *mapping)
 	}
 
 	tuple = heap_form_tuple(desc, values, nulls);
-	result = heap_copy_tuple_as_datum(tuple, desc);
+	result = heap_copy_tuple_as_datum(tuple, desc, true);
 	heap_freetuple(tuple);
 
 	pfree(values);
@@ -1491,7 +1491,7 @@ PLySequence_ToComposite(PLyObToDatum *arg, TupleDesc desc, PyObject *sequence)
 	}
 
 	tuple = heap_form_tuple(desc, values, nulls);
-	result = heap_copy_tuple_as_datum(tuple, desc);
+	result = heap_copy_tuple_as_datum(tuple, desc, true);
 	heap_freetuple(tuple);
 
 	pfree(values);
@@ -1568,7 +1568,7 @@ PLyGenericObject_ToComposite(PLyObToDatum *arg, TupleDesc desc, PyObject *object
 	}
 
 	tuple = heap_form_tuple(desc, values, nulls);
-	result = heap_copy_tuple_as_datum(tuple, desc);
+	result = heap_copy_tuple_as_datum(tuple, desc, true);
 	heap_freetuple(tuple);
 
 	pfree(values);

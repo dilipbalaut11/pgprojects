@@ -9797,7 +9797,7 @@ show_all_settings(PG_FUNCTION_ARGS)
 		tuple = BuildTupleFromCStrings(attinmeta, values);
 
 		/* make the tuple into a datum */
-		result = HeapTupleGetDatum(tuple);
+		result = HeapTupleGetRawDatum(tuple);
 
 		SRF_RETURN_NEXT(funcctx, result);
 	}

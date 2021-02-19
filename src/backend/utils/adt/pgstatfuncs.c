@@ -1843,7 +1843,7 @@ pg_stat_get_wal(PG_FUNCTION_ARGS)
 	values[4] = TimestampTzGetDatum(wal_stats->stat_reset_timestamp);
 
 	/* Returns the record as Datum */
-	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+	PG_RETURN_DATUM(HeapTupleGetRawDatum(heap_form_tuple(tupdesc, values, nulls)));
 }
 
 /*
@@ -2259,7 +2259,7 @@ pg_stat_get_archiver(PG_FUNCTION_ARGS)
 		values[6] = TimestampTzGetDatum(archiver_stats->stat_reset_timestamp);
 
 	/* Returns the record as Datum */
-	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+	PG_RETURN_DATUM(HeapTupleGetRawDatum(heap_form_tuple(tupdesc, values, nulls)));
 }
 
 /* Get the statistics for the replication slots */

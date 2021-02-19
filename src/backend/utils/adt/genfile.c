@@ -454,7 +454,7 @@ pg_stat_file(PG_FUNCTION_ARGS)
 
 	pfree(filename);
 
-	PG_RETURN_DATUM(HeapTupleGetDatum(tuple));
+	PG_RETURN_DATUM(HeapTupleGetRawDatum(tuple));
 }
 
 /*

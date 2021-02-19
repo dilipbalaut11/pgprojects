@@ -207,6 +207,8 @@ extern TupleDesc build_function_result_tupdesc_t(HeapTuple procTuple);
  *
  * Macro declarations:
  * HeapTupleGetDatum(HeapTuple tuple) - convert a HeapTuple to a Datum.
+ * HeapTupleGetRawDatum(HeapTuple tuple) - same as HeapTupleGetDatum
+ * 		but the input tuple should not contain compressed/external varlena
  *
  * Obsolete routines and macros:
  * TupleDesc RelationNameGetTupleDesc(const char *relname) - Use to get a
@@ -219,6 +221,7 @@ extern TupleDesc build_function_result_tupdesc_t(HeapTuple procTuple);
  */
 
 #define HeapTupleGetDatum(tuple)		HeapTupleHeaderGetDatum((tuple)->t_data)
+#define HeapTupleGetRawDatum(tuple)		PointerGetDatum((tuple)->t_data)
 /* obsolete version of above */
 #define TupleGetDatum(_slot, _tuple)	HeapTupleGetDatum(_tuple)
 

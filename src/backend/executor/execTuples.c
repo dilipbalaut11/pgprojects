@@ -1702,7 +1702,7 @@ ExecFetchSlotHeapTupleDatum(TupleTableSlot *slot)
 	tupdesc = slot->tts_tupleDescriptor;
 
 	/* Convert to Datum form */
-	ret = heap_copy_tuple_as_datum(tup, tupdesc);
+	ret = heap_copy_tuple_as_datum(tup, tupdesc, true);
 
 	if (shouldFree)
 		pfree(tup);
@@ -2206,10 +2206,6 @@ HeapTupleHeaderGetDatum(HeapTupleHeader tuple)
 {
 	Datum		result;
 	TupleDesc	tupDesc;
-
-	/* No work if there are no external TOAST pointers in the tuple */
-	if (!HeapTupleHeaderHasExternal(tuple))
-		return PointerGetDatum(tuple);
 
 	/* Use the type data saved by heap_form_tuple to look up the rowtype */
 	tupDesc = lookup_rowtype_tupdesc(HeapTupleHeaderGetTypeId(tuple),

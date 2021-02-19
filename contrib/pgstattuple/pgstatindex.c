@@ -358,7 +358,7 @@ pgstatindex_impl(Relation rel, FunctionCallInfo fcinfo)
 		tuple = BuildTupleFromCStrings(TupleDescGetAttInMetadata(tupleDesc),
 									   values);
 
-		result = HeapTupleGetDatum(tuple);
+		result = HeapTupleGetRawDatum(tuple);
 	}
 
 	return result;
@@ -567,7 +567,7 @@ pgstatginindex_internal(Oid relid, FunctionCallInfo fcinfo)
 	 * Build and return the tuple
 	 */
 	tuple = heap_form_tuple(tupleDesc, values, nulls);
-	result = HeapTupleGetDatum(tuple);
+	result = HeapTupleGetRawDatum(tuple);
 
 	return result;
 }
@@ -723,7 +723,7 @@ pgstathashindex(PG_FUNCTION_ARGS)
 	values[7] = Float8GetDatum(free_percent);
 	tuple = heap_form_tuple(tupleDesc, values, nulls);
 
-	PG_RETURN_DATUM(HeapTupleGetDatum(tuple));
+	PG_RETURN_DATUM(HeapTupleGetRawDatum(tuple));
 }
 
 /* -------------------------------------------------

@@ -977,19 +977,23 @@ heap_expand_tuple(HeapTuple sourceTuple, TupleDesc tupleDesc)
 /* ----------------
  *		heap_copy_tuple_as_datum
  *
- *		copy a tuple as a composite-type Datum
+ *		copy a tuple as a composite-type Datum, if detoast is passed true then
+ *		the caller expect us to flatten any external/compressed data, this
+ *		should only be passed false if the caller has already faltten all
+ *		external/compressed data.
  * ----------------
  */
 Datum
-heap_copy_tuple_as_datum(HeapTuple tuple, TupleDesc tupleDesc)
+heap_copy_tuple_as_datum(HeapTuple tuple, TupleDesc tupleDesc, bool detoast)
 {
 	HeapTupleHeader td;
 
 	/*
-	 * If the tuple contains any external TOAST pointers, we have to inline
-	 * those fields to meet the conventions for composite-type Datums.
+	 * If detoast is passed true then there could be some external/compressed
+	 * data so we have to flatten those field to meet the conventions for
+	 * composite-type Datums.
 	 */
-	if (HeapTupleHasExternal(tuple))
+	if (detoast)
 		return toast_flatten_tuple_to_datum(tuple->t_data,
 											tuple->t_len,
 											tupleDesc);

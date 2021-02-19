@@ -991,7 +991,8 @@ SPI_returntuple(HeapTuple tuple, TupleDesc tupdesc)
 
 	oldcxt = MemoryContextSwitchTo(_SPI_current->savedcxt);
 
-	dtup = DatumGetHeapTupleHeader(heap_copy_tuple_as_datum(tuple, tupdesc));
+	dtup = DatumGetHeapTupleHeader(heap_copy_tuple_as_datum(tuple, tupdesc,
+															true));
 
 	MemoryContextSwitchTo(oldcxt);
 

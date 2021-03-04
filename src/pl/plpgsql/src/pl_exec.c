@@ -404,7 +404,8 @@ static void exec_move_row_from_fields(PLpgSQL_execstate *estate,
 static bool compatible_tupdescs(TupleDesc src_tupdesc, TupleDesc dst_tupdesc);
 static HeapTuple make_tuple_from_row(PLpgSQL_execstate *estate,
 									 PLpgSQL_row *row,
-									 TupleDesc tupdesc);
+									 TupleDesc tupdesc,
+									 bool flatten);
 static TupleDesc deconstruct_composite_datum(Datum value,
 											 HeapTupleData *tmptup);
 static void exec_move_row_from_datum(PLpgSQL_execstate *estate,
@@ -3418,7 +3419,7 @@ exec_stmt_return_next(PLpgSQL_execstate *estate,
 
 					/* Use eval_mcontext for tuple conversion work */
 					oldcontext = MemoryContextSwitchTo(get_eval_mcontext(estate));
-					tuple = make_tuple_from_row(estate, row, tupdesc);
+					tuple = make_tuple_from_row(estate, row, tupdesc, false);
 					if (tuple == NULL)	/* should not happen */
 						ereport(ERROR,
 								(errcode(ERRCODE_DATATYPE_MISMATCH),
@@ -5321,12 +5322,12 @@ exec_eval_datum(PLpgSQL_execstate *estate,
 				/* Make sure we have a valid type/typmod setting */
 				BlessTupleDesc(row->rowtupdesc);
 				oldcontext = MemoryContextSwitchTo(get_eval_mcontext(estate));
-				tup = make_tuple_from_row(estate, row, row->rowtupdesc);
+				tup = make_tuple_from_row(estate, row, row->rowtupdesc, true);
 				if (tup == NULL)	/* should not happen */
 					elog(ERROR, "row not compatible with its own tupdesc");
 				*typeid = row->rowtupdesc->tdtypeid;
 				*typetypmod = row->rowtupdesc->tdtypmod;
-				*value = HeapTupleGetDatum(tup);
+				*value = HeapTupleGetRawDatum(tup);
 				*isnull = false;
 				MemoryContextSwitchTo(oldcontext);
 				break;
@@ -7265,12 +7266,15 @@ compatible_tupdescs(TupleDesc src_tupdesc, TupleDesc dst_tupdesc)
  *
  * The result tuple is freshly palloc'd in caller's context.  Some junk
  * may be left behind in eval_mcontext, too.
+ *
+ * flatten - if this is passed true then any external data will be flattened.
  * ----------
  */
 static HeapTuple
 make_tuple_from_row(PLpgSQL_execstate *estate,
 					PLpgSQL_row *row,
-					TupleDesc tupdesc)
+					TupleDesc tupdesc,
+					bool flatten)
 {
 	int			natts = tupdesc->natts;
 	HeapTuple	tuple;
@@ -7300,6 +7304,11 @@ make_tuple_from_row(PLpgSQL_execstate *estate,
 						&dvalues[i], &nulls[i]);
 		if (fieldtypeid != TupleDescAttr(tupdesc, i)->atttypid)
 			return NULL;
+
+		/* detoast any external data if the caller has asked to do so */
+		if (flatten && !nulls[i] && TupleDescAttr(tupdesc, i)->attlen == -1 &&
+			VARATT_IS_EXTERNAL(DatumGetPointer(dvalues[i])))
+			dvalues[i] = PointerGetDatum(PG_DETOAST_DATUM_PACKED(dvalues[i]));
 		/* XXX should we insist on typmod match, too? */
 	}
 

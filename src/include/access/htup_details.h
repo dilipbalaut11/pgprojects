@@ -793,6 +793,8 @@ extern Datum heap_copy_tuple_as_datum(HeapTuple tuple, TupleDesc tupleDesc);
 extern Datum heap_copy_tuple_as_raw_datum(HeapTuple tuple, TupleDesc tupleDesc);
 extern HeapTuple heap_form_tuple(TupleDesc tupleDescriptor,
 								 Datum *values, bool *isnull);
+extern HeapTuple heap_form_flattened_tuple(TupleDesc tupleDescriptor,
+										   Datum *values, bool *isnull);
 extern HeapTuple heap_modify_tuple(HeapTuple tuple,
 								   TupleDesc tupleDesc,
 								   Datum *replValues,

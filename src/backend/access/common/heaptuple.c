@@ -61,6 +61,7 @@
 #include "access/sysattr.h"
 #include "access/tupdesc_details.h"
 #include "executor/tuptable.h"
+#include "fmgr.h"
 #include "utils/expandeddatum.h"
 
 
@@ -1112,6 +1113,34 @@ heap_form_tuple(TupleDesc tupleDescriptor,
 					(hasnull ? td->t_bits : NULL));
 
 	return tuple;
+}
+
+
+/*
+ * heap_form_flattened_tuple
+ *		wrapper over heap_form_tuple which flatten any external toast pointers
+ *		before forming the tuple.
+ *
+ * The result is allocated in the current memory context.
+ */
+HeapTuple
+heap_form_flattened_tuple(TupleDesc tupleDescriptor,
+						  Datum *values,
+						  bool *isnull)
+{
+	/* detoast any external data before forming the tuple */
+	for (int i = 0; i < tupleDescriptor->natts; i++)
+	{
+		Form_pg_attribute attr = TupleDescAttr(tupleDescriptor, i);
+
+		if (isnull[i] || attr->attlen != -1 ||
+			!VARATT_IS_EXTERNAL(DatumGetPointer(values[i])))
+			continue;
+
+		values[i] = PointerGetDatum(PG_DETOAST_DATUM_PACKED(values[i]));
+	}
+
+	return heap_form_tuple(tupleDescriptor, values, isnull);
 }
 
 /*

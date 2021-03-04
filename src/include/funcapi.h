@@ -208,10 +208,10 @@ extern TupleDesc build_function_result_tupdesc_t(HeapTuple procTuple);
  * Macro declarations/inline functions:
  * HeapTupleHeaderGetRawDatum(HeapTupleHeader tuple) - same as
  * 		HeapTupleHeaderGetDatum but the input tuple should not contain
- * 		external varlena
+ * 		external/compressed varlena
  * HeapTupleGetDatum(HeapTuple tuple) - convert a HeapTuple to a Datum.
  * HeapTupleGetRawDatum(HeapTuple tuple) - same as HeapTupleGetDatum
- * 		but the input tuple should not contain external varlena
+ * 		but the input tuple should not contain external/compressed varlena
  *
  * Obsolete routines and macros:
  * TupleDesc RelationNameGetTupleDesc(const char *relname) - Use to get a

@@ -2841,11 +2841,11 @@ ExecEvalRow(ExprState *state, ExprEvalStep *op)
 	HeapTuple	tuple;
 
 	/* build tuple from evaluated field values */
-	tuple = heap_form_tuple(op->d.row.tupdesc,
-							op->d.row.elemvalues,
-							op->d.row.elemnulls);
+	tuple = heap_form_flattened_tuple(op->d.row.tupdesc,
+									  op->d.row.elemvalues,
+									  op->d.row.elemnulls);
 
-	*op->resvalue = HeapTupleGetDatum(tuple);
+	*op->resvalue = HeapTupleGetRawDatum(tuple);
 	*op->resnull = false;
 }
 
@@ -3086,11 +3086,11 @@ ExecEvalFieldStoreForm(ExprState *state, ExprEvalStep *op, ExprContext *econtext
 	HeapTuple	tuple;
 
 	/* argdesc should already be valid from the DeForm step */
-	tuple = heap_form_tuple(*op->d.fieldstore.argdesc,
-							op->d.fieldstore.values,
-							op->d.fieldstore.nulls);
+	tuple = heap_form_flattened_tuple(*op->d.fieldstore.argdesc,
+									  op->d.fieldstore.values,
+									  op->d.fieldstore.nulls);
 
-	*op->resvalue = HeapTupleGetDatum(tuple);
+	*op->resvalue = HeapTupleGetRawDatum(tuple);
 	*op->resnull = false;
 }
 

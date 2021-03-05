@@ -240,14 +240,15 @@ detoast_attr_slice(struct varlena *attr,
 		 */
 		if (slicelimit >= 0)
 		{
-			int32		max_size;
+			int32		max_size = VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer);
 
 			/*
 			 * Determine maximum amount of compressed data needed for a prefix
 			 * of a given length (after decompression).
 			 */
-			max_size = pglz_maximum_compressed_size(slicelimit,
-													toast_pointer.va_extsize);
+			if (VARATT_EXTERNAL_GET_COMPRESSION(toast_pointer) ==
+				TOAST_PGLZ_COMPRESSION_ID)
+				max_size = pglz_maximum_compressed_size(slicelimit, max_size);
 
 			/*
 			 * Fetch enough compressed slices (compressed marker will get set
@@ -347,7 +348,7 @@ toast_fetch_datum(struct varlena *attr)
 	/* Must copy to access aligned fields */
 	VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
 
-	attrsize = toast_pointer.va_extsize;
+	attrsize = VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer);
 
 	result = (struct varlena *) palloc(attrsize + VARHDRSZ);
 
@@ -408,7 +409,7 @@ toast_fetch_datum_slice(struct varlena *attr, int32 sliceoffset,
 	 */
 	Assert(!VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer) || 0 == sliceoffset);
 
-	attrsize = toast_pointer.va_extsize;
+	attrsize = VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer);
 
 	if (sliceoffset >= attrsize)
 	{
@@ -459,26 +460,60 @@ toast_fetch_datum_slice(struct varlena *attr, int32 sliceoffset,
 /* ----------
  * toast_decompress_datum -
  *
+ * Returns compression method id stored in the compressed data.  Otherwise,
+ * returns TOAST_INVALID_COMPRESSION_ID for the uncompressed data.
+ */
+ToastCompressionId
+toast_get_compression_id(struct varlena *attr)
+{
+	ToastCompressionId	cmid = TOAST_INVALID_COMPRESSION_ID;
+
+	/*
+	 * Get the compression method id stored in compressed data.  If it is
+	 * stored externally then fetch it from the external toast pointer
+	 * otherwise for inline compressed data fetch it from the compression
+	 * header.
+	 */
+	if (VARATT_IS_EXTERNAL_ONDISK(attr))
+	{
+		struct varatt_external toast_pointer;
+
+		VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
+
+		if (VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer))
+			cmid = VARATT_EXTERNAL_GET_COMPRESSION(toast_pointer);
+	}
+	else if (VARATT_IS_COMPRESSED(attr))
+		cmid = VARCOMPRESS_4B_C(attr);
+
+	return cmid;
+}
+/* ----------
+ * toast_decompress_datum -
+ *
  * Decompress a compressed version of a varlena datum
  */
 static struct varlena *
 toast_decompress_datum(struct varlena *attr)
 {
-	struct varlena *result;
+	ToastCompressionId cmid;
 
 	Assert(VARATT_IS_COMPRESSED(attr));
 
-	result = (struct varlena *)
-		palloc(TOAST_COMPRESS_RAWSIZE(attr) + VARHDRSZ);
-	SET_VARSIZE(result, TOAST_COMPRESS_RAWSIZE(attr) + VARHDRSZ);
-
-	if (pglz_decompress(TOAST_COMPRESS_RAWDATA(attr),
-						TOAST_COMPRESS_SIZE(attr),
-						VARDATA(result),
-						TOAST_COMPRESS_RAWSIZE(attr), true) < 0)
-		elog(ERROR, "compressed data is corrupted");
-
-	return result;
+	/*
+	 * Fetch the compression method id stored in the compression header and
+	 * decompress the data using the respective decompression routine.
+	 */
+	cmid = TOAST_COMPRESS_METHOD(attr);
+	switch (cmid)
+	{
+		case TOAST_PGLZ_COMPRESSION_ID:
+			return pglz_cmdecompress(attr);
+		case TOAST_LZ4_COMPRESSION_ID:
+			return lz4_cmdecompress(attr);
+		default:
+			elog(ERROR, "invalid compression method id %d", cmid);
+	}
 }
 
 
@@ -492,22 +527,24 @@ toast_decompress_datum(struct varlena *attr)
 static struct varlena *
 toast_decompress_datum_slice(struct varlena *attr, int32 slicelength)
 {
-	struct varlena *result;
-	int32		rawsize;
+	ToastCompressionId cmid;
 
 	Assert(VARATT_IS_COMPRESSED(attr));
 
-	result = (struct varlena *) palloc(slicelength + VARHDRSZ);
-
-	rawsize = pglz_decompress(TOAST_COMPRESS_RAWDATA(attr),
-							  VARSIZE(attr) - TOAST_COMPRESS_HDRSZ,
-							  VARDATA(result),
-							  slicelength, false);
-	if (rawsize < 0)
-		elog(ERROR, "compressed data is corrupted");
-
-	SET_VARSIZE(result, rawsize + VARHDRSZ);
-	return result;
+	/*
+	 * Fetch the compression method id stored in the compression header and
+	 * decompress the data slice using the respective decompression routine.
+	 */
+	cmid = TOAST_COMPRESS_METHOD(attr);
+	switch (cmid)
+	{
+		case TOAST_PGLZ_COMPRESSION_ID:
+			return pglz_cmdecompress_slice(attr, slicelength);
+		case TOAST_LZ4_COMPRESSION_ID:
+			return lz4_cmdecompress_slice(attr, slicelength);
+		default:
+			elog(ERROR, "invalid compression method id %d", cmid);
+	}
 }
 
 /* ----------
@@ -589,7 +626,7 @@ toast_datum_size(Datum value)
 		struct varatt_external toast_pointer;
 
 		VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
-		result = toast_pointer.va_extsize;
+		result = VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer);
 	}
 	else if (VARATT_IS_EXTERNAL_INDIRECT(attr))
 	{

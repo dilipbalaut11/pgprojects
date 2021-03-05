@@ -44,48 +44,56 @@ static bool toastid_valueid_exists(Oid toastrelid, Oid valueid);
  * ----------
  */
 Datum
-toast_compress_datum(Datum value)
+toast_compress_datum(Datum value, char cmethod)
 {
-	struct varlena *tmp;
-	int32		valsize = VARSIZE_ANY_EXHDR(DatumGetPointer(value));
-	int32		len;
+	struct varlena *tmp = NULL;
+	int32		valsize;
 
 	Assert(!VARATT_IS_EXTERNAL(DatumGetPointer(value)));
 	Assert(!VARATT_IS_COMPRESSED(DatumGetPointer(value)));
 
-	/*
-	 * No point in wasting a palloc cycle if value size is out of the allowed
-	 * range for compression
-	 */
-	if (valsize < PGLZ_strategy_default->min_input_size ||
-		valsize > PGLZ_strategy_default->max_input_size)
-		return PointerGetDatum(NULL);
+	Assert(CompressionMethodIsValid(cmethod));
 
-	tmp = (struct varlena *) palloc(PGLZ_MAX_OUTPUT(valsize) +
-									TOAST_COMPRESS_HDRSZ);
+	valsize = VARSIZE_ANY_EXHDR(DatumGetPointer(value));
 
 	/*
-	 * We recheck the actual size even if pglz_compress() reports success,
-	 * because it might be satisfied with having saved as little as one byte
-	 * in the compressed data --- which could turn into a net loss once you
-	 * consider header and alignment padding.  Worst case, the compressed
-	 * format might require three padding bytes (plus header, which is
-	 * included in VARSIZE(tmp)), whereas the uncompressed format would take
-	 * only one header byte and no padding if the value is short enough.  So
-	 * we insist on a savings of more than 2 bytes to ensure we have a gain.
+	 * Call respective compression routine for the compression method and also
+	 * set the size and compression method id in the compressed data header.
 	 */
-	len = pglz_compress(VARDATA_ANY(DatumGetPointer(value)),
-						valsize,
-						TOAST_COMPRESS_RAWDATA(tmp),
-						PGLZ_strategy_default);
-	if (len >= 0 &&
-		len + TOAST_COMPRESS_HDRSZ < valsize - 2)
+	switch (cmethod)
 	{
-		TOAST_COMPRESS_SET_RAWSIZE(tmp, valsize);
-		SET_VARSIZE_COMPRESSED(tmp, len + TOAST_COMPRESS_HDRSZ);
+		case TOAST_PGLZ_COMPRESSION:
+			tmp = pglz_cmcompress((const struct varlena *) value);
+			if (tmp == NULL)
+				return PointerGetDatum(NULL);
+
+			TOAST_COMPRESS_SET_SIZE_AND_METHOD(tmp, valsize,
+											   TOAST_PGLZ_COMPRESSION_ID);
+			break;
+		case TOAST_LZ4_COMPRESSION:
+			tmp = lz4_cmcompress((const struct varlena *) value);
+			if (tmp == NULL)
+				return PointerGetDatum(NULL);
+			TOAST_COMPRESS_SET_SIZE_AND_METHOD(tmp, valsize,
+											   TOAST_LZ4_COMPRESSION_ID);
+			break;
+		default:
+			elog(ERROR, "invalid compression method %c", cmethod);
+	}
+
+	/*
+	 * We recheck the actual size even if compression reports success, because
+	 * it might be satisfied with having saved as little as one byte in the
+	 * compressed data --- which could turn into a net loss once you consider
+	 * header and alignment padding.  Worst case, the compressed format might
+	 * require three padding bytes (plus header, which is included in
+	 * VARSIZE(tmp)), whereas the uncompressed format would take only one
+	 * header byte and no padding if the value is short enough.  So we insist
+	 * on a savings of more than 2 bytes to ensure we have a gain.
+	 */
+	if (VARSIZE(tmp) < valsize - 2)
 		/* successful compression */
 		return PointerGetDatum(tmp);
-	}
 	else
 	{
 		/* incompressible data */
@@ -164,7 +172,7 @@ toast_save_datum(Relation rel, Datum value,
 		data_p = VARDATA_SHORT(dval);
 		data_todo = VARSIZE_SHORT(dval) - VARHDRSZ_SHORT;
 		toast_pointer.va_rawsize = data_todo + VARHDRSZ;	/* as if not short */
-		toast_pointer.va_extsize = data_todo;
+		toast_pointer.va_extinfo = data_todo;
 	}
 	else if (VARATT_IS_COMPRESSED(dval))
 	{
@@ -172,7 +180,10 @@ toast_save_datum(Relation rel, Datum value,
 		data_todo = VARSIZE(dval) - VARHDRSZ;
 		/* rawsize in a compressed datum is just the size of the payload */
 		toast_pointer.va_rawsize = VARRAWSIZE_4B_C(dval) + VARHDRSZ;
-		toast_pointer.va_extsize = data_todo;
+
+		/* set external size and compression method */
+		VARATT_EXTERNAL_SET_SIZE_AND_COMPRESSION(toast_pointer, data_todo,
+												 VARCOMPRESS_4B_C(dval));
 		/* Assert that the numbers look like it's compressed */
 		Assert(VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer));
 	}
@@ -181,7 +192,7 @@ toast_save_datum(Relation rel, Datum value,
 		data_p = VARDATA(dval);
 		data_todo = VARSIZE(dval) - VARHDRSZ;
 		toast_pointer.va_rawsize = VARSIZE(dval);
-		toast_pointer.va_extsize = data_todo;
+		toast_pointer.va_extinfo = data_todo;
 	}
 
 	/*

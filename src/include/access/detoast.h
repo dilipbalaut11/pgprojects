@@ -12,15 +12,7 @@
 #ifndef DETOAST_H
 #define DETOAST_H
 
-/*
- * Testing whether an externally-stored value is compressed now requires
- * comparing extsize (the actual length of the external data) to rawsize
- * (the original uncompressed datum's size).  The latter includes VARHDRSZ
- * overhead, the former doesn't.  We never use compression unless it actually
- * saves space, so we expect either equality or less-than.
- */
-#define VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer) \
-	((toast_pointer).va_extsize < (toast_pointer).va_rawsize - VARHDRSZ)
+#include "access/toast_compression.h"
 
 /*
  * Macro to fetch the possibly-unaligned contents of an EXTERNAL datum
@@ -88,5 +80,13 @@ extern Size toast_raw_datum_size(Datum value);
  * ----------
  */
 extern Size toast_datum_size(Datum value);
+
+/* ----------
+ * toast_get_compression_id -
+ *
+ *	Return the compression method id from the compressed value
+ * ----------
+ */
+extern ToastCompressionId toast_get_compression_id(struct varlena *attr);
 
 #endif							/* DETOAST_H */

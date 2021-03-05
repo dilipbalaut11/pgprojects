@@ -19,6 +19,7 @@
  */
 #include "postgres.h"
 
+#include "access/detoast.h"
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/heaptoast.h"
@@ -26,6 +27,7 @@
 #include "access/rewriteheap.h"
 #include "access/syncscan.h"
 #include "access/tableam.h"
+#include "access/toast_compression.h"
 #include "access/tsmapi.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"

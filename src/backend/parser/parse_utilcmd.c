@@ -27,6 +27,7 @@
 #include "postgres.h"
 
 #include "access/amapi.h"
+#include "access/compressapi.h"
 #include "access/htup_details.h"
 #include "access/relation.h"
 #include "access/reloptions.h"
@@ -1081,6 +1082,14 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 			def->storage = attribute->attstorage;
 		else
 			def->storage = 0;
+
+		/* Likewise, copy compression if requested */
+		if ((table_like_clause->options & CREATE_TABLE_LIKE_COMPRESSION) != 0
+			&& CompressionMethodIsValid(attribute->attcompression))
+			def->compression =
+				pstrdup(GetCompressionMethodName(attribute->attcompression));
+		else
+			def->compression = NULL;
 
 		/* Likewise, copy comment if requested */
 		if ((table_like_clause->options & CREATE_TABLE_LIKE_COMMENTS) &&

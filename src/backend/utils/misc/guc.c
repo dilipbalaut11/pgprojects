@@ -30,6 +30,7 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/compressapi.h"
 #include "access/gin.h"
 #include "access/rmgr.h"
 #include "access/tableam.h"
@@ -227,6 +228,7 @@ static bool check_recovery_target_lsn(char **newval, void **extra, GucSource sou
 static void assign_recovery_target_lsn(const char *newval, void *extra);
 static bool check_primary_slot_name(char **newval, void **extra, GucSource source);
 static bool check_default_with_oids(bool *newval, void **extra, GucSource source);
+static bool check_default_toast_compression(char **newval, void **extra, GucSource source);
 
 /* Private functions in guc-file.l that need to be called from guc.c */
 static ConfigVariable *ProcessConfigFileInternal(GucContext context,
@@ -3914,6 +3916,17 @@ static struct config_string ConfigureNamesString[] =
 		&default_table_access_method,
 		DEFAULT_TABLE_ACCESS_METHOD,
 		check_default_table_access_method, NULL, NULL
+	},
+
+	{
+		{"default_toast_compression", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Sets the default compression for new columns."),
+			NULL,
+			GUC_IS_NAME
+		},
+		&default_toast_compression,
+		DEFAULT_TOAST_COMPRESSION,
+		check_default_toast_compression, NULL, NULL
 	},
 
 	{
@@ -12224,6 +12237,57 @@ check_default_with_oids(bool *newval, void **extra, GucSource source)
 		GUC_check_errmsg("tables declared WITH OIDS are not supported");
 
 		return false;
+	}
+
+	return true;
+}
+
+/* check_hook: validate new default_toast_compression */
+bool
+check_default_toast_compression(char **newval, void **extra, GucSource source)
+{
+	if (**newval == '\0')
+	{
+		GUC_check_errdetail("%s cannot be empty.",
+							"default_toast_compression");
+		return false;
+	}
+
+	if (strlen(*newval) >= NAMEDATALEN)
+	{
+		GUC_check_errdetail("%s is too long (maximum %d characters).",
+							"default_toast_compression", NAMEDATALEN - 1);
+		return false;
+	}
+
+	/*
+	 * If we aren't inside a transaction, or not connected to a database, we
+	 * cannot do the catalog access necessary to verify the method.  Must
+	 * accept the value on faith.
+	 */
+	if (IsTransactionState() && MyDatabaseId != InvalidOid)
+	{
+		if (!CompressionMethodIsValid(CompressionNameToMethod(*newval)))
+		{
+			/*
+			 * When source == PGC_S_TEST, don't throw a hard error for a
+			 * nonexistent table access method, only a NOTICE. See comments in
+			 * guc.h.
+			 */
+			if (source == PGC_S_TEST)
+			{
+				ereport(NOTICE,
+						(errcode(ERRCODE_UNDEFINED_OBJECT),
+						 errmsg("compression method \"%s\" does not exist",
+								*newval)));
+			}
+			else
+			{
+				GUC_check_errdetail("Compression method \"%s\" does not exist.",
+									*newval);
+				return false;
+			}
+		}
 	}
 
 	return true;

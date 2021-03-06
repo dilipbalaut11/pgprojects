@@ -43,12 +43,15 @@ typedef enum CompressionId
 	LZ4_COMPRESSION_ID = 1
 } CompressionId;
 
-/* use default compression method if it is not specified. */
-#define DefaultCompressionMethod PGLZ_COMPRESSION
+/* default compression method if not specified. */
+#define DEFAULT_TOAST_COMPRESSION	"pglz"
 #define IsValidCompression(cm)  ((cm) != InvalidCompressionMethod)
 
 #define IsStorageCompressible(storage) ((storage) != TYPSTORAGE_PLAIN && \
 										(storage) != TYPSTORAGE_EXTERNAL)
+
+extern char *default_toast_compression;
+
 /* compression handler routines */
 typedef struct varlena *(*cmcompress_function) (const struct varlena *value);
 typedef struct varlena *(*cmdecompress_function) (const struct varlena *value);
@@ -158,6 +161,17 @@ static inline const char*
 GetCompressionMethodName(char method)
 {
 	return GetCompressionRoutines(method)->cmname;
+}
+
+/*
+ * GetDefaultToastCompression -- get the current toast compression
+ *
+ * This exists to hide the use of the default_toast_compression GUC variable.
+ */
+static inline char
+GetDefaultToastCompression(void)
+{
+	return CompressionNameToMethod(default_toast_compression);
 }
 
 #endif							/* COMPRESSAPI_H */

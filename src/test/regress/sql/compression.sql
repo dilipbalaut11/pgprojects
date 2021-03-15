@@ -92,6 +92,14 @@ SELECT pg_column_compression(f1) FROM cmpart;
 CREATE TABLE cminh() INHERITS(cmdata, cmdata1);
 CREATE TABLE cminh(f1 TEXT COMPRESSION lz4) INHERITS(cmdata);
 
+-- test default_toast_compression GUC
+SET default_toast_compression = '';
+SET default_toast_compression = 'I do not exist compression';
+SET default_toast_compression = 'lz4';
+DROP TABLE cmdata2;
+CREATE TABLE cmdata2 (f1 text);
+\d+ cmdata2
+
 -- check data is ok
 SELECT length(f1) FROM cmdata;
 SELECT length(f1) FROM cmdata1;

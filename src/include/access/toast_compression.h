@@ -15,6 +15,14 @@
 
 #include "postgres.h"
 
+#include "utils/guc.h"
+
+/* default compression method if not specified. */
+#define DEFAULT_TOAST_COMPRESSION	"pglz"
+
+/* GUCs */
+extern char *default_toast_compression;
+
 /*
  * Built-in compression methods.  pg_attribute will store this in the
  * attcompression column.
@@ -36,8 +44,6 @@ typedef enum ToastCompressionId
 	TOAST_LZ4_COMPRESSION_ID = 1
 } ToastCompressionId;
 
-/* use default compression method if it is not specified. */
-#define DefaultCompressionMethod TOAST_PGLZ_COMPRESSION
 #define IsValidCompression(cm)  ((cm) != InvalidCompressionMethod)
 
 #define IsStorageCompressible(storage) ((storage) != TYPSTORAGE_PLAIN && \
@@ -67,6 +73,8 @@ typedef struct CompressionRoutine
 
 extern char CompressionNameToMethod(char *compression);
 extern const CompressionRoutine *GetCompressionRoutines(char method);
+extern bool check_default_toast_compression(char **newval, void **extra,
+											GucSource source);
 
 /*
  * CompressionMethodToId - Convert compression method to compression id.
@@ -115,5 +123,15 @@ GetCompressionMethodName(char method)
 	return GetCompressionRoutines(method)->cmname;
 }
 
+/*
+ * GetDefaultToastCompression -- get the current toast compression
+ *
+ * This exists to hide the use of the default_toast_compression GUC variable.
+ */
+static inline char
+GetDefaultToastCompression(void)
+{
+	return CompressionNameToMethod(default_toast_compression);
+}
 
 #endif							/* TOAST_COMPRESSION_H */

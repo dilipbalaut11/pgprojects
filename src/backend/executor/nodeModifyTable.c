@@ -2048,7 +2048,8 @@ ExecPrepareTupleRouting(ModifyTableState *mtstate,
 TupleTableSlot *
 CompareCompressionMethodAndDecompress(TupleTableSlot *slot,
 									  TupleTableSlot **outslot,
-									  TupleDesc targetTupDesc)
+									  TupleDesc targetTupDesc,
+									  bool *decompressed)
 {
 	int			i;
 	int			attnum;
@@ -2142,6 +2143,9 @@ CompareCompressionMethodAndDecompress(TupleTableSlot *slot,
 		 */
 		if (TTS_SHOULDFREE(slot))
 			ExecMaterializeSlot(newslot);
+
+		if (decompressed != NULL)
+			*decompressed = true;
 
 		*outslot = newslot;
 
@@ -2367,7 +2371,8 @@ ExecModifyTable(PlanState *pstate)
 		 */
 		slot = CompareCompressionMethodAndDecompress(slot,
 									&node->mt_decompress_tuple_slot,
-									resultRelInfo->ri_RelationDesc->rd_att);
+									resultRelInfo->ri_RelationDesc->rd_att,
+									NULL);
 
 		switch (operation)
 		{

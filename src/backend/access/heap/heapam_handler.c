@@ -2471,6 +2471,28 @@ reform_and_rewrite_tuple(HeapTuple tuple,
 	{
 		if (TupleDescAttr(newTupDesc, i)->attisdropped)
 			isnull[i] = true;
+
+		/*
+		 * Since we are rewriting the table, use this opportunity to
+		 * recompress any compressed attribute with current compression method
+		 * of the attribute.  Basically, if the compression method of the
+		 * compressed varlena is not same as current compression method of the
+		 * attribute then decompress it so that if it need to be compressed
+		 * then it will be compressed with the current compression method of
+		 * the attribute.
+		 */
+		else if (!isnull[i] && TupleDescAttr(newTupDesc, i)->attlen == -1)
+		{
+			struct varlena *new_value;
+			char		cmethod;
+
+			new_value = (struct varlena *) DatumGetPointer(values[i]);
+			cmethod = toast_get_compression_method(new_value);
+
+			if (IsValidCompression(cmethod) &&
+				TupleDescAttr(newTupDesc, i)->attcompression != cmethod)
+				values[i] = PointerGetDatum(detoast_attr(new_value));
+		}
 	}
 
 	copiedTuple = heap_form_tuple(newTupDesc, values, isnull);

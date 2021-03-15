@@ -528,6 +528,8 @@ static void ATExecReplicaIdentity(Relation rel, ReplicaIdentityStmt *stmt, LOCKM
 static void ATExecGenericOptions(Relation rel, List *options);
 static void ATExecSetRowSecurity(Relation rel, bool rls);
 static void ATExecForceNoForceRowSecurity(Relation rel, bool force_rls);
+static ObjectAddress ATExecSetCompression(AlteredTableInfo *tab, Relation rel,
+					 const char *column, Node *newValue, LOCKMODE lockmode);
 
 static void index_copy_data(Relation rel, RelFileNode newrnode);
 static const char *storage_name(char c);
@@ -3973,6 +3975,7 @@ AlterTableGetLockLevel(List *cmds)
 				 */
 			case AT_GenericOptions:
 			case AT_AlterColumnGenericOptions:
+			case AT_SetCompression:
 				cmd_lockmode = AccessExclusiveLock;
 				break;
 
@@ -4500,7 +4503,8 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 		case AT_DisableRowSecurity:
 		case AT_ForceRowSecurity:
 		case AT_NoForceRowSecurity:
-			ATSimplePermissions(rel, ATT_TABLE);
+		case AT_SetCompression:
+			ATSimplePermissions(rel, ATT_TABLE | ATT_MATVIEW);
 			/* These commands never recurse */
 			/* No command-specific prep needed */
 			pass = AT_PASS_MISC;
@@ -4907,6 +4911,10 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			/* ATPrepCmd ensured it must be an index */
 			Assert(rel->rd_rel->relkind == RELKIND_INDEX);
 			ATExecAlterCollationRefreshVersion(rel, cmd->object);
+			break;
+		case AT_SetCompression:
+			address = ATExecSetCompression(tab, rel, cmd->name, cmd->def,
+										   lockmode);
 			break;
 		default:				/* oops */
 			elog(ERROR, "unrecognized alter table type: %d",
@@ -5528,15 +5536,35 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 
 			if (tab->rewrite > 0)
 			{
+				bool		decompressed = false;
+
 				/* Extract data from old tuple */
 				slot_getallattrs(oldslot);
 				ExecClearTuple(newslot);
 
-				/* copy attributes */
-				memcpy(newslot->tts_values, oldslot->tts_values,
-					   sizeof(Datum) * oldslot->tts_nvalid);
-				memcpy(newslot->tts_isnull, oldslot->tts_isnull,
-					   sizeof(bool) * oldslot->tts_nvalid);
+				/*
+				 * Compare the compression method of the compressed data in
+				 * the source tuple with that of target attribute and if those
+				 * are different then decompress those data.
+				 */
+				(void) CompareCompressionMethodAndDecompress(oldslot,
+															 &newslot,
+															 newTupDesc,
+															 &decompressed);
+
+				/*
+				 * copy attributes, if we have decompressed some attribute
+				 * then the values and nulls array is already copied
+				 */
+				if (!decompressed)
+				{
+					memcpy(newslot->tts_values, oldslot->tts_values,
+						   sizeof(Datum) * oldslot->tts_nvalid);
+					memcpy(newslot->tts_isnull, oldslot->tts_isnull,
+						   sizeof(bool) * oldslot->tts_nvalid);
+				}
+				else
+					ExecClearTuple(newslot);
 
 				/* Set dropped attributes to null in new tuple */
 				foreach(lc, dropped_attrs)
@@ -7773,6 +7801,67 @@ ATExecSetOptions(Relation rel, const char *colName, Node *options,
 }
 
 /*
+ * Helper function for ATExecSetStorage and ATExecSetCompression
+ *
+ * Set the attcompression and/or attstorage for the respective index attribute
+ * if the respective input values are valid.
+ */
+static void
+ApplyChangesToIndexes(Relation rel, Relation attrelation, AttrNumber attnum,
+					  char newcompression, char newstorage, LOCKMODE lockmode)
+{
+	HeapTuple	tuple;
+	ListCell   *lc;
+	Form_pg_attribute attrtuple;
+
+	foreach(lc, RelationGetIndexList(rel))
+	{
+		Oid			indexoid = lfirst_oid(lc);
+		Relation	indrel;
+		AttrNumber	indattnum = 0;
+
+		indrel = index_open(indexoid, lockmode);
+
+		for (int i = 0; i < indrel->rd_index->indnatts; i++)
+		{
+			if (indrel->rd_index->indkey.values[i] == attnum)
+			{
+				indattnum = i + 1;
+				break;
+			}
+		}
+
+		if (indattnum == 0)
+		{
+			index_close(indrel, lockmode);
+			continue;
+		}
+
+		tuple = SearchSysCacheCopyAttNum(RelationGetRelid(indrel), indattnum);
+
+		if (HeapTupleIsValid(tuple))
+		{
+			attrtuple = (Form_pg_attribute) GETSTRUCT(tuple);
+
+			if (CompressionMethodIsValid(newcompression))
+				attrtuple->attcompression = newcompression;
+
+			if (newstorage != '\0')
+				attrtuple->attstorage = newstorage;
+
+			CatalogTupleUpdate(attrelation, &tuple->t_self, tuple);
+
+			InvokeObjectPostAlterHook(RelationRelationId,
+									  RelationGetRelid(rel),
+									  attrtuple->attnum);
+
+			heap_freetuple(tuple);
+		}
+
+		index_close(indrel, lockmode);
+	}
+}
+/*
  * ALTER TABLE ALTER COLUMN SET STORAGE
  *
  * Return value is the address of the modified column
@@ -7787,7 +7876,6 @@ ATExecSetStorage(Relation rel, const char *colName, Node *newValue, LOCKMODE loc
 	Form_pg_attribute attrtuple;
 	AttrNumber	attnum;
 	ObjectAddress address;
-	ListCell   *lc;
 
 	Assert(IsA(newValue, String));
 	storagemode = strVal(newValue);
@@ -7851,47 +7939,8 @@ ATExecSetStorage(Relation rel, const char *colName, Node *newValue, LOCKMODE loc
 	 * Apply the change to indexes as well (only for simple index columns,
 	 * matching behavior of index.c ConstructTupleDescriptor()).
 	 */
-	foreach(lc, RelationGetIndexList(rel))
-	{
-		Oid			indexoid = lfirst_oid(lc);
-		Relation	indrel;
-		AttrNumber	indattnum = 0;
-
-		indrel = index_open(indexoid, lockmode);
-
-		for (int i = 0; i < indrel->rd_index->indnatts; i++)
-		{
-			if (indrel->rd_index->indkey.values[i] == attnum)
-			{
-				indattnum = i + 1;
-				break;
-			}
-		}
-
-		if (indattnum == 0)
-		{
-			index_close(indrel, lockmode);
-			continue;
-		}
-
-		tuple = SearchSysCacheCopyAttNum(RelationGetRelid(indrel), indattnum);
-
-		if (HeapTupleIsValid(tuple))
-		{
-			attrtuple = (Form_pg_attribute) GETSTRUCT(tuple);
-			attrtuple->attstorage = newstorage;
-
-			CatalogTupleUpdate(attrelation, &tuple->t_self, tuple);
-
-			InvokeObjectPostAlterHook(RelationRelationId,
-									  RelationGetRelid(rel),
-									  attrtuple->attnum);
-
-			heap_freetuple(tuple);
-		}
-
-		index_close(indrel, lockmode);
-	}
+	ApplyChangesToIndexes(rel, attrelation, attnum, InvalidCompressionMethod,
+						  newstorage, lockmode);
 
 	table_close(attrelation, RowExclusiveLock);
 
@@ -15015,6 +15064,89 @@ ATExecGenericOptions(Relation rel, List *options)
 
 	heap_freetuple(tuple);
 }
+
+/*
+ * ALTER TABLE ALTER COLUMN SET COMPRESSION
+ *
+ * Return value is the address of the modified column
+ */
+static ObjectAddress
+ATExecSetCompression(AlteredTableInfo *tab,
+					 Relation rel,
+					 const char *column,
+					 Node *newValue,
+					 LOCKMODE lockmode)
+{
+	Relation	attrel;
+	HeapTuple	tuple;
+	Form_pg_attribute atttableform;
+	AttrNumber	attnum;
+	char	   *compression;
+	char		typstorage;
+	Oid			cmoid;
+	Datum		values[Natts_pg_attribute];
+	bool		nulls[Natts_pg_attribute];
+	bool		replace[Natts_pg_attribute];
+	ObjectAddress address;
+
+	Assert(IsA(newValue, String));
+	compression = strVal(newValue);
+
+	attrel = table_open(AttributeRelationId, RowExclusiveLock);
+
+	tuple = SearchSysCacheAttName(RelationGetRelid(rel), column);
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_COLUMN),
+				 errmsg("column \"%s\" of relation \"%s\" does not exist",
+						column, RelationGetRelationName(rel))));
+
+	/* prevent them from altering a system attribute */
+	atttableform = (Form_pg_attribute) GETSTRUCT(tuple);
+	attnum = atttableform->attnum;
+	if (attnum <= 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot alter system column \"%s\"", column)));
+
+	typstorage = get_typstorage(atttableform->atttypid);
+
+	/* prevent from setting compression methods for uncompressible type */
+	if (!IsStorageCompressible(typstorage))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					errmsg("column data type %s does not support compression",
+						format_type_be(atttableform->atttypid))));
+
+	/* initialize buffers for new tuple values */
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+	memset(replace, false, sizeof(replace));
+
+	/* get the attribute compression method. */
+	cmoid = GetAttributeCompression(atttableform, compression);
+
+	atttableform->attcompression = cmoid;
+	CatalogTupleUpdate(attrel, &tuple->t_self, tuple);
+
+	InvokeObjectPostAlterHook(RelationRelationId,
+							  RelationGetRelid(rel),
+							  atttableform->attnum);
+
+	ReleaseSysCache(tuple);
+
+	/* apply changes to the index column as well */
+	ApplyChangesToIndexes(rel, attrel, attnum, cmoid, '\0', lockmode);
+	table_close(attrel, RowExclusiveLock);
+
+	/* make changes visible */
+	CommandCounterIncrement();
+
+	ObjectAddressSubSet(address, RelationRelationId,
+						RelationGetRelid(rel), atttableform->attnum);
+	return address;
+}
+
 
 /*
  * Preparation phase for SET LOGGED/UNLOGGED

@@ -495,7 +495,8 @@ transientrel_receive(TupleTableSlot *slot, DestReceiver *self)
 	 */
 	slot = CompareCompressionMethodAndDecompress(slot,
 												 &myState->decompress_tuple_slot,
-												 myState->transientrel->rd_att);
+												 myState->transientrel->rd_att,
+												 NULL);
 
 	/*
 	 * Note that the input slot might not be of the type of the target

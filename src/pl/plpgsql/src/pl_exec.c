@@ -7267,7 +7267,8 @@ compatible_tupdescs(TupleDesc src_tupdesc, TupleDesc dst_tupdesc)
  * The result tuple is freshly palloc'd in caller's context.  Some junk
  * may be left behind in eval_mcontext, too.
  *
- * flatten - if this is passed true then any external data will be flattened.
+ * flatten - if this is passed true then any external/compressed data will be
+ * 			 flattened.
  * ----------
  */
 static HeapTuple
@@ -7305,9 +7306,11 @@ make_tuple_from_row(PLpgSQL_execstate *estate,
 		if (fieldtypeid != TupleDescAttr(tupdesc, i)->atttypid)
 			return NULL;
 
-		/* detoast any external data if the caller has asked to do so */
-		if (flatten && !nulls[i] && TupleDescAttr(tupdesc, i)->attlen == -1 &&
-			VARATT_IS_EXTERNAL(DatumGetPointer(dvalues[i])))
+		/*
+		 * detoast any external/compressed data if the caller has asked to do
+		 * so.
+		 */
+		if (flatten && !nulls[i] && TupleDescAttr(tupdesc, i)->attlen == -1)
 			dvalues[i] = PointerGetDatum(PG_DETOAST_DATUM_PACKED(dvalues[i]));
 		/* XXX should we insist on typmod match, too? */
 	}

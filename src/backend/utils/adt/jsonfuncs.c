@@ -3388,9 +3388,8 @@ populate_record(TupleDesc tupdesc,
 										  &field,
 										  &nulls[i]);
 
-		/* detoast any external data before forming the tuple */
-		if (!nulls[i] && att->attlen == -1 &&
-			VARATT_IS_EXTERNAL(DatumGetPointer(values[i])))
+		/* detoast any external/compressed data before forming the tuple */
+		if (!nulls[i] && att->attlen == -1)
 			values[i] = PointerGetDatum(PG_DETOAST_DATUM_PACKED(values[i]));
 	}
 

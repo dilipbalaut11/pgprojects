@@ -2840,13 +2840,12 @@ ExecEvalRow(ExprState *state, ExprEvalStep *op)
 {
 	HeapTuple	tuple;
 
-	/* detoast any external data before forming the tuple */
+	/* detoast any external/compressed data before forming the tuple */
 	for (int i = 0; i < op->d.row.tupdesc->natts; i++)
 	{
 		Form_pg_attribute attr = TupleDescAttr(op->d.row.tupdesc, i);
 
-		if (op->d.row.elemnulls[i] || attr->attlen != -1 ||
-			!VARATT_IS_EXTERNAL(DatumGetPointer(op->d.row.elemvalues[i])))
+		if (op->d.row.elemnulls[i] || attr->attlen != -1)
 			continue;
 
 		op->d.row.elemvalues[i] =
@@ -3098,13 +3097,12 @@ ExecEvalFieldStoreForm(ExprState *state, ExprEvalStep *op, ExprContext *econtext
 {
 	HeapTuple	tuple;
 
-	/* detoast any external data before forming the tuple */
+	/* detoast any external/compressed data before forming the tuple */
 	for (int i = 0; i < (*op->d.fieldstore.argdesc)->natts; i++)
 	{
 		Form_pg_attribute attr = TupleDescAttr(*op->d.fieldstore.argdesc, i);
 
-		if (op->d.fieldstore.nulls[i] || attr->attlen != -1 ||
-			!VARATT_IS_EXTERNAL(DatumGetPointer(op->d.fieldstore.values[i])))
+		if (op->d.fieldstore.nulls[i] || attr->attlen != -1)
 			continue;
 		op->d.fieldstore.values[i] =
 			PointerGetDatum(PG_DETOAST_DATUM_PACKED(op->d.fieldstore.values[i]));

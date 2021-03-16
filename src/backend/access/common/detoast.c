@@ -248,7 +248,7 @@ detoast_attr_slice(struct varlena *attr,
 			 * of a given length (after decompression).
 			 */
 			max_size = pglz_maximum_compressed_size(slicelimit,
-													toast_pointer.va_extsize);
+													VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer));
 
 			/*
 			 * Fetch enough compressed slices (compressed marker will get set
@@ -348,7 +348,7 @@ toast_fetch_datum(struct varlena *attr)
 	/* Must copy to access aligned fields */
 	VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
 
-	attrsize = toast_pointer.va_extsize;
+	attrsize = VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer);
 
 	result = (struct varlena *) palloc(attrsize + VARHDRSZ);
 
@@ -409,7 +409,7 @@ toast_fetch_datum_slice(struct varlena *attr, int32 sliceoffset,
 	 */
 	Assert(!VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer) || 0 == sliceoffset);
 
-	attrsize = toast_pointer.va_extsize;
+	attrsize = VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer);
 
 	if (sliceoffset >= attrsize)
 	{
@@ -466,6 +466,8 @@ toast_fetch_datum_slice(struct varlena *attr, int32 sliceoffset,
 char
 toast_get_compression_method(struct varlena *attr)
 {
+	ToastCompressionId	cmid;
+
 	if (VARATT_IS_EXTERNAL_ONDISK(attr))
 	{
 		struct varatt_external toast_pointer;
@@ -475,17 +477,15 @@ toast_get_compression_method(struct varlena *attr)
 		/* fast path for non-compressed external datums */
 		if (!VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer))
 			return InvalidCompressionMethod;
-
-		/*
-		 * Fetch just enough of the value to examine the compression header,
-		 * so that we can find out the compression method.
-		 */
-		attr = toast_fetch_datum_slice(attr, 0, VARHDRSZ);
+		else
+			cmid = VARATT_EXTERNAL_GET_COMPRESSION(toast_pointer);
 	}
-	else if (!VARATT_IS_COMPRESSED(attr))
+	else if (VARATT_IS_COMPRESSED(attr))
+		cmid =  TOAST_COMPRESS_METHOD(attr);
+	else
 		return InvalidCompressionMethod;
 
-	return CompressionIdToMethod(TOAST_COMPRESS_METHOD(attr));
+	return CompressionIdToMethod(cmid);
 }
 
 /* ----------
@@ -616,7 +616,7 @@ toast_datum_size(Datum value)
 		struct varatt_external toast_pointer;
 
 		VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
-		result = toast_pointer.va_extsize;
+		result = VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer);
 	}
 	else if (VARATT_IS_EXTERNAL_INDIRECT(attr))
 	{

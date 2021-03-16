@@ -67,7 +67,8 @@
 typedef struct varatt_external
 {
 	int32		va_rawsize;		/* Original data size (includes header) */
-	int32		va_extsize;		/* External saved size (doesn't) */
+	uint32		va_extinfo;		/* External saved size (without header) and
+								 * compression method */
 	Oid			va_valueid;		/* Unique ID of value within TOAST table */
 	Oid			va_toastrelid;	/* RelID of TOAST table containing it */
 }			varatt_external;
@@ -333,6 +334,35 @@ typedef struct
 	(VARATT_IS_EXTERNAL(PTR) && VARTAG_IS_EXPANDED(VARTAG_EXTERNAL(PTR)))
 #define VARATT_IS_EXTERNAL_NON_EXPANDED(PTR) \
 	(VARATT_IS_EXTERNAL(PTR) && !VARTAG_IS_EXPANDED(VARTAG_EXTERNAL(PTR)))
+
+/*
+ * va_extinfo in varatt_external contains actual length of the external data
+ * and compression method if external data is compressed.
+ */
+#define VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer) \
+	((toast_pointer).va_extinfo & VARLENA_RAWSIZE_MASK)
+
+#define VARATT_EXTERNAL_SET_SIZE_AND_COMPRESSION(toast_pointer, len, cm) \
+	do { \
+		Assert((cm) == TOAST_PGLZ_COMPRESSION_ID || \
+			   (cm) == TOAST_LZ4_COMPRESSION_ID); \
+		((toast_pointer).va_extinfo = (len) | (cm) << VARLENA_RAWSIZE_BITS); \
+	} while (0)
+
+#define VARATT_EXTERNAL_GET_COMPRESSION(PTR) \
+	((toast_pointer).va_extinfo >> VARLENA_RAWSIZE_BITS)
+
+/*
+ * Testing whether an externally-stored value is compressed now requires
+ * comparing size stored in va_extinfo (the actual length of the external data)
+ * to rawsize (the original uncompressed datum's size).  The latter includes
+ * VARHDRSZ overhead, the former doesn't.  We never use compression unless it
+ * actually saves space, so we expect either equality or less-than.
+ */
+#define VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer) \
+	(VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer) < \
+		(toast_pointer).va_rawsize - VARHDRSZ)
+
 #define VARATT_IS_SHORT(PTR)				VARATT_IS_1B(PTR)
 #define VARATT_IS_EXTENDED(PTR)				(!VARATT_IS_4B_U(PTR))
 

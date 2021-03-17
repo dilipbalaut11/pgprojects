@@ -102,6 +102,26 @@ DROP TABLE cmdata2;
 CREATE TABLE cmdata2 (f1 text);
 \d+ cmdata2
 
+-- test alter compression method
+ALTER TABLE cmdata ALTER COLUMN f1 SET COMPRESSION lz4;
+INSERT INTO cmdata VALUES (repeat('123456789',4004));
+\d+ cmdata
+SELECT pg_column_compression(f1) FROM cmdata;
+
+-- test alter compression method for the materialized view
+ALTER MATERIALIZED VIEW mv ALTER COLUMN x SET COMPRESSION lz4;
+\d+ mv
+
+-- test alter compression method for the partitioned table
+ALTER TABLE cmpart1 ALTER COLUMN f1 SET COMPRESSION pglz;
+ALTER TABLE cmpart2 ALTER COLUMN f1 SET COMPRESSION lz4;
+
+-- new data should be compressed with the current compression method
+INSERT INTO cmpart VALUES (repeat('123456789',1004));
+INSERT INTO cmpart VALUES (repeat('123456789',4004));
+
+SELECT pg_column_compression(f1) FROM cmpart;
+
 -- check data is ok
 SELECT length(f1) FROM cmdata;
 SELECT length(f1) FROM cmdata1;

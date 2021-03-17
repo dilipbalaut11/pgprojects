@@ -241,12 +241,57 @@ CREATE TABLE cmdata2 (f1 text);
 --------+------+-----------+----------+---------+----------+-------------+--------------+-------------
  f1     | text |           |          |         | extended | lz4         |              | 
 
+-- test alter compression method
+ALTER TABLE cmdata ALTER COLUMN f1 SET COMPRESSION lz4;
+INSERT INTO cmdata VALUES (repeat('123456789',4004));
+\d+ cmdata
+                                        Table "public.cmdata"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | lz4         |              | 
+Indexes:
+    "idx" btree (f1)
+
+SELECT pg_column_compression(f1) FROM cmdata;
+ pg_column_compression 
+-----------------------
+ pglz
+ lz4
+(2 rows)
+
+-- test alter compression method for the materialized view
+ALTER MATERIALIZED VIEW mv ALTER COLUMN x SET COMPRESSION lz4;
+\d+ mv
+                                    Materialized view "public.mv"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ x      | text |           |          |         | extended | lz4         |              | 
+View definition:
+ SELECT cmdata1.f1 AS x
+   FROM cmdata1;
+
+-- test alter compression method for the partitioned table
+ALTER TABLE cmpart1 ALTER COLUMN f1 SET COMPRESSION pglz;
+ALTER TABLE cmpart2 ALTER COLUMN f1 SET COMPRESSION lz4;
+-- new data should be compressed with the current compression method
+INSERT INTO cmpart VALUES (repeat('123456789',1004));
+INSERT INTO cmpart VALUES (repeat('123456789',4004));
+SELECT pg_column_compression(f1) FROM cmpart;
+ pg_column_compression 
+-----------------------
+ lz4
+ pglz
+ pglz
+ lz4
+(4 rows)
+
 -- check data is ok
 SELECT length(f1) FROM cmdata;
  length 
 --------
   10000
-(1 row)
+  36036
+(2 rows)
 
 SELECT length(f1) FROM cmdata1;
  length 

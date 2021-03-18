@@ -983,8 +983,6 @@ heap_expand_tuple(HeapTuple sourceTuple, TupleDesc tupleDesc)
 Datum
 heap_copy_tuple_as_datum(HeapTuple tuple, TupleDesc tupleDesc)
 {
-	HeapTupleHeader td;
-
 	/*
 	 * If the tuple contains any external TOAST pointers, we have to inline
 	 * those fields to meet the conventions for composite-type Datums.
@@ -993,11 +991,29 @@ heap_copy_tuple_as_datum(HeapTuple tuple, TupleDesc tupleDesc)
 		return toast_flatten_tuple_to_datum(tuple->t_data,
 											tuple->t_len,
 											tupleDesc);
+	else
+		return heap_copy_tuple_as_raw_datum(tuple, tupleDesc);
+}
+
+/* ----------------
+ *		heap_copy_tuple_as_raw_datum
+ *
+ *		copy a tuple as a composite-type Datum, but the input tuple should not
+ *		contain any external data.
+ * ----------------
+ */
+Datum
+heap_copy_tuple_as_raw_datum(HeapTuple tuple, TupleDesc tupleDesc)
+{
+	HeapTupleHeader td;
+
+	/* The tuple should not contains any external TOAST pointers. */
+	Assert(!HeapTupleHasExternal(tuple));
 
 	/*
-	 * Fast path for easy case: just make a palloc'd copy and insert the
-	 * correct composite-Datum header fields (since those may not be set if
-	 * the given tuple came from disk, rather than from heap_form_tuple).
+	 * Just make a palloc'd copy and insert the correct composite-Datum
+	 * header fields (since those may not be set if the given tuple came
+	 * from disk, rather than from heap_form_tuple).
 	 */
 	td = (HeapTupleHeader) palloc(tuple->t_len);
 	memcpy((char *) td, (char *) tuple->t_data, tuple->t_len);

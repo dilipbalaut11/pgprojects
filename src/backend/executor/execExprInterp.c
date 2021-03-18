@@ -3169,8 +3169,13 @@ ExecEvalConvertRowtype(ExprState *state, ExprEvalStep *op, ExprContext *econtext
 	{
 		/* Full conversion with attribute rearrangement needed */
 		result = execute_attr_map_tuple(&tmptup, op->d.convert_rowtype.map);
-		/* Result already has appropriate composite-datum header fields */
-		*op->resvalue = HeapTupleGetDatum(result);
+
+		/*
+		 * Result already has appropriate composite-datum header fields. The
+		 * input was a composite type so we aren't expecting to have to
+		 * flatten any toasted fields so directly call HeapTupleGetRawDatum.
+		 */
+		*op->resvalue = HeapTupleGetRawDatum(result);
 	}
 	else
 	{
@@ -3181,10 +3186,10 @@ ExecEvalConvertRowtype(ExprState *state, ExprEvalStep *op, ExprContext *econtext
 		 * for this since it will both make the physical copy and insert the
 		 * correct composite header fields.  Note that we aren't expecting to
 		 * have to flatten any toasted fields: the input was a composite
-		 * datum, so it shouldn't contain any.  So heap_copy_tuple_as_datum()
-		 * is overkill here, but its check for external fields is cheap.
+		 * datum, so it shouldn't contain any.  So we can directly call
+		 * heap_copy_tuple_as_raw_datum().
 		 */
-		*op->resvalue = heap_copy_tuple_as_datum(&tmptup, outdesc);
+		*op->resvalue = heap_copy_tuple_as_raw_datum(&tmptup, outdesc);
 	}
 }
 

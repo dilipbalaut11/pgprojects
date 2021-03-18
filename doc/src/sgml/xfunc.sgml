@@ -2923,14 +2923,18 @@ HeapTuple BuildTupleFromCStrings(AttInMetadata *attinmeta, char **values)
 
     <para>
      Once you have built a tuple to return from your function, it
-     must be converted into a <type>Datum</type>. Use:
+     must be converted into a <type>Datum</type>. Use one of the following:
 <programlisting>
 HeapTupleGetDatum(HeapTuple tuple)
+HeapTupleGetRawDatum(HeapTuple tuple)
 </programlisting>
      to convert a <structname>HeapTuple</structname> into a valid Datum.  This
      <type>Datum</type> can be returned directly if you intend to return
      just a single row, or it can be used as the current return value
-     in a set-returning function.
+     in a set-returning function. <literal>HeapTupleGetRawDatum</literal>
+     is more efficient and is preferred for new code, but the caller must
+     ensure that the tuple contains no external TOAST pointers. If this
+     is not certain, use <literal>HeapTupleGetDatum</literal>.
     </para>
 
     <para>

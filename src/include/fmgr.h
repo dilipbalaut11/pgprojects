@@ -372,7 +372,15 @@ extern struct varlena *pg_detoast_datum_packed(struct varlena *datum);
 #define PG_RETURN_TEXT_P(x)    PG_RETURN_POINTER(x)
 #define PG_RETURN_BPCHAR_P(x)  PG_RETURN_POINTER(x)
 #define PG_RETURN_VARCHAR_P(x) PG_RETURN_POINTER(x)
+
+/*
+ * A composite-type Datum must not contain external fields. To return a tuple
+ * that might, use PG_RETURN_HEAPTUPLEHEADER, which will build a replacement
+ * tuple without such fields if any are present. Otherwise, use
+ * PG_RETURN_HEAPTUPLEHEADER_RAW, which is slightly faster.
+ */
 #define PG_RETURN_HEAPTUPLEHEADER(x)  return HeapTupleHeaderGetDatum(x)
+#define PG_RETURN_HEAPTUPLEHEADER_RAW(x)  return HeapTupleHeaderGetRawDatum(x)
 
 
 /*-------------------------------------------------------------------------

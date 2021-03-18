@@ -207,6 +207,8 @@ extern TupleDesc build_function_result_tupdesc_t(HeapTuple procTuple);
  *
  * Macro declarations:
  * HeapTupleGetDatum(HeapTuple tuple) - convert a HeapTuple to a Datum.
+ * HeapTupleGetRawDatum(HeapTuple tuple) - same, but must have no external
+ *      TOAST pointer
  *
  * Obsolete routines and macros:
  * TupleDesc RelationNameGetTupleDesc(const char *relname) - Use to get a
@@ -219,6 +221,7 @@ extern TupleDesc build_function_result_tupdesc_t(HeapTuple procTuple);
  */
 
 #define HeapTupleGetDatum(tuple)		HeapTupleHeaderGetDatum((tuple)->t_data)
+#define HeapTupleGetRawDatum(tuple)		HeapTupleHeaderGetRawDatum((tuple)->t_data)
 /* obsolete version of above */
 #define TupleGetDatum(_slot, _tuple)	HeapTupleGetDatum(_tuple)
 
@@ -230,6 +233,17 @@ extern TupleDesc BlessTupleDesc(TupleDesc tupdesc);
 extern AttInMetadata *TupleDescGetAttInMetadata(TupleDesc tupdesc);
 extern HeapTuple BuildTupleFromCStrings(AttInMetadata *attinmeta, char **values);
 extern Datum HeapTupleHeaderGetDatum(HeapTupleHeader tuple);
+
+/*
+ * This is a faster version of HeapTupleHeaderGetDatum which can be used
+ * when it is known that no external TOAST pointers are present.
+ */
+static inline Datum
+HeapTupleHeaderGetRawDatum(HeapTupleHeader tuple)
+{
+	Assert(!HeapTupleHeaderHasExternal(tuple));
+	return PointerGetDatum(tuple);
+}
 
 
 /*----------

@@ -218,6 +218,25 @@ CREATE TABLE cminh(f1 TEXT COMPRESSION lz4) INHERITS(cmdata);
 NOTICE:  merging column "f1" with inherited definition
 ERROR:  column "f1" has a compression method conflict
 DETAIL:  pglz versus lz4
+-- test default_toast_compression GUC
+SET default_toast_compression = '';
+ERROR:  invalid value for parameter "default_toast_compression": ""
+DETAIL:  default_toast_compression cannot be empty.
+SET default_toast_compression = 'I do not exist compression';
+ERROR:  invalid value for parameter "default_toast_compression": "I do not exist compression"
+DETAIL:  Compression method "I do not exist compression" does not exist.
+SET default_toast_compression = 'lz4';
+ERROR:  unsupported LZ4 compression method
+DETAIL:  This functionality requires the server to be built with lz4 support.
+HINT:  You need to rebuild PostgreSQL using --with-lz4.
+DROP TABLE cmdata2;
+CREATE TABLE cmdata2 (f1 text);
+\d+ cmdata2
+                                        Table "public.cmdata2"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | pglz        |              | 
+
 -- check data is ok
 SELECT length(f1) FROM cmdata;
  length 

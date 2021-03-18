@@ -735,7 +735,7 @@ DefineAttr(char *name, char *type, int attnum, int nullness)
 	attrtypes[attnum]->atttypmod = -1;
 	attrtypes[attnum]->attislocal = true;
 	if (IsStorageCompressible(attrtypes[attnum]->attstorage))
-		attrtypes[attnum]->attcompression = DefaultCompressionMethod;
+		attrtypes[attnum]->attcompression = GetDefaultToastCompression();
 	else
 		attrtypes[attnum]->attcompression = InvalidCompressionMethod;
 

@@ -22,6 +22,9 @@
 #include "fmgr.h"
 #include "utils/builtins.h"
 
+/* Compile-time default */
+char	   *default_toast_compression = DEFAULT_TOAST_COMPRESSION;
+
 /*
  * pglz_cmcompress - compression routine for pglz compression method
  *
@@ -241,4 +244,49 @@ lz4_cmdecompress_slice(const struct varlena *value, int32 slicelength)
 
 	return result;
 #endif
+}
+
+/*
+ * check_default_toast_compression - validate new default_toast_compression
+ */
+bool
+check_default_toast_compression(char **newval, void **extra, GucSource source)
+{
+	if (**newval == '\0')
+	{
+		GUC_check_errdetail("%s cannot be empty.",
+							"default_toast_compression");
+		return false;
+	}
+
+	if (strlen(*newval) >= NAMEDATALEN)
+	{
+		GUC_check_errdetail("%s is too long (maximum %d characters).",
+							"default_toast_compression", NAMEDATALEN - 1);
+		return false;
+	}
+
+	if (!CompressionMethodIsValid(CompressionNameToMethod(*newval)))
+	{
+		/*
+		 * When source == PGC_S_TEST, don't throw a hard error for a
+		 * nonexistent compression method, only a NOTICE. See comments in
+		 * guc.h.
+		 */
+		if (source == PGC_S_TEST)
+		{
+			ereport(NOTICE,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("compression method \"%s\" does not exist",
+							*newval)));
+		}
+		else
+		{
+			GUC_check_errdetail("Compression method \"%s\" does not exist.",
+								*newval);
+			return false;
+		}
+	}
+
+	return true;
 }

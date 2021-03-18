@@ -11931,7 +11931,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 		if (!IsStorageCompressible(tform->typstorage))
 			attTup->attcompression = InvalidCompressionMethod;
 		else if (!CompressionMethodIsValid(attTup->attcompression))
-			attTup->attcompression = DefaultCompressionMethod;
+			attTup->attcompression = GetDefaultToastCompression();
 	}
 	else
 		attTup->attcompression = InvalidCompressionMethod;
@@ -17745,9 +17745,9 @@ GetAttributeCompression(Form_pg_attribute att, char *compression)
 
 	/* fallback to default compression if it's not specified */
 	if (compression == NULL)
-		return DefaultCompressionMethod;
-
-	cmethod = CompressionNameToMethod(compression);
+		cmethod = GetDefaultToastCompression();
+	else
+		cmethod = CompressionNameToMethod(compression);
 
 	return cmethod;
 }

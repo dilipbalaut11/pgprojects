@@ -13,6 +13,14 @@
 #ifndef TOAST_COMPRESSION_H
 #define TOAST_COMPRESSION_H
 
+#include "utils/guc.h"
+
+/* GUCs */
+extern char *default_toast_compression;
+
+/* default compression method if not specified. */
+#define DEFAULT_TOAST_COMPRESSION	"pglz"
+
 /*
  * Built-in compression method-id.  The toast compression header will store
  * this in the first 2 bits of the raw length.  These built-in compression
@@ -42,8 +50,6 @@ typedef enum ToastCompressionId
 			 errdetail("This functionality requires the server to be built with lz4 support."), \
 			 errhint("You need to rebuild PostgreSQL using --with-lz4.")))
 
-/* use default compression method if it is not specified. */
-#define DefaultCompressionMethod TOAST_PGLZ_COMPRESSION
 #define IsValidCompression(cm)  ((cm) != InvalidCompressionMethod)
 
 #define IsStorageCompressible(storage) ((storage) != TYPSTORAGE_PLAIN && \
@@ -88,6 +94,17 @@ CompressionNameToMethod(char *compression)
 	return InvalidCompressionMethod;
 }
 
+/*
+ * GetDefaultToastCompression -- get the current toast compression
+ *
+ * This exists to hide the use of the default_toast_compression GUC variable.
+ */
+static inline char
+GetDefaultToastCompression(void)
+{
+	return CompressionNameToMethod(default_toast_compression);
+}
+
 /* pglz compression/decompression routines */
 extern struct varlena *pglz_cmcompress(const struct varlena *value);
 extern struct varlena *pglz_cmdecompress(const struct varlena *value);
@@ -99,5 +116,8 @@ extern struct varlena *lz4_cmcompress(const struct varlena *value);
 extern struct varlena *lz4_cmdecompress(const struct varlena *value);
 extern struct varlena *lz4_cmdecompress_slice(const struct varlena *value,
 											  int32 slicelength);
+
+extern bool check_default_toast_compression(char **newval, void **extra,
+											GucSource source);
 
 #endif							/* TOAST_COMPRESSION_H */

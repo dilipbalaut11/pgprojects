@@ -15,6 +15,7 @@
 
 #include "access/xlogdefs.h"
 #include "storage/lwlock.h"
+#include "utils/hsearch.h"
 
 
 /*
@@ -109,6 +110,7 @@ typedef SlruSharedData *SlruShared;
 typedef struct SlruCtlData
 {
 	SlruShared	shared;
+	HTAB	   *mapping_table;
 
 	/*
 	 * This flag tells whether to fsync writes (true for pg_xact and multixact

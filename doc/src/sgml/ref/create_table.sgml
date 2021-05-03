@@ -289,7 +289,7 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
    </varlistentry>
 
    <varlistentry>
-    <term><literal>COMPRESSION <replaceable class="parameter">compression_method</replaceable></literal></term>
+    <term><literal>COMPRESSION <replaceable class="parameter">compression_method</replaceable> [ WITH (<replaceable class="parameter">compression_options</replaceable>) ]</literal></term>
     <listitem>
      <para>
       The <literal>COMPRESSION</literal> clause sets the compression method
@@ -303,7 +303,8 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       <literal>lz4</literal>.  <literal>lz4</literal> is available only if
       <literal>--with-lz4</literal> was used when building
       <productname>PostgreSQL</productname>. The default
-      is <literal>pglz</literal>.
+      is <literal>pglz</literal>.  The compression options can be specified
+      using <literal>WITH</literal> parameter.
      </para>
     </listitem>
    </varlistentry>

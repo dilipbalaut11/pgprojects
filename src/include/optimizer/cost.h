@@ -169,6 +169,8 @@ extern void cost_gather_merge(GatherMergePath *path, PlannerInfo *root,
 							  RelOptInfo *rel, ParamPathInfo *param_info,
 							  Cost input_startup_cost, Cost input_total_cost,
 							  double *rows);
+extern void cost_redistribute(RedistributePath *path, PlannerInfo *root,
+							  RelOptInfo *rel, ParamPathInfo *param_info);
 extern void cost_subplan(PlannerInfo *root, SubPlan *subplan, Plan *plan);
 extern void cost_qual_eval(QualCost *cost, List *quals, PlannerInfo *root);
 extern void cost_qual_eval_node(QualCost *cost, Node *qual, PlannerInfo *root);

@@ -2654,6 +2654,31 @@ generate_gather_paths(PlannerInfo *root, RelOptInfo *rel, bool override_rows)
 }
 
 /*
+ * Generate redistribute paths over partial paths.
+ */
+void
+generate_redistribute_paths(PlannerInfo *root, RelOptInfo *rel)
+{
+	Path	   *cheapest_partial_path;
+	Path	   *redistribute_path;
+
+	/* If there are no partial paths, there's nothing to do here. */
+	if (rel->partial_pathlist == NIL)
+		return;
+
+	/*
+	 * The output of Gather is always unsorted, so there's only one partial
+	 * path of interest: the cheapest one.  That will be the one at the front
+	 * of partial_pathlist because of the way add_partial_path works.
+	 */
+	cheapest_partial_path = linitial(rel->partial_pathlist);
+	redistribute_path = (Path *)
+		create_redistribute_path(root, rel, cheapest_partial_path,
+								 rel->reltarget, NULL);
+	add_path(rel, redistribute_path);
+}
+
+/*
  * get_useful_pathkeys_for_relation
  *		Determine which orderings of a relation might be useful.
  *

@@ -62,6 +62,10 @@ extern void create_partial_bitmap_paths(PlannerInfo *root, RelOptInfo *rel,
 										Path *bitmapqual);
 extern void generate_partitionwise_join_paths(PlannerInfo *root,
 											  RelOptInfo *rel);
+extern RedistributePath *create_redistribute_path(PlannerInfo *root,
+									RelOptInfo *rel, Path *subpath,
+				   		 			PathTarget *target, Relids required_outer);
+extern void generate_redistribute_paths(PlannerInfo *root, RelOptInfo *rel);
 
 #ifdef OPTIMIZER_DEBUG
 extern void debug_print_rel(PlannerInfo *root, RelOptInfo *rel);

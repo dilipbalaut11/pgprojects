@@ -470,6 +470,35 @@ cost_gather_merge(GatherMergePath *path, PlannerInfo *root,
 }
 
 /*
+ * cost_redistribute
+ *	  Determines and returns the cost of redistribute path.
+ *
+ * 'rel' is the relation to be operated upon
+ * 'param_info' is the ParamPathInfo if this is a parameterized path, else NULL
+ */
+void
+cost_redistribute(RedistributePath *path, PlannerInfo *root,
+				  RelOptInfo *rel, ParamPathInfo *param_info)
+{
+	Cost		startup_cost = 0;
+	Cost		run_cost = 0;
+
+	path->path.rows = path->subpath->rows;
+
+	startup_cost = path->subpath->startup_cost;
+
+	run_cost = path->subpath->total_cost - path->subpath->startup_cost;
+
+	/* TODO : Redistribute setup and communication cost. */
+
+	/* TODO : what is the redistribute cost ?? */
+	/* run_cost += 0.001 * path->path.rows; */
+
+	path->path.startup_cost = startup_cost;
+	path->path.total_cost = (startup_cost + run_cost);
+}
+
+/*
  * cost_index
  *	  Determines and returns the cost of scanning a relation using an index.
  *

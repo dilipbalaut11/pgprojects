@@ -1985,6 +1985,34 @@ create_gather_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 }
 
 /*
+ * create_redistribute_path - create redistribute path.
+ */
+RedistributePath *
+create_redistribute_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
+				   		 PathTarget *target, Relids required_outer)
+{
+	RedistributePath *pathnode = makeNode(RedistributePath);
+
+	Assert(subpath->parallel_safe);
+
+	pathnode->path.pathtype = T_Redistribute;
+	pathnode->path.parent = rel;
+	pathnode->path.pathtarget = target;
+	pathnode->path.param_info = get_baserel_parampathinfo(root, rel,
+														  required_outer);
+	pathnode->path.parallel_aware = true;
+	pathnode->path.parallel_safe = true;
+	pathnode->path.parallel_workers = subpath->parallel_workers;
+	pathnode->path.pathkeys = NIL;	/* Gather has unordered result */
+
+	pathnode->subpath = subpath;
+
+	cost_redistribute(pathnode, root, rel, pathnode->path.param_info);
+
+	return pathnode;
+}
+
+/*
  * create_subqueryscan_path
  *	  Creates a path corresponding to a scan of a subquery,
  *	  returning the pathnode.

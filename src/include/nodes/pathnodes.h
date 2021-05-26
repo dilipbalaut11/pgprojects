@@ -1565,6 +1565,17 @@ typedef struct GatherMergePath
 	int			num_workers;	/* number of workers sought to help */
 } GatherMergePath;
 
+/*
+ * RedistributePath path built over the partial paths and redistribute the
+ * data across the worker based on the tuple key.
+ */
+typedef struct RedistributePath
+{
+	Path		path;
+	Path	   *subpath;		/* path for each worker */
+
+	/* TODO: add other field required for redistribution */
+} RedistributePath;
 
 /*
  * All join-type paths share these fields.

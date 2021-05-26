@@ -240,6 +240,13 @@ static void create_partitionwise_grouping_paths(PlannerInfo *root,
 												grouping_sets_data *gd,
 												PartitionwiseAggregateType patype,
 												GroupPathExtraData *extra);
+static void create_redistribute_grouping_paths(PlannerInfo *root,
+											   RelOptInfo *input_rel,
+											   RelOptInfo *grouped_rel,
+											   RelOptInfo *partially_grouped_rel,
+											   const AggClauseCosts *agg_costs,
+											   grouping_sets_data *gd,
+											   GroupPathExtraData *extra);
 static bool group_by_has_partkey(RelOptInfo *input_rel,
 								 List *targetList,
 								 List *groupClause);
@@ -3612,6 +3619,22 @@ create_ordinary_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	{
 		gather_grouping_paths(root, partially_grouped_rel);
 		set_cheapest(partially_grouped_rel);
+	}
+
+	/* Gather any partially grouped partial paths. */
+	if (partially_grouped_rel && partially_grouped_rel->partial_pathlist)
+	{
+		Assert(partially_grouped_rel);
+
+		create_redistribute_grouping_paths(root, input_rel, grouped_rel,
+											partially_grouped_rel, agg_costs,
+											gd, extra);
+		gather_grouping_paths(root, partially_grouped_rel);
+
+		if (partially_grouped_rel->pathlist)
+			set_cheapest(partially_grouped_rel);
+
+		return;
 	}
 
 	/*
@@ -7203,6 +7226,74 @@ create_partitionwise_grouping_paths(PlannerInfo *root,
 		Assert(grouped_live_children != NIL);
 
 		add_paths_to_append_rel(root, grouped_rel, grouped_live_children);
+	}
+}
+
+/*
+ * First create redistribute paths and on top of that add finalize aggregate path.
+ */
+static void
+create_redistribute_grouping_paths(PlannerInfo *root,
+								   RelOptInfo *input_rel,
+								   RelOptInfo *grouped_rel,
+								   RelOptInfo *partially_grouped_rel,
+								   const AggClauseCosts *agg_costs,
+								   grouping_sets_data *gd,
+								   GroupPathExtraData *extra)
+{
+	Query	   *parse = root->parse;
+	Path	   *cheapest_partial_path;
+	double		dNumPartialPartialGroups;
+	bool		can_sort = (extra->flags & GROUPING_CAN_USE_SORT) != 0;
+
+	/* 1.  -----create redistribute path-----*/
+	generate_redistribute_paths(root, partially_grouped_rel);
+
+	/* 2.  -----generate final aggregate atop redistribute operator-----*/
+	cheapest_partial_path = linitial(input_rel->partial_pathlist);
+	dNumPartialPartialGroups = get_number_of_groups(root,
+									cheapest_partial_path->rows,
+									gd,
+									extra->targetList);
+
+	if (can_sort)
+	{
+		bool is_sorted;
+		Path *path = cheapest_partial_path;
+
+		/* This should have been checked previously */
+		Assert(parse->hasAggs || parse->groupClause);
+
+		is_sorted = pathkeys_contained_in(root->group_pathkeys,
+											  path->pathkeys);
+		/* Sort the cheapest partial path, if it isn't already */
+		if (!is_sorted)
+			path = (Path *) create_sort_path(root,
+												partially_grouped_rel,
+												path,
+												root->group_pathkeys,
+												-1.0);
+
+		if (parse->hasAggs)
+			add_path(partially_grouped_rel, (Path *)
+						create_agg_path(root,
+										partially_grouped_rel,
+										path,
+										partially_grouped_rel->reltarget,
+										parse->groupClause ? AGG_SORTED : AGG_PLAIN,
+										AGGSPLIT_INITIAL_SERIAL,
+										parse->groupClause,
+										NIL,
+										agg_costs,
+										dNumPartialPartialGroups));
+		else
+			add_path(partially_grouped_rel, (Path *)
+						create_group_path(root,
+										partially_grouped_rel,
+										path,
+										parse->groupClause,
+										NIL,
+										dNumPartialPartialGroups));
 	}
 }
 

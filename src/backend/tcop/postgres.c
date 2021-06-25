@@ -35,6 +35,7 @@
 #include "commands/async.h"
 #include "commands/prepare.h"
 #include "common/pg_prng.h"
+#include "crypto/bufenc.h"
 #include "crypto/kmgr.h"
 #include "jit/jit.h"
 #include "libpq/libpq.h"
@@ -4076,6 +4077,7 @@ PostgresMain(const char *dbname, const char *username)
 	if (!IsUnderPostmaster)
 	{
 		InitializeKmgr();
+		InitializeBufferEncryption();
 
 		if (terminal_fd != -1)
 			close(terminal_fd);

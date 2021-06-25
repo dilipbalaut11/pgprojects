@@ -39,6 +39,7 @@
 #include "catalog/catalog.h"
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
+#include "crypto/bufenc.h"
 #include "executor/instrument.h"
 #include "lib/binaryheap.h"
 #include "miscadmin.h"
@@ -1029,7 +1030,9 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			}
 
 			/* check for garbage data */
-			if (!PageIsVerifiedExtended((Page) bufBlock, blockNum,
+			if (!PageIsVerifiedExtended((Page) bufBlock, forkNum,
+										relpersistence == RELPERSISTENCE_PERMANENT,
+										blockNum,
 										PIV_LOG_WARNING | PIV_REPORT_STAT))
 			{
 				if (mode == RBM_ZERO_ON_ERROR || zero_damaged_pages)
@@ -2893,12 +2896,24 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	 */
 	bufBlock = BufHdrGetBlock(buf);
 
+	if (FileEncryptionEnabled)
+	{
+		/*
+		 * Technically BM_PERMANENT could indicate an init fork, but that's
+		 * okay since forkNum would also tell us not to encrypt init forks.
+		 */
+		bufToWrite = PageEncryptCopy((Page) bufBlock, buf->tag.forkNum,
+									 buf_state & BM_PERMANENT, buf->tag.blockNum);
+		bufToWrite = PageSetChecksumCopy((Page) bufToWrite, buf->tag.blockNum);
+	}
+	else
+		bufToWrite = PageSetChecksumCopy((Page) bufBlock, buf->tag.blockNum);
+
 	/*
 	 * Update page checksum if desired.  Since we have only shared lock on the
 	 * buffer, other processes might be updating hint bits in it, so we must
 	 * copy the page to private storage if we do checksumming.
 	 */
-	bufToWrite = PageSetChecksumCopy((Page) bufBlock, buf->tag.blockNum);
 
 	if (track_io_timing)
 		INSTR_TIME_SET_CURRENT(io_start);
@@ -3543,6 +3558,9 @@ FlushRelationBuffers(Relation rel)
 				errcallback.previous = error_context_stack;
 				error_context_stack = &errcallback;
 
+				/* XXX should we be writing a copy of the page here? */
+				PageEncryptInplace(localpage, bufHdr->tag.forkNum,
+								   RelationIsPermanent(rel), bufHdr->tag.blockNum);
 				PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
 				smgrwrite(RelationGetSmgr(rel),

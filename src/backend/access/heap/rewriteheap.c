@@ -324,6 +324,9 @@ end_heap_rewrite(RewriteState state)
 						state->rs_buffer,
 						true);
 
+		PageEncryptInplace(state->rs_buffer, MAIN_FORKNUM,
+						   RelationIsPermanent(state->rs_new_rel),
+						   state->rs_blockno);
 		PageSetChecksumInplace(state->rs_buffer, state->rs_blockno);
 
 		smgrextend(RelationGetSmgr(state->rs_new_rel), MAIN_FORKNUM,
@@ -690,8 +693,12 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 			 * need for smgr to schedule an fsync for this write; we'll do it
 			 * ourselves in end_heap_rewrite.
 			 */
+			PageEncryptInplace(page, MAIN_FORKNUM,
+							   RelationIsPermanent(state->rs_new_rel),
+							   state->rs_blockno);
 			PageSetChecksumInplace(page, state->rs_blockno);
 
+			/* XXX - is this still needed? */
 			smgrextend(RelationGetSmgr(state->rs_new_rel), MAIN_FORKNUM,
 					   state->rs_blockno, (char *) page, true);
 

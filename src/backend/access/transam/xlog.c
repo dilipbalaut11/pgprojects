@@ -71,6 +71,7 @@
 #include "common/file_utils.h"
 #include "crypto/kmgr.h"
 #include "executor/instrument.h"
+#include "crypto/bufenc.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "pgstat.h"
@@ -4832,6 +4833,7 @@ BootStrapXLOG(void)
 	WriteControlFile();
 
 	BootStrapKmgr();
+	InitializeBufferEncryption();
 
 	if (terminal_fd != -1)
 	{

@@ -253,6 +253,9 @@ InitializeKmgr(void)
 	char		live_path[MAXPGPATH];
 	unsigned char cluster_key[KMGR_CLUSTER_KEY_LEN];
 
+	if (!FileEncryptionEnabled)
+		return;
+
 #ifndef USE_OPENSSL
 	ereport(ERROR,
 			(errcode(ERRCODE_CONFIG_FILE_ERROR),

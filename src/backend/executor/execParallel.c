@@ -51,6 +51,7 @@
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
 
+int			parallel_tuple_queue_size =	65536;
 /*
  * Magic numbers for parallel executor communication.  We use constants
  * greater than any 32-bit integer here so that values < 2^32 can be used
@@ -67,7 +68,7 @@
 #define PARALLEL_KEY_JIT_INSTRUMENTATION UINT64CONST(0xE000000000000009)
 #define PARALLEL_KEY_WAL_USAGE			UINT64CONST(0xE00000000000000A)
 
-#define PARALLEL_TUPLE_QUEUE_SIZE		65536
+#define PARALLEL_TUPLE_QUEUE_SIZE		parallel_tuple_queue_size * 1024L
 
 /*
  * Fixed-size random stuff that we need to pass to parallel workers.

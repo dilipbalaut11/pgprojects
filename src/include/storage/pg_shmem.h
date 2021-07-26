@@ -45,6 +45,7 @@ typedef struct PGShmemHeader	/* standard header for all Postgres shmem */
 extern int	shared_memory_type;
 extern int	huge_pages;
 extern int	huge_page_size;
+extern int	parallel_tuple_queue_size;
 
 /* Possible values for huge_pages */
 typedef enum

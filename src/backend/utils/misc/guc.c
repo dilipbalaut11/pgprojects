@@ -3334,6 +3334,17 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"parallel_tuple_queue_size", PGC_USERSET, RESOURCES_MEM,
+			gettext_noop("Sets the parallel tuplee queue size."),
+			gettext_noop("This includes parallel operation."),
+			GUC_UNIT_KB
+		},
+		&parallel_tuple_queue_size,
+		64, 64, MAX_KILOBYTES,
+		NULL, NULL, NULL
+	},	
+
+	{
 		{"autovacuum_work_mem", PGC_SIGHUP, RESOURCES_MEM,
 			gettext_noop("Sets the maximum memory to be used by each autovacuum worker process."),
 			NULL,

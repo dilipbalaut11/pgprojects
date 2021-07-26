@@ -25,6 +25,7 @@
 #include "storage/procsignal.h"
 #include "storage/shm_mq.h"
 #include "storage/spin.h"
+#include "utils/utils.h"
 #include "utils/memutils.h"
 
 /*
@@ -80,6 +81,32 @@ struct shm_mq
 	bool		mq_detached;
 	uint8		mq_ring_offset;
 	char		mq_ring[FLEXIBLE_ARRAY_MEMBER];
+};
+
+#define SHM_MAX_SLOT		4
+#define	SHM_MQ_SLOT_EMPTY	0
+#define	SHM_MQ_SLOT_ALLOCATED	1
+#define SHM_MQ_SLOT_FULL	2
+
+struct shm_mq_slot
+{
+	uint8		status;
+	dsa_pointer	dp;
+};
+
+struct shm_mq_ex
+{
+	slock_t		mq_mutex;
+	PGPROC	   *mq_receiver;
+	PGPROC	   *mq_sender;
+	pg_atomic_uint64 mq_bytes_read;
+	pg_atomic_uint64 mq_bytes_written;
+	Size		mq_ring_size;
+	bool		mq_detached;
+	uint8		mq_ring_offset;
+	uint8		next_read_slot;
+	uint8		next_write_slot;
+	struct		shm_mq_slot ring_slot[4];
 };
 
 /*
@@ -141,6 +168,8 @@ struct shm_mq_handle
 	Size		mqh_expected_bytes;
 	bool		mqh_length_word_complete;
 	bool		mqh_counterparty_attached;
+	char	   *write_buffer;				/* local pointer for current write dsa pointer */
+	char	   *read_buffer;				/* local pointer for current read dsa pointer */
 	MemoryContext mqh_context;
 };
 
@@ -188,6 +217,31 @@ shm_mq_create(void *address, Size size)
 	mq->mq_ring_size = size - data_offset;
 	mq->mq_detached = false;
 	mq->mq_ring_offset = data_offset - offsetof(shm_mq, mq_ring);
+
+	return mq;
+}
+
+/*
+ * Initialize a new shared message queue.
+ */
+shm_mq *
+shm_mq_create_ex(void *address, Size size)
+{
+	shm_mq_ex	   *mq = address;
+	int i = 0;
+
+
+	/* Initialize queue header. */
+	SpinLockInit(&mq->mq_mutex);
+
+	mq->mq_receiver = NULL;
+	mq->mq_sender = NULL;
+	mq->mq_detached = false;
+	
+	for (i = 0; i < SHM_MAX_SLOT; i++)
+	{
+		mq->ring_slot[i].status = SHM_MQ_SLOT_EMPTY;
+	}
 
 	return mq;
 }

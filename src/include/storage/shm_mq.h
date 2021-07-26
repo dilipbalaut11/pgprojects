@@ -21,6 +21,9 @@
 struct shm_mq;
 typedef struct shm_mq shm_mq;
 
+struct shm_mq_ex;
+typedef struct shm_mq_ex shm_mq_ex;
+
 /* Backend-private state. */
 struct shm_mq_handle;
 typedef struct shm_mq_handle shm_mq_handle;

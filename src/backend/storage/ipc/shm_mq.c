@@ -79,6 +79,15 @@ struct shm_mq
 	Size		mq_ring_size;
 	bool		mq_detached;
 	uint8		mq_ring_offset;
+
+	/* new parameter start */
+	uint8		max_queue;
+	uint8		write_active_queue;
+	uint8		read_active_queue;
+	uint64		bytes_read;
+	uint64		bytes_written;
+	Size		data_size;	/* mq_ring_size / number of queue */
+	/* new parameter end */
 	char		mq_ring[FLEXIBLE_ARRAY_MEMBER];
 };
 
@@ -150,6 +159,11 @@ static shm_mq_result shm_mq_send_bytes(shm_mq_handle *mqh, Size nbytes,
 static shm_mq_result shm_mq_receive_bytes(shm_mq_handle *mqh,
 										  Size bytes_needed, bool nowait, Size *nbytesp,
 										  void **datap);
+static shm_mq_result shm_mq_send_bytes_ex(shm_mq_handle *mqh, Size nbytes,
+									   const void *data, bool nowait, Size *bytes_written);
+static shm_mq_result shm_mq_receive_bytes_ex(shm_mq_handle *mqh,
+										  Size bytes_needed, bool nowait, Size *nbytesp,
+										  void **datap);										  
 static bool shm_mq_counterparty_gone(shm_mq *mq,
 									 BackgroundWorkerHandle *handle);
 static bool shm_mq_wait_internal(shm_mq *mq, PGPROC **ptr,
@@ -188,6 +202,13 @@ shm_mq_create(void *address, Size size)
 	mq->mq_ring_size = size - data_offset;
 	mq->mq_detached = false;
 	mq->mq_ring_offset = data_offset - offsetof(shm_mq, mq_ring);
+
+	mq->max_queue = 4;
+	mq->write_active_queue = 0;
+	mq->read_active_queue = 0;
+	mq->bytes_read = 0;
+	mq->bytes_written = 0;
+	mq->data_size = mq->mq_ring_size/mq->max_queue;
 
 	return mq;
 }
@@ -355,6 +376,7 @@ shm_mq_sendv(shm_mq_handle *mqh, shm_mq_iovec *iov, int iovcnt, bool nowait)
 	int			i;
 	int			which_iov = 0;
 	Size		offset;
+	uint8		prev_write_queue;
 
 	Assert(mq->mq_sender == MyProc);
 
@@ -369,11 +391,13 @@ shm_mq_sendv(shm_mq_handle *mqh, shm_mq_iovec *iov, int iovcnt, bool nowait)
 				 errmsg("cannot send a message of size %zu via shared memory queue",
 						nbytes)));
 
+	prev_write_queue = mq->write_active_queue;
+
 	/* Try to write, or finish writing, the length word into the buffer. */
 	while (!mqh->mqh_length_word_complete)
 	{
 		Assert(mqh->mqh_partial_bytes < sizeof(Size));
-		res = shm_mq_send_bytes(mqh, sizeof(Size) - mqh->mqh_partial_bytes,
+		res = shm_mq_send_bytes_ex(mqh, sizeof(Size) - mqh->mqh_partial_bytes,
 								((char *) &nbytes) + mqh->mqh_partial_bytes,
 								nowait, &bytes_written);
 
@@ -452,7 +476,7 @@ shm_mq_sendv(shm_mq_handle *mqh, shm_mq_iovec *iov, int iovcnt, bool nowait)
 				}
 			}
 
-			res = shm_mq_send_bytes(mqh, j, tmpbuf, nowait, &bytes_written);
+			res = shm_mq_send_bytes_ex(mqh, j, tmpbuf, nowait, &bytes_written);
 
 			if (res == SHM_MQ_DETACHED)
 			{
@@ -476,7 +500,7 @@ shm_mq_sendv(shm_mq_handle *mqh, shm_mq_iovec *iov, int iovcnt, bool nowait)
 		chunksize = iov[which_iov].len - offset;
 		if (which_iov + 1 < iovcnt)
 			chunksize = MAXALIGN_DOWN(chunksize);
-		res = shm_mq_send_bytes(mqh, chunksize, &iov[which_iov].data[offset],
+		res = shm_mq_send_bytes_ex(mqh, chunksize, &iov[which_iov].data[offset],
 								nowait, &bytes_written);
 
 		if (res == SHM_MQ_DETACHED)
@@ -519,7 +543,9 @@ shm_mq_sendv(shm_mq_handle *mqh, shm_mq_iovec *iov, int iovcnt, bool nowait)
 	}
 
 	/* Notify receiver of the newly-written data, and return. */
-	SetLatch(&receiver->procLatch);
+	/* only if the write queue is changed */
+	if(prev_write_queue != mq->write_active_queue)
+		SetLatch(&receiver->procLatch);
 	return SHM_MQ_SUCCESS;
 }
 
@@ -610,7 +636,7 @@ shm_mq_receive(shm_mq_handle *mqh, Size *nbytesp, void **datap, bool nowait)
 	{
 		/* Try to receive the message length word. */
 		Assert(mqh->mqh_partial_bytes < sizeof(Size));
-		res = shm_mq_receive_bytes(mqh, sizeof(Size) - mqh->mqh_partial_bytes,
+		res = shm_mq_receive_bytes_ex(mqh, sizeof(Size) - mqh->mqh_partial_bytes,
 								   nowait, &rb, &rawdata);
 		if (res != SHM_MQ_SUCCESS)
 			return res;
@@ -702,7 +728,7 @@ shm_mq_receive(shm_mq_handle *mqh, Size *nbytesp, void **datap, bool nowait)
 		 * we need not copy the data and can return a pointer directly into
 		 * shared memory.
 		 */
-		res = shm_mq_receive_bytes(mqh, nbytes, nowait, &rb, &rawdata);
+		res = shm_mq_receive_bytes_ex(mqh, nbytes, nowait, &rb, &rawdata);
 		if (res != SHM_MQ_SUCCESS)
 			return res;
 		if (rb >= nbytes)
@@ -757,7 +783,7 @@ shm_mq_receive(shm_mq_handle *mqh, Size *nbytesp, void **datap, bool nowait)
 		 * padding except at the end of a message, because the buffer size is
 		 * a multiple of MAXIMUM_ALIGNOF, and each read and write is as well.
 		 */
-		Assert(mqh->mqh_partial_bytes == nbytes || rb == MAXALIGN(rb));
+		//Assert(mqh->mqh_partial_bytes == nbytes || rb == MAXALIGN(rb));
 		mqh->mqh_consume_pending += MAXALIGN(rb);
 
 		/* If we got all the data, exit the loop. */
@@ -766,7 +792,7 @@ shm_mq_receive(shm_mq_handle *mqh, Size *nbytesp, void **datap, bool nowait)
 
 		/* Wait for some more data. */
 		still_needed = nbytes - mqh->mqh_partial_bytes;
-		res = shm_mq_receive_bytes(mqh, still_needed, nowait, &rb, &rawdata);
+		res = shm_mq_receive_bytes_ex(mqh, still_needed, nowait, &rb, &rawdata);
 		if (res != SHM_MQ_SUCCESS)
 			return res;
 		if (rb > still_needed)
@@ -1021,6 +1047,249 @@ shm_mq_send_bytes(shm_mq_handle *mqh, Size nbytes, const void *data,
 
 	*bytes_written = sent;
 	return SHM_MQ_SUCCESS;
+}
+
+/*
+ * Write bytes into a shared message queue.
+ */
+static shm_mq_result
+shm_mq_send_bytes_ex(shm_mq_handle *mqh, Size nbytes, const void *data,
+				  bool nowait, Size *bytes_written)
+{
+	shm_mq	   *mq = mqh->mqh_queue;
+	Size		sent = 0;
+	Size		ringsize = mq->data_size;
+	Size		available;
+
+	while (sent < nbytes)
+	{
+		available = Min(ringsize - mq->bytes_written, nbytes - sent);
+
+		pg_compiler_barrier();
+		if (mq->mq_detached)
+		{
+			*bytes_written = sent;
+			return SHM_MQ_DETACHED;
+		}
+
+		/* if there is no byte left then check he next free slot */
+		if (available == 0)
+		{
+			uint8 next_write_queue;
+
+			next_write_queue = (mq->write_active_queue + 1) % mq->max_queue;
+			if (next_write_queue != mq->read_active_queue)
+			{
+				mq->write_active_queue = next_write_queue;
+				mq->bytes_written = 0;
+				available = Min(ringsize - mq->bytes_written, nbytes - sent);
+			}
+		}
+
+		if (available == 0 && !mqh->mqh_counterparty_attached)
+		{
+			/*
+			 * The queue is full, so if the receiver isn't yet known to be
+			 * attached, we must wait for that to happen.
+			 */
+			if (nowait)
+			{
+				if (shm_mq_counterparty_gone(mq, mqh->mqh_handle))
+				{
+					*bytes_written = sent;
+					return SHM_MQ_DETACHED;
+				}
+				if (shm_mq_get_receiver(mq) == NULL)
+				{
+					*bytes_written = sent;
+					return SHM_MQ_WOULD_BLOCK;
+				}
+			}
+			else if (!shm_mq_wait_internal(mq, &mq->mq_receiver,
+										   mqh->mqh_handle))
+			{
+				mq->mq_detached = true;
+				*bytes_written = sent;
+				return SHM_MQ_DETACHED;
+			}
+			mqh->mqh_counterparty_attached = true;
+
+			/*
+			 * The receiver may have read some data after attaching, so we
+			 * must not wait without rechecking the queue state.
+			 */
+		}
+		else if (available == 0)
+		{
+			/*
+			 * Since mq->mqh_counterparty_attached is known to be true at this
+			 * point, mq_receiver has been set, and it can't change once set.
+			 * Therefore, we can read it without acquiring the spinlock.
+			 */
+			Assert(mqh->mqh_counterparty_attached);
+			SetLatch(&mq->mq_receiver->procLatch);
+
+			/* Skip manipulation of our latch if nowait = true. */
+			if (nowait)
+			{
+				*bytes_written = sent;
+				return SHM_MQ_WOULD_BLOCK;
+			}
+
+			/*
+			 * Wait for our latch to be set.  It might already be set for some
+			 * unrelated reason, but that'll just result in one extra trip
+			 * through the loop.  It's worth it to avoid resetting the latch
+			 * at top of loop, because setting an already-set latch is much
+			 * cheaper than setting one that has been reset.
+			 */
+			(void) WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, 0,
+							 WAIT_EVENT_MQ_SEND);
+
+			/* Reset the latch so we don't spin. */
+			ResetLatch(MyLatch);
+
+			/* An interrupt may have occurred while we were waiting. */
+			CHECK_FOR_INTERRUPTS();
+		}
+		else
+		{
+			Size		offset;
+			Size		sendnow;
+
+			offset = mq->write_active_queue * ringsize + mq->bytes_written;
+			sendnow = Min(available, ringsize - offset);
+
+			/*
+			 * Write as much data as we can via a single memcpy(). Make sure
+			 * these writes happen after the read of mq_bytes_read, above.
+			 * This barrier pairs with the one in shm_mq_inc_bytes_read.
+			 * (Since we're separating the read of mq_bytes_read from a
+			 * subsequent write to mq_ring, we need a full barrier here.)
+			 */
+			pg_memory_barrier();
+			memcpy(&mq->mq_ring[mq->mq_ring_offset + offset],
+				   (char *) data + sent, sendnow);
+			sent += sendnow;
+
+			/*
+			 * Update count of bytes written, with alignment padding.  Note
+			 * that this will never actually insert any padding except at the
+			 * end of a run of bytes, because the buffer size is a multiple of
+			 * MAXIMUM_ALIGNOF, and each read is as well.
+			 */
+			//Assert(sent == nbytes || sendnow == MAXALIGN(sendnow));
+
+			mq->bytes_written += sendnow;
+		}
+	}
+
+	*bytes_written = sent;
+	return SHM_MQ_SUCCESS;
+}
+
+static shm_mq_result
+shm_mq_receive_bytes_ex(shm_mq_handle *mqh, Size bytes_needed, bool nowait,
+					 Size *nbytesp, void **datap)
+{
+	shm_mq	   *mq = mqh->mqh_queue;
+	Size		ringsize = mq->data_size;
+	uint64		used;
+	uint64		written;
+
+	for (;;)
+	{
+		Size		offset;
+		uint64		read;
+
+		/* Get bytes written, so we can compute what's available to read. */
+		if (mq->write_active_queue % mq->max_queue >
+			mq->read_active_queue % mq->max_queue)
+			written = ringsize;
+		else
+			written = 0;
+
+		/*
+		 * Get bytes read.  Include bytes we could consume but have not yet
+		 * consumed.
+		 */
+		read = mq->bytes_read + mqh->mqh_consume_pending;
+		used = written - read;
+		Assert(used <= ringsize);
+		offset = mq->read_active_queue * ringsize + read;
+
+		/* If we have enough data or buffer has wrapped, we're done. */
+		if (used >= bytes_needed || offset + used >= ringsize)
+		{
+			*nbytesp = Min(used, ringsize - offset);
+			*datap = &mq->mq_ring[mq->mq_ring_offset + offset];
+
+			/*
+			 * Separate the read of mq_bytes_written, above, from caller's
+			 * attempt to read the data itself.  Pairs with the barrier in
+			 * shm_mq_inc_bytes_written.
+			 */
+			pg_read_barrier();
+			return SHM_MQ_SUCCESS;
+		}
+
+		/*
+		 * Fall out before waiting if the queue has been detached.
+		 *
+		 * Note that we don't check for this until *after* considering whether
+		 * the data already available is enough, since the receiver can finish
+		 * receiving a message stored in the buffer even after the sender has
+		 * detached.
+		 */
+		if (mq->mq_detached)
+		{
+			/*
+			 * If the writer advanced mq_bytes_written and then set
+			 * mq_detached, we might not have read the final value of
+			 * mq_bytes_written above.  Insert a read barrier and then check
+			 * again if mq_bytes_written has advanced.
+			 */
+			pg_read_barrier();
+			if (mq->read_active_queue != mq->write_active_queue)
+			{
+				mq->read_active_queue =
+					(mq->read_active_queue + 1) % mq->max_queue;
+				continue;
+			}
+
+			return SHM_MQ_DETACHED;
+		}
+
+		/*
+		 * We didn't get enough data to satisfy the request, so mark any data
+		 * previously-consumed as read to make more buffer space.
+		 */
+		if (mqh->mqh_consume_pending > 0)
+		{
+			mq->bytes_read += mqh->mqh_consume_pending;
+			mqh->mqh_consume_pending = 0;
+		}
+
+		/* Skip manipulation of our latch if nowait = true. */
+		if (nowait)
+			return SHM_MQ_WOULD_BLOCK;
+
+		/*
+		 * Wait for our latch to be set.  It might already be set for some
+		 * unrelated reason, but that'll just result in one extra trip through
+		 * the loop.  It's worth it to avoid resetting the latch at top of
+		 * loop, because setting an already-set latch is much cheaper than
+		 * setting one that has been reset.
+		 */
+		(void) WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, 0,
+						 WAIT_EVENT_MQ_RECEIVE);
+
+		/* Reset the latch so we don't spin. */
+		ResetLatch(MyLatch);
+
+		/* An interrupt may have occurred while we were waiting. */
+		CHECK_FOR_INTERRUPTS();
+	}
 }
 
 /*

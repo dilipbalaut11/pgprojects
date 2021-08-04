@@ -567,7 +567,7 @@ ExecParallelSetupTupleQueues(ParallelContext *pcxt, bool reinitialize)
 
 		mq = shm_mq_create(tqueuespace +
 						   ((Size) i) * PARALLEL_TUPLE_QUEUE_SIZE,
-						   (Size) PARALLEL_TUPLE_QUEUE_SIZE);
+						   (Size) PARALLEL_TUPLE_QUEUE_SIZE, 4096);
 
 		shm_mq_set_receiver(mq, MyProc);
 		responseq[i] = shm_mq_attach(mq, pcxt->seg, NULL);

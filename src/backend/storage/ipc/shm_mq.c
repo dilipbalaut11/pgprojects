@@ -139,8 +139,12 @@ struct shm_mq_handle
 	Size		mqh_consume_pending;
 	Size		mqh_partial_bytes;
 	Size		mqh_expected_bytes;
+	uint64		mqh_bytes_read;
+	uint64		mqh_bytes_written;
+	uint64		mqh_last_inform_bytes;
 	bool		mqh_length_word_complete;
 	bool		mqh_counterparty_attached;
+	bool		mqh_is_tuple_queue;
 	MemoryContext mqh_context;
 };
 
@@ -297,6 +301,10 @@ shm_mq_attach(shm_mq *mq, dsm_segment *seg, BackgroundWorkerHandle *handle)
 	mqh->mqh_length_word_complete = false;
 	mqh->mqh_counterparty_attached = false;
 	mqh->mqh_context = CurrentMemoryContext;
+	mqh->mqh_bytes_read = 0;
+	mqh->mqh_bytes_written = 0;
+	mqh->mqh_last_inform_bytes = 0;
+	mqh->mqh_is_tuple_queue = mq->mq_ring_size > 20000;
 
 	if (seg != NULL)
 		on_dsm_detach(seg, shm_mq_detach_callback, PointerGetDatum(mq));
@@ -519,7 +527,21 @@ shm_mq_sendv(shm_mq_handle *mqh, shm_mq_iovec *iov, int iovcnt, bool nowait)
 	}
 
 	/* Notify receiver of the newly-written data, and return. */
-	SetLatch(&receiver->procLatch);
+
+	/* if last write and now write diff is more than 4k set latch and update mq*/
+	if (mqh->mqh_is_tuple_queue)
+	{
+		if (mqh->mqh_bytes_written - mqh->mqh_last_inform_bytes > 4096)
+		{
+			pg_atomic_write_u64(&mq->mq_bytes_written,
+								mqh->mqh_bytes_written);
+			mqh->mqh_last_inform_bytes = mqh->mqh_bytes_written;
+			SetLatch(&receiver->procLatch);
+		}
+	}
+	else
+		SetLatch(&receiver->procLatch);
+
 	return SHM_MQ_SUCCESS;
 }
 
@@ -816,6 +838,16 @@ shm_mq_wait_for_attach(shm_mq_handle *mqh)
 void
 shm_mq_detach(shm_mq_handle *mqh)
 {
+
+	if (mqh->mqh_is_tuple_queue &&
+		mqh->mqh_bytes_written > pg_atomic_read_u64(&mqh->mqh_queue->mq_bytes_written))
+	{
+		pg_atomic_write_u64(&mqh->mqh_queue->mq_bytes_written,
+							mqh->mqh_bytes_written);
+		mqh->mqh_last_inform_bytes = mqh->mqh_bytes_written;
+		SetLatch(&mqh->mqh_queue->mq_receiver->procLatch);
+	}
+
 	/* Notify counterparty that we're outta here. */
 	shm_mq_detach_internal(mqh->mqh_queue);
 
@@ -886,15 +918,26 @@ shm_mq_send_bytes(shm_mq_handle *mqh, Size nbytes, const void *data,
 	uint64		used;
 	Size		ringsize = mq->mq_ring_size;
 	Size		available;
-
 	while (sent < nbytes)
 	{
 		uint64		rb;
 		uint64		wb;
 
 		/* Compute number of ring buffer bytes used and available. */
-		rb = pg_atomic_read_u64(&mq->mq_bytes_read);
-		wb = pg_atomic_read_u64(&mq->mq_bytes_written);
+		if (mqh->mqh_is_tuple_queue)
+		{
+			wb = mqh->mqh_bytes_written;
+			rb = mqh->mqh_bytes_read;
+
+			if ((ringsize - (wb-rb)) < nbytes)
+				mqh->mqh_bytes_read = rb = pg_atomic_read_u64(&mq->mq_bytes_read);
+		}
+		else
+		{
+			wb = pg_atomic_read_u64(&mq->mq_bytes_written);
+			rb = pg_atomic_read_u64(&mq->mq_bytes_read);
+		}
+
 		Assert(wb >= rb);
 		used = wb - rb;
 		Assert(used <= ringsize);
@@ -957,6 +1000,12 @@ shm_mq_send_bytes(shm_mq_handle *mqh, Size nbytes, const void *data,
 			 * Therefore, we can read it without acquiring the spinlock.
 			 */
 			Assert(mqh->mqh_counterparty_attached);
+			if (mqh->mqh_is_tuple_queue)
+			{
+				pg_atomic_write_u64(&mq->mq_bytes_written,
+									mqh->mqh_bytes_written);
+				mqh->mqh_last_inform_bytes = mqh->mqh_bytes_written;
+			}
 			SetLatch(&mq->mq_receiver->procLatch);
 
 			/* Skip manipulation of our latch if nowait = true. */
@@ -1009,7 +1058,10 @@ shm_mq_send_bytes(shm_mq_handle *mqh, Size nbytes, const void *data,
 			 * MAXIMUM_ALIGNOF, and each read is as well.
 			 */
 			Assert(sent == nbytes || sendnow == MAXALIGN(sendnow));
-			shm_mq_inc_bytes_written(mq, MAXALIGN(sendnow));
+			if (mqh->mqh_is_tuple_queue)
+				mqh->mqh_bytes_written += MAXALIGN(sendnow);
+			else
+				shm_mq_inc_bytes_written(mq, MAXALIGN(sendnow));
 
 			/*
 			 * For efficiency, we don't set the reader's latch here.  We'll do

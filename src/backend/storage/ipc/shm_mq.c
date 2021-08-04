@@ -53,6 +53,10 @@
  * mq_ring_size and mq_ring_offset never change after initialization, and
  * can therefore be read without the lock.
  *
+ * After every mq_min_send_size bytes are written, the sender will update the
+ * shared memory value mq_bytes_written to avoid frequent cache invalidations
+ * and atomic operations.
+ *
  * Importantly, mq_ring can be safely read and written without a lock.
  * At any given time, the difference between mq_bytes_read and
  * mq_bytes_written defines the number of bytes within mq_ring that contain
@@ -77,6 +81,7 @@ struct shm_mq
 	pg_atomic_uint64 mq_bytes_read;
 	pg_atomic_uint64 mq_bytes_written;
 	Size		mq_ring_size;
+	Size		mq_min_send_size;
 	bool		mq_detached;
 	uint8		mq_ring_offset;
 	char		mq_ring[FLEXIBLE_ARRAY_MEMBER];
@@ -120,6 +125,13 @@ struct shm_mq
  * message itself, and mqh_expected_bytes - which is used only for reads -
  * tracks the expected total size of the payload.
  *
+ * mqh_bytes_written is the local copy of total bytes writtens.  And it is only
+ * updated in the shared memory once we have written at least mq_min_send_size
+ * more bytes compared to what we updated last in the shared memory.  Last
+ * time updated bytes are maintained in mqh_last_sent_bytes, so that we can
+ * avoid reading the shared memory variable everytime for computing when to
+ * inform the reader next.
+ *
  * mqh_counterparty_attached tracks whether we know the counterparty to have
  * attached to the queue at some previous point.  This lets us avoid some
  * mutex acquisitions.
@@ -139,6 +151,8 @@ struct shm_mq_handle
 	Size		mqh_consume_pending;
 	Size		mqh_partial_bytes;
 	Size		mqh_expected_bytes;
+	uint64		mqh_last_sent_bytes;
+	uint64		mqh_bytes_written;
 	bool		mqh_length_word_complete;
 	bool		mqh_counterparty_attached;
 	MemoryContext mqh_context;
@@ -155,7 +169,7 @@ static bool shm_mq_counterparty_gone(shm_mq *mq,
 static bool shm_mq_wait_internal(shm_mq *mq, PGPROC **ptr,
 								 BackgroundWorkerHandle *handle);
 static void shm_mq_inc_bytes_read(shm_mq *mq, Size n);
-static void shm_mq_inc_bytes_written(shm_mq *mq, Size n);
+static void shm_mq_update_bytes_written(shm_mq_handle *mqh);
 static void shm_mq_detach_callback(dsm_segment *seg, Datum arg);
 
 /* Minimum queue size is enough for header and at least one chunk of data. */
@@ -168,7 +182,7 @@ MAXALIGN(offsetof(shm_mq, mq_ring)) + MAXIMUM_ALIGNOF;
  * Initialize a new shared message queue.
  */
 shm_mq *
-shm_mq_create(void *address, Size size)
+shm_mq_create(void *address, Size size, Size min_send_size)
 {
 	shm_mq	   *mq = address;
 	Size		data_offset = MAXALIGN(offsetof(shm_mq, mq_ring));
@@ -188,6 +202,7 @@ shm_mq_create(void *address, Size size)
 	mq->mq_ring_size = size - data_offset;
 	mq->mq_detached = false;
 	mq->mq_ring_offset = data_offset - offsetof(shm_mq, mq_ring);
+	mq->mq_min_send_size = min_send_size;
 
 	return mq;
 }
@@ -297,6 +312,8 @@ shm_mq_attach(shm_mq *mq, dsm_segment *seg, BackgroundWorkerHandle *handle)
 	mqh->mqh_length_word_complete = false;
 	mqh->mqh_counterparty_attached = false;
 	mqh->mqh_context = CurrentMemoryContext;
+	mqh->mqh_bytes_written = 0;
+	mqh->mqh_last_sent_bytes = 0;
 
 	if (seg != NULL)
 		on_dsm_detach(seg, shm_mq_detach_callback, PointerGetDatum(mq));
@@ -518,8 +535,14 @@ shm_mq_sendv(shm_mq_handle *mqh, shm_mq_iovec *iov, int iovcnt, bool nowait)
 		mqh->mqh_counterparty_attached = true;
 	}
 
-	/* Notify receiver of the newly-written data, and return. */
-	SetLatch(&receiver->procLatch);
+	/*
+	 * Notify receiver of the newly-written data, only if we have written
+	 * enough data.
+	 */
+	if (mqh->mqh_bytes_written - mqh->mqh_last_sent_bytes >
+		mq->mq_min_send_size)
+		shm_mq_update_bytes_written(mqh);
+
 	return SHM_MQ_SUCCESS;
 }
 
@@ -816,6 +839,11 @@ shm_mq_wait_for_attach(shm_mq_handle *mqh)
 void
 shm_mq_detach(shm_mq_handle *mqh)
 {
+
+	if (mqh->mqh_queue->mq_min_send_size > 0 &&
+		mqh->mqh_bytes_written > mqh->mqh_last_sent_bytes)
+		shm_mq_update_bytes_written(mqh);
+
 	/* Notify counterparty that we're outta here. */
 	shm_mq_detach_internal(mqh->mqh_queue);
 
@@ -886,15 +914,15 @@ shm_mq_send_bytes(shm_mq_handle *mqh, Size nbytes, const void *data,
 	uint64		used;
 	Size		ringsize = mq->mq_ring_size;
 	Size		available;
-
 	while (sent < nbytes)
 	{
 		uint64		rb;
 		uint64		wb;
 
 		/* Compute number of ring buffer bytes used and available. */
+		wb = mqh->mqh_bytes_written;
 		rb = pg_atomic_read_u64(&mq->mq_bytes_read);
-		wb = pg_atomic_read_u64(&mq->mq_bytes_written);
+
 		Assert(wb >= rb);
 		used = wb - rb;
 		Assert(used <= ringsize);
@@ -957,7 +985,7 @@ shm_mq_send_bytes(shm_mq_handle *mqh, Size nbytes, const void *data,
 			 * Therefore, we can read it without acquiring the spinlock.
 			 */
 			Assert(mqh->mqh_counterparty_attached);
-			SetLatch(&mq->mq_receiver->procLatch);
+			shm_mq_update_bytes_written(mqh);
 
 			/* Skip manipulation of our latch if nowait = true. */
 			if (nowait)
@@ -1009,13 +1037,14 @@ shm_mq_send_bytes(shm_mq_handle *mqh, Size nbytes, const void *data,
 			 * MAXIMUM_ALIGNOF, and each read is as well.
 			 */
 			Assert(sent == nbytes || sendnow == MAXALIGN(sendnow));
-			shm_mq_inc_bytes_written(mq, MAXALIGN(sendnow));
 
 			/*
-			 * For efficiency, we don't set the reader's latch here.  We'll do
-			 * that only when the buffer fills up or after writing an entire
-			 * message.
+			 * For efficiency, we don't update the bytes written in the shared
+			 * memory and also don't set the reader's latch here.  The caller
+			 * will do that based on the value of the for the queue
+			 * mq_min_send_size.
 			 */
+			mqh->mqh_bytes_written += MAXALIGN(sendnow);
 		}
 	}
 
@@ -1254,25 +1283,26 @@ shm_mq_inc_bytes_read(shm_mq *mq, Size n)
 }
 
 /*
- * Increment the number of bytes written.
+ * Update the latest value of the bytes written in the shared memory.
  */
 static void
-shm_mq_inc_bytes_written(shm_mq *mq, Size n)
+shm_mq_update_bytes_written(shm_mq_handle *mqh)
 {
-	/*
-	 * Separate prior reads of mq_ring from the write of mq_bytes_written
-	 * which we're about to do.  Pairs with the read barrier found in
-	 * shm_mq_receive_bytes.
-	 */
-	pg_write_barrier();
+	shm_mq *mq = mqh->mqh_queue;
 
 	/*
-	 * There's no need to use pg_atomic_fetch_add_u64 here, because nobody
-	 * else can be changing this value.  This method avoids taking the bus
-	 * lock unnecessarily.
+	 * Update the shared memory value with the latest value in the local
+	 * copy.  Also update the mqh_last_sent_bytes so that we know when we
+	 * updated last.
+	 *
+	 * XXX we can avoid mqh_last_sent_bytes variable completely by keeping the
+	 * delta in mqh->mqh_bytes_written.  But in that case we will have to
+	 * freqnetly read the mq->mq_bytes_written from the shared memory which is
+	 * not that bad but keeping local value shows better performance.
 	 */
-	pg_atomic_write_u64(&mq->mq_bytes_written,
-						pg_atomic_read_u64(&mq->mq_bytes_written) + n);
+	pg_atomic_write_u64(&mq->mq_bytes_written, mqh->mqh_bytes_written);
+	mqh->mqh_last_sent_bytes = mqh->mqh_bytes_written;
+	SetLatch(&mq->mq_receiver->procLatch);
 }
 
 /* Shim for on_dsm_detach callback. */

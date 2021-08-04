@@ -120,6 +120,10 @@ struct shm_mq
  * message itself, and mqh_expected_bytes - which is used only for reads -
  * tracks the expected total size of the payload.
  *
+ * mqh_send_pending, is number of bytes that is written to the queue but yet
+ * updated in the shared memory.  We will not update it until the written data
+ * is 1/4th of the ring size or the tuple queue is full.
+ *
  * mqh_counterparty_attached tracks whether we know the counterparty to have
  * attached to the queue at some previous point.  This lets us avoid some
  * mutex acquisitions.
@@ -139,6 +143,7 @@ struct shm_mq_handle
 	Size		mqh_consume_pending;
 	Size		mqh_partial_bytes;
 	Size		mqh_expected_bytes;
+	Size		mqh_send_pending;
 	bool		mqh_length_word_complete;
 	bool		mqh_counterparty_attached;
 	MemoryContext mqh_context;
@@ -294,6 +299,7 @@ shm_mq_attach(shm_mq *mq, dsm_segment *seg, BackgroundWorkerHandle *handle)
 	mqh->mqh_consume_pending = 0;
 	mqh->mqh_partial_bytes = 0;
 	mqh->mqh_expected_bytes = 0;
+	mqh->mqh_send_pending = 0;
 	mqh->mqh_length_word_complete = false;
 	mqh->mqh_counterparty_attached = false;
 	mqh->mqh_context = CurrentMemoryContext;
@@ -518,8 +524,19 @@ shm_mq_sendv(shm_mq_handle *mqh, shm_mq_iovec *iov, int iovcnt, bool nowait)
 		mqh->mqh_counterparty_attached = true;
 	}
 
-	/* Notify receiver of the newly-written data, and return. */
-	SetLatch(&receiver->procLatch);
+	/*
+	 * If we've written more than 1/4 of the ring of data, mark it as written
+	 * in shared memory.  This will prevent frequent CPU cache misses, and it
+	 * will also avoid frequent SetLatch() calls which is a fairly expensive
+	 * operation.
+	 */
+	if (mqh->mqh_send_pending > mq->mq_ring_size / 4)
+	{
+		shm_mq_inc_bytes_written(mq, mqh->mqh_send_pending);
+		SetLatch(&receiver->procLatch);
+		mqh->mqh_send_pending = 0;
+	}
+
 	return SHM_MQ_SUCCESS;
 }
 
@@ -782,6 +799,33 @@ shm_mq_receive(shm_mq_handle *mqh, Size *nbytesp, void **datap, bool nowait)
 }
 
 /*
+ * Notify receiver about pending data.
+ *
+ * If there is already written data in the shm_mq which is not yet notified
+ * to the receiver then do it now.
+ */
+void
+shm_mq_flush(shm_mq_handle *mqh)
+{
+	PGPROC	*receiver;
+
+	/* There is no pending send, so just return. */
+	if (mqh->mqh_send_pending <= 0)
+		return;
+
+	/* Update already written bytes in the shared memory. */
+	shm_mq_inc_bytes_written(mqh->mqh_queue, mqh->mqh_send_pending);
+	mqh->mqh_send_pending = 0;
+
+	/* If receiver is not attached yet then just return. */
+	if (!mqh->mqh_counterparty_attached)
+		return;
+
+	receiver = mqh->mqh_queue->mq_receiver;
+	SetLatch(&receiver->procLatch);
+}
+
+/*
  * Wait for the other process that's supposed to use this queue to attach
  * to it.
  *
@@ -816,6 +860,9 @@ shm_mq_wait_for_attach(shm_mq_handle *mqh)
 void
 shm_mq_detach(shm_mq_handle *mqh)
 {
+	/* Flush any pending data before detaching. */
+	shm_mq_flush(mqh);
+
 	/* Notify counterparty that we're outta here. */
 	shm_mq_detach_internal(mqh->mqh_queue);
 
@@ -892,9 +939,13 @@ shm_mq_send_bytes(shm_mq_handle *mqh, Size nbytes, const void *data,
 		uint64		rb;
 		uint64		wb;
 
-		/* Compute number of ring buffer bytes used and available. */
+		/*
+		 * Compute number of ring buffer bytes used and available.  For bytes
+		 * written calculation, also include the bytes which we haven't yet
+		 * sent.
+		 */
 		rb = pg_atomic_read_u64(&mq->mq_bytes_read);
-		wb = pg_atomic_read_u64(&mq->mq_bytes_written);
+		wb = pg_atomic_read_u64(&mq->mq_bytes_written) + mqh->mqh_send_pending;
 		Assert(wb >= rb);
 		used = wb - rb;
 		Assert(used <= ringsize);
@@ -956,8 +1007,15 @@ shm_mq_send_bytes(shm_mq_handle *mqh, Size nbytes, const void *data,
 			 * point, mq_receiver has been set, and it can't change once set.
 			 * Therefore, we can read it without acquiring the spinlock.
 			 */
+			shm_mq_inc_bytes_written(mq, mqh->mqh_send_pending);
 			Assert(mqh->mqh_counterparty_attached);
 			SetLatch(&mq->mq_receiver->procLatch);
+
+			/* 
+			 * We have already updated the mqh_send_pending bytes in the shared
+			 * memory so reset it.
+			 */
+			mqh->mqh_send_pending = 0;
 
 			/* Skip manipulation of our latch if nowait = true. */
 			if (nowait)
@@ -1009,13 +1067,13 @@ shm_mq_send_bytes(shm_mq_handle *mqh, Size nbytes, const void *data,
 			 * MAXIMUM_ALIGNOF, and each read is as well.
 			 */
 			Assert(sent == nbytes || sendnow == MAXALIGN(sendnow));
-			shm_mq_inc_bytes_written(mq, MAXALIGN(sendnow));
 
 			/*
-			 * For efficiency, we don't set the reader's latch here.  We'll do
-			 * that only when the buffer fills up or after writing an entire
-			 * message.
+			 * For efficiency, we don't update the bytes written in the shared
+			 * memory and also don't set the reader's latch here.  The caller
+			 * will do that based on the mq_min_send_size.
 			 */
+			mqh->mqh_send_pending += MAXALIGN(sendnow);
 		}
 	}
 

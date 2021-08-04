@@ -86,6 +86,9 @@ mq_comm_reset(void)
 	/* Nothing to do. */
 }
 
+/*
+ * Flush any pending message.
+ */
 static int
 mq_flush(void)
 {
@@ -155,7 +158,8 @@ mq_putmessage(char msgtype, const char *s, size_t len)
 	for (;;)
 	{
 		result = shm_mq_sendv(pq_mq_handle, iov, 2, true);
-
+		shm_mq_flush(pq_mq_handle);
+	
 		if (pq_mq_parallel_leader_pid != 0)
 			SendProcSignal(pq_mq_parallel_leader_pid,
 						   PROCSIG_PARALLEL_MESSAGE,

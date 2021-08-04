@@ -1335,6 +1335,12 @@ ParallelWorkerMain(Datum main_arg)
 	pq_endmessage(&msgbuf);
 
 	/*
+	 * shm_mq might wait before sending the message so force flush so that we
+	 * can initialize the parallelism.
+	 */
+	pq_flush();
+
+	/*
 	 * Hooray! Primary initialization is complete.  Now, we need to set up our
 	 * backend-local state to match the original backend.
 	 */

@@ -70,6 +70,12 @@
 #define PARALLEL_TUPLE_QUEUE_SIZE		65536
 
 /*
+ * Every time, after writing at least these many bytes in the tuple queue, the
+ * writer will inform the reader.
+ */
+#define PARALLEL_TUPLE_QUEUE_BATCH_SIZE		4096
+
+/*
  * Fixed-size random stuff that we need to pass to parallel workers.
  */
 typedef struct FixedParallelExecutorState

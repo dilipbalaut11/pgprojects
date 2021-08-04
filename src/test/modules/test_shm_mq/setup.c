@@ -143,7 +143,7 @@ setup_dynamic_shared_memory(int64 queue_size, int nworkers,
 		shm_mq	   *mq;
 
 		mq = shm_mq_create(shm_toc_allocate(toc, (Size) queue_size),
-						   (Size) queue_size);
+						   (Size) queue_size, 0);
 		shm_toc_insert(toc, i + 1, mq);
 
 		if (i == 0)

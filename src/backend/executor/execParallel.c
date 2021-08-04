@@ -70,6 +70,12 @@
 #define PARALLEL_TUPLE_QUEUE_SIZE		65536
 
 /*
+ * Every time, after writing at least these many bytes in the tuple queue, the
+ * writer will inform the reader.
+ */
+#define PARALLEL_TUPLE_QUEUE_BATCH_SIZE		4096
+
+/*
  * Fixed-size random stuff that we need to pass to parallel workers.
  */
 typedef struct FixedParallelExecutorState
@@ -566,7 +572,8 @@ ExecParallelSetupTupleQueues(ParallelContext *pcxt, bool reinitialize)
 
 		mq = shm_mq_create(tqueuespace +
 						   ((Size) i) * PARALLEL_TUPLE_QUEUE_SIZE,
-						   (Size) PARALLEL_TUPLE_QUEUE_SIZE);
+						   (Size) PARALLEL_TUPLE_QUEUE_SIZE,
+						   PARALLEL_TUPLE_QUEUE_BATCH_SIZE);
 
 		shm_mq_set_receiver(mq, MyProc);
 		responseq[i] = shm_mq_attach(mq, pcxt->seg, NULL);

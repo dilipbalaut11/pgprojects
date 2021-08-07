@@ -47,7 +47,7 @@ typedef enum
  * or written, but they need not be set by the same process.  Each must be
  * set exactly once.
  */
-extern shm_mq *shm_mq_create(void *address, Size size, bool batch_support);
+extern shm_mq *shm_mq_create(void *address, Size size, Size min_send_size);
 extern void shm_mq_set_receiver(shm_mq *mq, PGPROC *);
 extern void shm_mq_set_sender(shm_mq *mq, PGPROC *);
 

@@ -431,7 +431,7 @@ InitializeParallelDSM(ParallelContext *pcxt)
 			shm_mq	   *mq;
 
 			start = error_queue_space + i * PARALLEL_ERROR_QUEUE_SIZE;
-			mq = shm_mq_create(start, PARALLEL_ERROR_QUEUE_SIZE, false);
+			mq = shm_mq_create(start, PARALLEL_ERROR_QUEUE_SIZE, 0);
 			shm_mq_set_receiver(mq, MyProc);
 			pcxt->worker[i].error_mqh = shm_mq_attach(mq, pcxt->seg, NULL);
 		}
@@ -497,7 +497,7 @@ ReinitializeParallelDSM(ParallelContext *pcxt)
 			shm_mq	   *mq;
 
 			start = error_queue_space + i * PARALLEL_ERROR_QUEUE_SIZE;
-			mq = shm_mq_create(start, PARALLEL_ERROR_QUEUE_SIZE, false);
+			mq = shm_mq_create(start, PARALLEL_ERROR_QUEUE_SIZE, 0);
 			shm_mq_set_receiver(mq, MyProc);
 			pcxt->worker[i].error_mqh = shm_mq_attach(mq, pcxt->seg, NULL);
 		}

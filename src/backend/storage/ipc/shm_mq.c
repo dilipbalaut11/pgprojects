@@ -77,8 +77,8 @@ struct shm_mq
 	pg_atomic_uint64 mq_bytes_read;
 	pg_atomic_uint64 mq_bytes_written;
 	Size		mq_ring_size;
+	Size		mq_min_send_size;
 	bool		mq_detached;
-	bool		mq_batch_support;
 	uint8		mq_ring_offset;
 	char		mq_ring[FLEXIBLE_ARRAY_MEMBER];
 };
@@ -171,7 +171,7 @@ MAXALIGN(offsetof(shm_mq, mq_ring)) + MAXIMUM_ALIGNOF;
  * Initialize a new shared message queue.
  */
 shm_mq *
-shm_mq_create(void *address, Size size, bool batch_support)
+shm_mq_create(void *address, Size size, Size min_send_size)
 {
 	shm_mq	   *mq = address;
 	Size		data_offset = MAXALIGN(offsetof(shm_mq, mq_ring));
@@ -191,7 +191,7 @@ shm_mq_create(void *address, Size size, bool batch_support)
 	mq->mq_ring_size = size - data_offset;
 	mq->mq_detached = false;
 	mq->mq_ring_offset = data_offset - offsetof(shm_mq, mq_ring);
-	mq->mq_batch_support = batch_support;
+	mq->mq_min_send_size = min_send_size;
 
 	return mq;
 }
@@ -304,7 +304,6 @@ shm_mq_attach(shm_mq *mq, dsm_segment *seg, BackgroundWorkerHandle *handle)
 	mqh->mqh_bytes_read = 0;
 	mqh->mqh_bytes_written = 0;
 	mqh->mqh_last_sent_bytes = 0;
-	//mqh->mqh_is_tuple_queue = mq->mq_ring_size > 20000;
 
 	if (seg != NULL)
 		on_dsm_detach(seg, shm_mq_detach_callback, PointerGetDatum(mq));
@@ -532,19 +531,11 @@ shm_mq_sendv(shm_mq_handle *mqh, shm_mq_iovec *iov, int iovcnt, bool nowait)
 	 * For the tuple queue, if we have written 4k data then inform the reader,
 	 * for error queue we immediately inform the reader.
 	 */
-	if (mq->mq_batch_support)
+	if (mqh->mqh_bytes_written - mqh->mqh_last_sent_bytes > mq->mq_min_send_size)
 	{
-		if (mqh->mqh_bytes_written - mqh->mqh_last_sent_bytes > 4096)
-		{
-			pg_atomic_write_u64(&mq->mq_bytes_written,
+		pg_atomic_write_u64(&mq->mq_bytes_written,
 								mqh->mqh_bytes_written);
-			mqh->mqh_last_sent_bytes = mqh->mqh_bytes_written;
-			SetLatch(&receiver->procLatch);
-		}
-	}
-	else
-	{
-		pg_atomic_write_u64(&mq->mq_bytes_written, mqh->mqh_bytes_written);
+		mqh->mqh_last_sent_bytes = mqh->mqh_bytes_written;
 		SetLatch(&receiver->procLatch);
 	}
 
@@ -845,7 +836,7 @@ void
 shm_mq_detach(shm_mq_handle *mqh)
 {
 
-	if (mqh->mqh_queue->mq_batch_support &&
+	if (mqh->mqh_queue->mq_min_send_size > 0 &&
 		mqh->mqh_bytes_written > mqh->mqh_last_sent_bytes)
 	{
 		pg_atomic_write_u64(&mqh->mqh_queue->mq_bytes_written,

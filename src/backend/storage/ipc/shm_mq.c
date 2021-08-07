@@ -78,6 +78,7 @@ struct shm_mq
 	pg_atomic_uint64 mq_bytes_written;
 	Size		mq_ring_size;
 	bool		mq_detached;
+	bool		mq_batch_support;
 	uint8		mq_ring_offset;
 	char		mq_ring[FLEXIBLE_ARRAY_MEMBER];
 };
@@ -144,7 +145,6 @@ struct shm_mq_handle
 	uint64		mqh_bytes_written;
 	bool		mqh_length_word_complete;
 	bool		mqh_counterparty_attached;
-	bool		mqh_is_tuple_queue;
 	MemoryContext mqh_context;
 };
 
@@ -159,7 +159,6 @@ static bool shm_mq_counterparty_gone(shm_mq *mq,
 static bool shm_mq_wait_internal(shm_mq *mq, PGPROC **ptr,
 								 BackgroundWorkerHandle *handle);
 static void shm_mq_inc_bytes_read(shm_mq *mq, Size n);
-static void shm_mq_inc_bytes_written(shm_mq *mq, Size n);
 static void shm_mq_detach_callback(dsm_segment *seg, Datum arg);
 
 /* Minimum queue size is enough for header and at least one chunk of data. */
@@ -172,7 +171,7 @@ MAXALIGN(offsetof(shm_mq, mq_ring)) + MAXIMUM_ALIGNOF;
  * Initialize a new shared message queue.
  */
 shm_mq *
-shm_mq_create(void *address, Size size)
+shm_mq_create(void *address, Size size, bool batch_support)
 {
 	shm_mq	   *mq = address;
 	Size		data_offset = MAXALIGN(offsetof(shm_mq, mq_ring));
@@ -192,6 +191,7 @@ shm_mq_create(void *address, Size size)
 	mq->mq_ring_size = size - data_offset;
 	mq->mq_detached = false;
 	mq->mq_ring_offset = data_offset - offsetof(shm_mq, mq_ring);
+	mq->mq_batch_support = batch_support;
 
 	return mq;
 }
@@ -304,7 +304,7 @@ shm_mq_attach(shm_mq *mq, dsm_segment *seg, BackgroundWorkerHandle *handle)
 	mqh->mqh_bytes_read = 0;
 	mqh->mqh_bytes_written = 0;
 	mqh->mqh_last_sent_bytes = 0;
-	mqh->mqh_is_tuple_queue = mq->mq_ring_size > 20000;
+	//mqh->mqh_is_tuple_queue = mq->mq_ring_size > 20000;
 
 	if (seg != NULL)
 		on_dsm_detach(seg, shm_mq_detach_callback, PointerGetDatum(mq));
@@ -528,11 +528,11 @@ shm_mq_sendv(shm_mq_handle *mqh, shm_mq_iovec *iov, int iovcnt, bool nowait)
 
 	/* Notify receiver of the newly-written data, and return. */
 
-	/* 
+	/*
 	 * For the tuple queue, if we have written 4k data then inform the reader,
 	 * for error queue we immediately inform the reader.
 	 */
-	if (mqh->mqh_is_tuple_queue)
+	if (mq->mq_batch_support)
 	{
 		if (mqh->mqh_bytes_written - mqh->mqh_last_sent_bytes > 4096)
 		{
@@ -544,7 +544,7 @@ shm_mq_sendv(shm_mq_handle *mqh, shm_mq_iovec *iov, int iovcnt, bool nowait)
 	}
 	else
 	{
-		pg_atomic_write_u64(&mq->mq_bytes_written, mqh->mqh_bytes_written);		
+		pg_atomic_write_u64(&mq->mq_bytes_written, mqh->mqh_bytes_written);
 		SetLatch(&receiver->procLatch);
 	}
 
@@ -845,7 +845,7 @@ void
 shm_mq_detach(shm_mq_handle *mqh)
 {
 
-	if (mqh->mqh_is_tuple_queue &&
+	if (mqh->mqh_queue->mq_batch_support &&
 		mqh->mqh_bytes_written > mqh->mqh_last_sent_bytes)
 	{
 		pg_atomic_write_u64(&mqh->mqh_queue->mq_bytes_written,
@@ -1054,13 +1054,14 @@ shm_mq_send_bytes(shm_mq_handle *mqh, Size nbytes, const void *data,
 			 * MAXIMUM_ALIGNOF, and each read is as well.
 			 */
 			Assert(sent == nbytes || sendnow == MAXALIGN(sendnow));
-			mqh->mqh_bytes_written += MAXALIGN(sendnow);
 
 			/*
-			 * For efficiency, we don't set the reader's latch here.  We'll do
-			 * that only when the buffer fills up or after writing an entire
-			 * message.
+			 * For efficiency, we don't update the bytes written in the shared
+			 * memory and also don't set the reader's latch here.  We'll do
+			 * that only when the buffer fills up or after writing more than
+			 * writing 4k data.
 			 */
+			mqh->mqh_bytes_written += MAXALIGN(sendnow);
 		}
 	}
 
@@ -1296,28 +1297,6 @@ shm_mq_inc_bytes_read(shm_mq *mq, Size n)
 	sender = mq->mq_sender;
 	Assert(sender != NULL);
 	SetLatch(&sender->procLatch);
-}
-
-/*
- * Increment the number of bytes written.
- */
-static void
-shm_mq_inc_bytes_written(shm_mq *mq, Size n)
-{
-	/*
-	 * Separate prior reads of mq_ring from the write of mq_bytes_written
-	 * which we're about to do.  Pairs with the read barrier found in
-	 * shm_mq_receive_bytes.
-	 */
-	pg_write_barrier();
-
-	/*
-	 * There's no need to use pg_atomic_fetch_add_u64 here, because nobody
-	 * else can be changing this value.  This method avoids taking the bus
-	 * lock unnecessarily.
-	 */
-	pg_atomic_write_u64(&mq->mq_bytes_written,
-						pg_atomic_read_u64(&mq->mq_bytes_written) + n);
 }
 
 /* Shim for on_dsm_detach callback. */

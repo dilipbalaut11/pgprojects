@@ -540,12 +540,21 @@ shm_mq_sendv(shm_mq_handle *mqh, shm_mq_iovec *iov, int iovcnt, bool nowait)
 	 * Notify receiver of the newly-written data if the newly written data are
 	 * more than a batch size and return.
 	 */
-	if (mqh->mqh_send_pending > mqh->mqh_batch_size)
+	if (mqh->mqh_batch_size > 0)
+	{
+		if (mqh->mqh_send_pending > mqh->mqh_batch_size)
+		{
+			pg_atomic_write_u64(&mq->mq_bytes_written, mqh->mqh_bytes_written);
+			mqh->mqh_send_pending = 0;
+			SetLatch(&receiver->procLatch);
+		}
+	}
+	else
 	{
 		pg_atomic_write_u64(&mq->mq_bytes_written, mqh->mqh_bytes_written);
-		mqh->mqh_send_pending = 0;
 		SetLatch(&receiver->procLatch);
 	}
+	
 
 	return SHM_MQ_SUCCESS;
 }
@@ -845,9 +854,8 @@ shm_mq_detach(shm_mq_handle *mqh)
 {
 
 	/* Send any pending data to the reader */
-	if (mqh->mqh_send_pending > 0)
+	if (mqh->mqh_batch_size > 0 && mqh->mqh_send_pending > 0)
 	{
-		Assert(mqh->mqh_batch_size > 0);
 		pg_atomic_write_u64(&mqh->mqh_queue->mq_bytes_written,
 							mqh->mqh_bytes_written);
 		mqh->mqh_send_pending = 0;
@@ -1065,7 +1073,9 @@ shm_mq_send_bytes(shm_mq_handle *mqh, Size nbytes, const void *data,
 			 * batch size data.
 			 */
 			mqh->mqh_bytes_written += MAXALIGN(sendnow);
-			mqh->mqh_send_pending += MAXALIGN(sendnow);
+
+			if (mqh->mqh_batch_size > 0)
+				mqh->mqh_send_pending += MAXALIGN(sendnow);
 		}
 	}
 

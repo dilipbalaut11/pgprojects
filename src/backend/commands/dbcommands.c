@@ -82,11 +82,17 @@ typedef struct
 	Oid			dest_tsoid;		/* tablespace we are trying to move to */
 } movedb_failure_params;
 
-typedef struct RelationInfo
+/*
+ * While creating a database, we first scan the pg_class of the source database
+ * and identify all the relations to be copied to the target database.  This
+ * is used for storing one relation entry and we will create a list of these
+ * entries for each valid relation of the source database.
+ */
+typedef struct CreateDBRelInfo
 {
-	RelFileNode		rnode;
-	char			relpersistence;
-} RelationInfo;
+	RelFileNode		rnode;				/* physical relation identifier */
+	char			relpersistence;		/* relation's persistence level */
+} CreateDBRelInfo;
 
 
 /* non-export function prototypes */
@@ -103,27 +109,31 @@ static bool have_createdb_privilege(void);
 static void remove_dbtablespaces(Oid db_id);
 static bool check_db_file_conflict(Oid db_id);
 static int	errdetail_busy_db(int notherbackends, int npreparedxacts);
-static void CreateDatabaseDirectory(char *dbpath, Oid dbid, Oid tsid,
+static void CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid,
 									bool isRedo);
-static List *GetDatabaseValidRelList(Oid srctbid, Oid srcdbid,
+static List *GetDatabaseRelationList(Oid srctbid, Oid srcdbid,
 									 Oid relfilenode);
 void RelationCopyStorageUsingBuffer(SMgrRelation src, SMgrRelation dst,
 									ForkNumber forkNum, char relpersistence);
 static void CopyDatabase(Oid src_dboid, Oid dboid, Oid src_tsid, Oid dst_tsid);
 
 /*
- * CreateDatabaseDirectory - Create empty database directory and write out the
+ * CreateDirAndVersionFile - Create database directory and write out the
  *							 PG_VERSION file in the database path.
+ *
  * If isRedo is true, it's okay for the database directory to exist already.
+ *
+ * We can directly write PG_MAJORVERSION in the version file instead of copying
+ * from the source database file because these two must be the same.
  */
 static void
-CreateDatabaseDirectory(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
+CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 {
 	int		fd;
 	int		nbytes;
 	char	versionfile[MAXPGPATH];
 
-	/* Create an empty db directory */
+	/* Create the empty db directory. */
 	if (MakePGDirectory(dbpath) < 0)
 	{
 		/* Failure other than not exists or not in WAL replay? */
@@ -133,10 +143,10 @@ CreateDatabaseDirectory(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 					 errmsg("could not create directory \"%s\": %m", dbpath)));
 	}
 
-	/* Create PG_VERSION file in the database path */
 	snprintf(versionfile, sizeof(versionfile), "%s/%s",
 			 dbpath, "PG_VERSION");
 
+	/* Create PG_VERSION file in the database path. */
 	fd = OpenTransientFile(versionfile, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
 
 	/*
@@ -152,7 +162,7 @@ CreateDatabaseDirectory(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 
 	nbytes = strlen(PG_MAJORVERSION);
 
-	/* If we are not in WAL replay then write the WAL */
+	/* If we are not in WAL replay then write the WAL. */
 	if (!isRedo)
 	{
 		xl_dbase_create_rec xlrec;
@@ -169,18 +179,18 @@ CreateDatabaseDirectory(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 		XLogRegisterData((char *) (&xlrec), MinSizeOfDbaseCreateRec);
 		XLogRegisterData((char *) PG_MAJORVERSION, nbytes);
 
-		lsn = XLogInsert(RM_DBASE_ID, XLOG_DBASE_CREATE);
+		lsn = XLogInsert(RM_DBASE_ID, XLOG_DBASEDIR_CREATE);
 
-		/* As always, WAL must hit the disk before the data update does */
+		/* As always, WAL must hit the disk before the data update does. */
 		XLogFlush(lsn);
 	}
 
-	/* Write version in the PG_VERSION file */
+	/* Write version in the PG_VERSION file. */
 	pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_WRITE);
 	errno = 0;
 	if ((int) write(fd, (char *) PG_MAJORVERSION, nbytes) != nbytes)
 	{
-		/* if write didn't set errno, assume problem is no disk space */
+		/* If write didn't set errno, assume problem is no disk space. */
 		if (errno == 0)
 			errno = ENOSPC;
 		ereport(ERROR,
@@ -189,22 +199,25 @@ CreateDatabaseDirectory(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 	}
 	pgstat_report_wait_end();
 
-	/* Close the version file */
+	/* Close the version file. */
 	CloseTransientFile(fd);
 
-	/* Critical section done */
+	/* Critical section done. */
 	if (!isRedo)
 		END_CRIT_SECTION();
 }
 
 /*
- * GetDatabaseValidRelList - Get list of all valid relnode of the source db
+ * GetDatabaseRelationList - Get list of all valid relnode for the given dbid
  *
- * Process the input pg_class relfilenode and process block by block
- * and prepare a list of all the valid relnode.
+ * Process the input pg_class relfilenode block by block and read all the valid
+ * tuple.  Each pg_class tuple will give us an entry for a database relation.
+ * We will remember the relfilenode for each relation in the list and return
+ * that to the caller so that caller can process the respective relfilenode for
+ * each relation and copy them to the destination database.
  */
 static List *
-GetDatabaseValidRelList(Oid srctbid, Oid srcdbid, Oid relfilenode)
+GetDatabaseRelationList(Oid tbid, Oid dbid, Oid relfilenode)
 {
 	SMgrRelation	rd_smgr;
 	RelFileNode		rnode;
@@ -219,22 +232,34 @@ GetDatabaseValidRelList(Oid srctbid, Oid srcdbid, Oid relfilenode)
 	Form_pg_class	classForm;
 	BufferAccessStrategy bstrategy;
 
-	rnode.spcNode = srctbid;
-	rnode.dbNode = srcdbid;
+	/* Prepare a relnode for pg_class relation. */
+	rnode.spcNode = tbid;
+	rnode.dbNode = dbid;
 	rnode.relNode = relfilenode;
 
+	/*
+	 * We are not connected to the source database so open the pg_class
+	 * relation at the smgr level and get the block count.
+	 */
 	rd_smgr = smgropen(rnode, InvalidBackendId);
 	nblocks = smgrnblocks(rd_smgr, MAIN_FORKNUM);
-	bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
 	/*
-	 * Process each block for the pg_class relfilenode and check for the
-	 * visible tuple.  Store the relnode of the visible tuple in the list.
-	 * Later in the caller, these relnode files will be processed and copied
-	 * to the destination block by block.
+	 * We're going to read the whole pg_class so better to use bulk-read buffer
+	 * access strategy.
 	 */
+	bstrategy = GetAccessStrategy(BAS_BULKREAD);
+
+	/* Iterate over each block on the pg_class relation. */
 	for (blkno = 0; blkno < nblocks; blkno++)
 	{
+		/*
+		* We are not connected to the source database from where we want to copy
+		* so we can not directly use the top level bufmgr interfaces because those
+		* interfaces required relcache entry.  So instead of those we will use
+		* the lower level bufmgr interface which directly operates on the rnode of
+		* the relation.
+		*/
 		buf = ReadBufferWithoutRelcache(rnode, MAIN_FORKNUM, blkno,
 										RBM_NORMAL, bstrategy,
 										RELPERSISTENCE_PERMANENT);
@@ -245,6 +270,8 @@ GetDatabaseValidRelList(Oid srctbid, Oid srcdbid, Oid relfilenode)
 			continue;
 
 		maxoff = PageGetMaxOffsetNumber(page);
+
+		/* Iterate over each tuple on the page. */
 		for (offnum = FirstOffsetNumber;
 			 offnum <= maxoff;
 			 offnum = OffsetNumberNext(offnum))
@@ -260,26 +287,30 @@ GetDatabaseValidRelList(Oid srctbid, Oid srcdbid, Oid relfilenode)
 
 			Assert(ItemIdIsNormal(itemid));
 			ItemPointerSet(&(tuple.t_self), blkno, offnum);
+
 			tuple.t_data = (HeapTupleHeader) PageGetItem(page, itemid);
 			tuple.t_len = ItemIdGetLength(itemid);
 			tuple.t_tableOid = RelationRelationId;
 
 			/*
 			 * If the tuple is visible then add its relfilenode info to the
-			 * list.
+			 * list, the list will be processed by the caller.
 			 */
 			if (HeapTupleSatisfiesVisibility(&tuple, GetActiveSnapshot(), buf))
 			{
 				Oid				relfilenode = InvalidOid;
-				RelationInfo   *relinfo;
+				CreateDBRelInfo   *relinfo;
 
 				classForm = (Form_pg_class) GETSTRUCT(&tuple);
 
-				/* Ignore global objects. */
+				/* We don't need to copy the shared objects to the target. */
 				if (classForm->reltablespace == GLOBALTABLESPACE_OID)
 					continue;
 
-				/* We only want to scan objects which has storage. */
+				/*
+				 * If the object doesn't have the storage then nothing to be
+				 * done for that object so just ignore it.
+				 */
 				if (!RELKIND_HAS_STORAGE(classForm->relkind))
 					continue;
 
@@ -291,16 +322,17 @@ GetDatabaseValidRelList(Oid srctbid, Oid srcdbid, Oid relfilenode)
 				else
 					continue;
 
+				/* We must have a valid relfilenode oid. */
 				Assert(OidIsValid(relfilenode));
 
-				/* Prepare a rel info element and add to the list */
-				relinfo = (RelationInfo *) palloc(sizeof(RelationInfo));
+				/* Prepare a rel info element and add it to the list. */
+				relinfo = (CreateDBRelInfo *) palloc(sizeof(CreateDBRelInfo));
 				if (OidIsValid(classForm->reltablespace))
 					relinfo->rnode.spcNode = classForm->reltablespace;
 				else
-					relinfo->rnode.spcNode = srctbid;
+					relinfo->rnode.spcNode = tbid;
 
-				relinfo->rnode.dbNode = srcdbid;
+				relinfo->rnode.dbNode = dbid;
 				relinfo->rnode.relNode = relfilenode;
 				relinfo->relpersistence = classForm->relpersistence;
 
@@ -311,7 +343,7 @@ GetDatabaseValidRelList(Oid srctbid, Oid srcdbid, Oid relfilenode)
 			}
 		}
 
-		/* Release buffer lock */
+		/* Release the buffer lock. */
 		UnlockReleaseBuffer(buf);
 	}
 
@@ -353,6 +385,7 @@ RelationCopyStorageUsingBuffer(SMgrRelation src, SMgrRelation dst,
 
 	nblocks = smgrnblocks(src, forkNum);
 
+	/* Iterate over each block of the source relfilenode file. */
 	for (blkno = 0; blkno < nblocks; blkno++)
 	{
 		/* If we got a cancel signal during the copy of the data, quit */
@@ -396,43 +429,45 @@ RelationCopyStorageUsingBuffer(SMgrRelation src, SMgrRelation dst,
 }
 
 /*
- * Copy data logically from src database to the destination database
+ * Copy data block by block from the source database to the destination
+ * database.
  */
 static void
-CopyDatabase(Oid src_dboid, Oid dboid, Oid src_tsid, Oid dst_tsid)
+CopyDatabase(Oid src_dboid, Oid dst_dboid, Oid src_tsid, Oid dst_tsid)
 {
 	char	   *srcpath;
 	char	   *dstpath;
 	Oid			relfilenode;
 	List	   *rnodelist = NULL;
 	ListCell   *cell;
-	RelationInfo   *relinfo;
-	RelFileNode	    srcrnode;
-	RelFileNode		dstrnode;
+	RelFileNode	srcrnode;
+	RelFileNode	dstrnode;
+	CreateDBRelInfo	*relinfo;
 
+	/* Get the source database path. */
 	srcpath = GetDatabasePath(src_dboid, src_tsid);
 
-	/* Create the default tablespace destination database directory */
-	dstpath = GetDatabasePath(dboid, dst_tsid);
+	/* Get the destination database path. */
+	dstpath = GetDatabasePath(dst_dboid, dst_tsid);
 
-	/* Create database directory and write PG_VERSION file */
-	CreateDatabaseDirectory(dstpath, dboid, dst_tsid, false);
+	/* Create database directory and write PG_VERSION file. */
+	CreateDatabaseDirectory(dstpath, dst_dboid, dst_tsid, false);
 
-	/* Copy the relfilenode mapping file */
-	CreateAndCopyRelMap(dboid, dst_tsid, srcpath, dstpath);
+	/* Copy the relfilenode mapping file. */
+	CreateAndCopyRelMap(dst_dboid, dst_tsid, srcpath, dstpath);
 
-	/* Get pg_class relfilenode */
+	/* Get pg_class relfilenode. */
 	relfilenode = DatabaseRelationOidToFilenode(srcpath,
 												RelationRelationId);
 
-	/* get list of all valid relnode from the source database */
-	rnodelist = GetDatabaseValidRelList(src_tsid, src_dboid,
+	/* Get list of all valid relnode from the source database. */
+	rnodelist = GetDatabaseRelationList(src_tsid, src_dboid,
 										relfilenode);
 	Assert(rnodelist != NIL);
 
 	/*
-	* Process relfilenode for each file and copy block by block from source
-	* database to the destination database.
+	* Iterate over each relfilenode and copy the relation data block by block
+	* from source database to the destination database.
 	*/
 	foreach(cell, rnodelist)
 	{
@@ -442,26 +477,32 @@ CopyDatabase(Oid src_dboid, Oid dboid, Oid src_tsid, Oid dst_tsid)
 		relinfo = lfirst(cell);
 		srcrnode = relinfo->rnode;
 
-		/* Use source relnode tablespace if it's not a default table space */
+		/*
+		 * If the relation is from the default tablespace then we need to
+		 * create it in the destinations db's default tablespace.  Otherwise,
+		 * we need to create in the same tablespace as it is created in the
+		 * source database.
+		 */
 		if (srcrnode.spcNode != src_tsid)
 			dstrnode.spcNode = srcrnode.spcNode;
 		else
 			dstrnode.spcNode = dst_tsid;
 
-		dstrnode.dbNode = dboid;
+		dstrnode.dbNode = dst_dboid;
 		dstrnode.relNode = srcrnode.relNode;
 
-		/* Open the source and the destination relation at smgr level */
+		/* Open the source and the destination relation at smgr level. */
 		src_smgr = smgropen(srcrnode, InvalidBackendId);
 		dst_smgr = smgropen(dstrnode, InvalidBackendId);
 
+		/* Create physical storage for the relation in the destination db. */
 		RelationCreateStorage(dstrnode, relinfo->relpersistence);
 
-		/* copy main fork */
+		/* Copy main fork. */
 		RelationCopyStorageUsingBuffer(src_smgr, dst_smgr, MAIN_FORKNUM,
 									   relinfo->relpersistence);
 
-		/* copy those extra forks that exist */
+		/* Copy those extra forks that exist. */
 		for (ForkNumber forkNum = MAIN_FORKNUM + 1;
 			forkNum <= MAX_FORKNUM; forkNum++)
 		{
@@ -477,6 +518,7 @@ CopyDatabase(Oid src_dboid, Oid dboid, Oid src_tsid, Oid dst_tsid)
 					(relinfo->relpersistence == RELPERSISTENCE_UNLOGGED &&
 					forkNum == INIT_FORKNUM))
 					log_smgrcreate(&dstrnode, forkNum);
+
 				RelationCopyStorageUsingBuffer(src_smgr, dst_smgr,
 											   forkNum,
 											   relinfo->relpersistence);
@@ -2359,7 +2401,7 @@ dbase_redo(XLogReaderState *record)
 	/* Backup blocks are not used in dbase records */
 	Assert(!XLogRecHasAnyBlockRefs(record));
 
-	if (info == XLOG_DBASE_CREATE)
+	if (info == XLOG_DBASEDIR_CREATE)
 	{
 		xl_dbase_create_rec *xlrec = (xl_dbase_create_rec *) XLogRecGetData(record);
 		char	   *dbpath;

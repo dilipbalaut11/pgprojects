@@ -371,7 +371,7 @@ extractPageInfo(XLogReaderState *record)
 
 	/* Is this a special record type that I recognize? */
 
-	if (rmid == RM_DBASE_ID && rminfo == XLOG_DBASE_CREATE)
+	if (rmid == RM_DBASE_ID && rminfo == XLOG_DBASEDIR_CREATE)
 	{
 		/*
 		 * New databases can be safely ignored. It won't be present in the

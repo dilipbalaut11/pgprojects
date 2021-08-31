@@ -24,12 +24,11 @@ dbase_desc(StringInfo buf, XLogReaderState *record)
 	char	   *rec = XLogRecGetData(record);
 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
 
-	if (info == XLOG_DBASE_CREATE)
+	if (info == XLOG_DBASEDIR_CREATE)
 	{
 		xl_dbase_create_rec *xlrec = (xl_dbase_create_rec *) rec;
 
-		appendStringInfo(buf, "copy dir %u/%u to %u/%u",
-						 xlrec->src_tablespace_id, xlrec->src_db_id,
+		appendStringInfo(buf, "create dir %u/%u",
 						 xlrec->tablespace_id, xlrec->db_id);
 	}
 	else if (info == XLOG_DBASE_DROP)
@@ -51,8 +50,8 @@ dbase_identify(uint8 info)
 
 	switch (info & ~XLR_INFO_MASK)
 	{
-		case XLOG_DBASE_CREATE:
-			id = "CREATE";
+		case XLOG_DBASEDIR_CREATE:
+			id = "CREATE DIR";
 			break;
 		case XLOG_DBASE_DROP:
 			id = "DROP";

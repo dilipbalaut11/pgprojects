@@ -3059,6 +3059,7 @@ config_var_value
 contain_aggs_of_level_context
 convert_testexpr_context
 copy_data_source_cb
+copy_relation_storage
 core_YYSTYPE
 core_yy_extra_type
 core_yyscan_t

@@ -982,7 +982,7 @@ dropdb(const char *dbname, bool missing_ok, bool force)
 	 * is important to ensure that no remaining backend tries to write out a
 	 * dirty buffer to the dead database later...
 	 */
-	DropDatabaseBuffers(db_id);
+	DropDatabaseBuffers(db_id, InvalidOid);
 
 	/*
 	 * Tell the stats collector to forget it immediately, too.
@@ -1264,11 +1264,8 @@ movedb(const char *dbname, const char *tblspcname)
 	 * contain valid data again --- but they'd be missing any changes made in
 	 * the database while it was in the new tablespace.  In any case, freeing
 	 * buffers that should never be used again seems worth the cycles.
-	 *
-	 * Note: it'd be sufficient to get rid of buffers matching db_id and
-	 * src_tblspcoid, but bufmgr.c presently provides no API for that.
 	 */
-	DropDatabaseBuffers(db_id);
+	DropDatabaseBuffers(db_id, src_tblspcoid);
 
 	/*
 	 * Check for existence of files in the target directory, i.e., objects of
@@ -2241,7 +2238,7 @@ dbase_redo(XLogReaderState *record)
 		ReplicationSlotsDropDBSlots(xlrec->db_id);
 
 		/* Drop pages for this database that are in the shared buffer cache */
-		DropDatabaseBuffers(xlrec->db_id);
+		DropDatabaseBuffers(xlrec->db_id, InvalidOid);
 
 		/* Also, clean out any fsync requests that might be pending in md.c */
 		ForgetDatabaseSyncRequests(xlrec->db_id);

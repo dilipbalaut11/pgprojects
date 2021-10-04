@@ -141,7 +141,7 @@ static void read_relmap_file(char *mapfilename, RelMapFile *map,
 static void write_relmap_file_internal(char *mapfilename, RelMapFile *newmap,
 									   bool write_wal, bool send_sinval,
 									   bool preserve_files, Oid dbid, Oid tsid,
-									   const char *dbpath);
+									   const char *dbpath, bool create);
 static void load_relmap_file(bool shared, bool lock_held);
 static void write_relmap_file(bool shared, RelMapFile *newmap,
 							  bool write_wal, bool send_sinval, bool preserve_files,
@@ -250,6 +250,37 @@ RelationMapFilenodeToOid(Oid filenode, bool shared)
 			if (filenode == map->mappings[i].mapfilenode)
 				return map->mappings[i].mapoid;
 		}
+	}
+
+	return InvalidOid;
+}
+
+/*
+ * RelationMapOidToFilenodeForDatabase
+ *
+ * Same as RelationMapOidToFilenode, but instead of reading the mapping from
+ * the database we are connected to it will read the mapping from the input
+ * database.
+ */
+Oid
+RelationMapOidToFilenodeForDatabase(char *dbpath, Oid relationId)
+{
+	RelMapFile	map;
+	int			i;
+	char		mapfilename[MAXPGPATH];
+
+	/* Relmap file path for the given dbpath. */
+	snprintf(mapfilename, sizeof(mapfilename), "%s/%s",
+			 dbpath, RELMAPPER_FILENAME);
+
+	/* Read the relmap file from the source database. */
+	read_relmap_file(mapfilename, &map, false);
+
+	/* Iterate over the relmap entries to find the input relation oid. */
+	for (i = 0; i < map.num_mappings; i++)
+	{
+		if (relationId == map.mappings[i].mapoid)
+			return map.mappings[i].mapfilenode;
 	}
 
 	return InvalidOid;
@@ -693,7 +724,43 @@ RestoreRelationMap(char *startAddress)
 }
 
 /*
- * read_relmap_file -- read data from given mapfilename file.
+ * CopyRelationMap
+ *
+ * Copy relmapfile from source db path to the destination db path and WAL log
+ * the operation.  This function is only called during the create database, so
+ * the destination database is not yet visible to anyone else, thus we don't
+ * need to acquire the relmap lock while updating the destination relmap.
+ */
+void
+CopyRelationMap(Oid dbid, Oid tsid, char *srcdbpath, char *dstdbpath)
+{
+	RelMapFile map;
+	char mapfilename[MAXPGPATH];
+
+	/* Relmap file path of the source database. */
+	snprintf(mapfilename, sizeof(mapfilename), "%s/%s",
+			 srcdbpath, RELMAPPER_FILENAME);
+
+	/* Read the relmap file from the source database. */
+	read_relmap_file(mapfilename, &map, false);
+
+	/* Relmap file path of the destination database. */
+	snprintf(mapfilename, sizeof(mapfilename), "%s/%s",
+			 dstdbpath, RELMAPPER_FILENAME);
+
+	/*
+	 * Write map contents into the destination database's relmap file.
+	 * write_relmap_file_internal, expects that the CRC should have been
+	 * computed and stored in the input map.  But, since we have read this map
+	 * from the source database and directly writing to the destination file
+	 * without updating it so we don't need to recompute it.
+	 */
+	write_relmap_file_internal(mapfilename, &map, true, false, true, dbid,
+							   tsid, dstdbpath, true);
+}
+
+/*
+ * read_relmap_file - read data from given mapfilename file.
  *
  * Because the map file is essential for access to core system catalogs,
  * failure to read it is a fatal error.
@@ -796,15 +863,18 @@ load_relmap_file(bool shared, bool lock_held)
 }
 
 /*
- * Helper function for write_relmap_file, Read comments atop write_relmap_file
- * for more details.  The CRC should be computed by the caller and stored in
- * the newmap.
+ * Helper function for write_relmap_file and CopyRelationMap, Read comments
+ * atop write_relmap_file for more details.  The CRC should be computed by the
+ * caller and stored in the newmap.
+ *
+ * Pass the create = true, if we are copying the relmap file during CREATE
+ * DATABASE command.
  */
 static void
 write_relmap_file_internal(char *mapfilename, RelMapFile *newmap,
 						   bool write_wal, bool send_sinval,
 						   bool preserve_files, Oid dbid, Oid tsid,
-						   const char *dbpath)
+						   const char *dbpath, bool create)
 {
 	int			fd;
 
@@ -830,6 +900,7 @@ write_relmap_file_internal(char *mapfilename, RelMapFile *newmap,
 		xlrec.dbid = dbid;
 		xlrec.tsid = tsid;
 		xlrec.nbytes = sizeof(RelMapFile);
+		xlrec.create = create;
 
 		XLogBeginInsert();
 		XLogRegisterData((char *) (&xlrec), MinSizeOfRelmapUpdate);
@@ -971,7 +1042,7 @@ write_relmap_file(bool shared, RelMapFile *newmap,
 	/* Write the map to the relmap file. */
 	write_relmap_file_internal(mapfilename, newmap, write_wal,
 							   send_sinval, preserve_files, dbid, tsid,
-							   dbpath);
+							   dbpath, false);
 
 	/*
 	 * Success, update permanent copy.  During bootstrap, we might be working
@@ -1063,15 +1134,37 @@ relmap_redo(XLogReaderState *record)
 		 * Write out the new map and send sinval, but of course don't write a
 		 * new WAL entry.  There's no surrounding transaction to tell to
 		 * preserve files, either.
-		 *
-		 * There shouldn't be anyone else updating relmaps during WAL replay,
-		 * but grab the lock to interlock against load_relmap_file().
 		 */
-		LWLockAcquire(RelationMappingLock, LW_EXCLUSIVE);
-		write_relmap_file((xlrec->dbid == InvalidOid), &newmap,
-						  false, true, false,
-						  xlrec->dbid, xlrec->tsid, dbpath);
-		LWLockRelease(RelationMappingLock);
+		if (!xlrec->create)
+		{
+			/*
+			 * There shouldn't be anyone else updating relmaps during WAL
+			 * replay, but grab the lock to interlock against
+			 * load_relmap_file().
+			 */
+			LWLockAcquire(RelationMappingLock, LW_EXCLUSIVE);
+			write_relmap_file((xlrec->dbid == InvalidOid), &newmap,
+							false, true, false,
+							xlrec->dbid, xlrec->tsid, dbpath);
+			LWLockRelease(RelationMappingLock);
+		}
+		else
+		{
+			char		mapfilename[MAXPGPATH];
+
+			/* Construct the mapfilename. */
+			snprintf(mapfilename, sizeof(mapfilename), "%s/%s",
+					 dbpath, RELMAPPER_FILENAME);
+
+			/*
+			 * We don't need to take relmap lock because this wal is logged
+			 * while creating a new database, so there could be no one else
+			 * reading/writing the relmap file.
+			 */
+			write_relmap_file_internal(mapfilename, &newmap, false, false,
+									   false, xlrec->dbid, xlrec->tsid, dbpath,
+									   true);
+		}
 
 		pfree(dbpath);
 	}

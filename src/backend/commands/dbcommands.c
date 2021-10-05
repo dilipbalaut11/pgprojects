@@ -45,13 +45,13 @@
 #include "commands/dbcommands_xlog.h"
 #include "commands/defrem.h"
 #include "commands/seclabel.h"
+#include "commands/tablecmds.h"
 #include "commands/tablespace.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/bgwriter.h"
 #include "replication/slot.h"
-#include "storage/copydir.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
@@ -62,6 +62,7 @@
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/pg_locale.h"
+#include "utils/relmapper.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
@@ -91,7 +92,293 @@ static bool have_createdb_privilege(void);
 static void remove_dbtablespaces(Oid db_id);
 static bool check_db_file_conflict(Oid db_id);
 static int	errdetail_busy_db(int notherbackends, int npreparedxacts);
+static void CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid,
+									bool isRedo);
+void RelationCopyStorageUsingBuffer(SMgrRelation src, SMgrRelation dst,
+									ForkNumber forkNum, char relpersistence);
+static void CopyDatabase(Oid src_dboid, Oid dboid, Oid src_tsid, Oid dst_tsid);
 
+/*
+ * CreateDirAndVersionFile - Create database directory and write out the
+ *							 PG_VERSION file in the database path.
+ *
+ * If isRedo is true, it's okay for the database directory to exist already.
+ *
+ * We can directly write PG_MAJORVERSION in the version file instead of copying
+ * from the source database file because these two must be the same.
+ */
+static void
+CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
+{
+	int		fd;
+	int		nbytes = strlen(PG_MAJORVERSION);
+	char	versionfile[MAXPGPATH];
+
+	/* If we are not in WAL replay then write the WAL. */
+	if (!isRedo)
+	{
+		xl_dbase_create_rec xlrec;
+		XLogRecPtr	lsn;
+
+		/* Now errors are fatal ... */
+		START_CRIT_SECTION();
+
+		xlrec.db_id = dbid;
+		xlrec.tablespace_id = tsid;
+
+		XLogBeginInsert();
+		XLogRegisterData((char *) (&xlrec), sizeof(xl_dbase_create_rec));
+
+		lsn = XLogInsert(RM_DBASE_ID, XLOG_DBASE_CREATE);
+
+		/* As always, WAL must hit the disk before the data update does. */
+		XLogFlush(lsn);
+	}
+
+	/* Create database directory. */
+	if (MakePGDirectory(dbpath) < 0)
+	{
+		/* Failure other than already exists or not in WAL replay? */
+		if (errno != EEXIST || !isRedo)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not create directory \"%s\": %m", dbpath)));
+	}
+
+	/*
+	 * Create PG_VERSION file in the database path.  If the file already exists
+	 * and we are in WAL replay then try again to open it in the write mode.
+	 */
+	snprintf(versionfile, sizeof(versionfile), "%s/%s", dbpath, "PG_VERSION");
+
+	fd = OpenTransientFile(versionfile, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
+	if (fd < 0 && errno == EEXIST && isRedo)
+		fd = OpenTransientFile(versionfile, O_RDWR | PG_BINARY);
+
+	if (fd < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not create file \"%s\": %m", versionfile)));
+
+	/* Write PG_MAJORVERSION in the PG_VERSION file. */
+	pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_WRITE);
+	errno = 0;
+	if ((int) write(fd, (char *) PG_MAJORVERSION, nbytes) != nbytes)
+	{
+		/* If write didn't set errno, assume problem is no disk space. */
+		if (errno == 0)
+			errno = ENOSPC;
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not write to file \"%s\": %m", versionfile)));
+	}
+	pgstat_report_wait_end();
+
+	/* Close the version file. */
+	CloseTransientFile(fd);
+
+	/* Critical section done. */
+	if (!isRedo)
+		END_CRIT_SECTION();
+}
+
+/*
+ * RelationCopyStorageUsingBuffer - Copy fork's data using bufmgr.
+ *
+ * Same as RelationCopyStorage but instead of using smgrread and smgrextend this
+ * will copy using bufmgr apis.
+ */
+void
+RelationCopyStorageUsingBuffer(SMgrRelation src, SMgrRelation dst,
+							   ForkNumber forkNum, char relpersistence)
+{
+	Buffer		srcBuf;
+	Buffer		dstBuf;
+	Page		srcPage;
+	Page		dstPage;
+	bool		use_wal;
+	bool		copying_initfork;
+	BlockNumber nblocks;
+	BlockNumber blkno;
+	BufferAccessStrategy bstrategy_src;
+	BufferAccessStrategy bstrategy_dst;
+
+	/* Refer comments in RelationCopyStorage. */
+	copying_initfork = relpersistence == RELPERSISTENCE_UNLOGGED &&
+		forkNum == INIT_FORKNUM;
+	use_wal = XLogIsNeeded() &&
+		(relpersistence == RELPERSISTENCE_PERMANENT || copying_initfork);
+
+	/* Get number of blocks in the source relation. */
+	nblocks = smgrnblocks(src, forkNum);
+
+	/*
+	 * We are going to copy whole relation from the source to the destination
+	 * so use BAS_BULKREAD strategy for the source relation and BAS_BULKWRITE
+	 * strategy for the destination relation.
+	 */
+	bstrategy_src = GetAccessStrategy(BAS_BULKREAD);
+	bstrategy_dst = GetAccessStrategy(BAS_BULKWRITE);
+
+	/* Iterate over each block of the source relation file. */
+	for (blkno = 0; blkno < nblocks; blkno++)
+	{
+		/* If we got a cancel signal during the copy of the data, quit */
+		CHECK_FOR_INTERRUPTS();
+
+		/* Read block from source relation. */
+		srcBuf = ReadBufferWithoutRelcache(src->smgr_rnode.node, forkNum,
+										   blkno, RBM_NORMAL, bstrategy_src,
+										   relpersistence);
+		srcPage = BufferGetPage(srcBuf);
+		if (PageIsNew(srcPage) || PageIsEmpty(srcPage))
+		{
+			ReleaseBuffer(srcBuf);
+			continue;
+		}
+
+		/* Use P_NEW to extend the relation. */
+		dstBuf = ReadBufferWithoutRelcache(dst->smgr_rnode.node, forkNum,
+										   P_NEW, RBM_NORMAL, bstrategy_dst,
+										   relpersistence);
+		LockBuffer(dstBuf, BUFFER_LOCK_EXCLUSIVE);
+
+		START_CRIT_SECTION();
+
+		/* Initialize the page and write the data. */
+		dstPage = BufferGetPage(dstBuf);
+		PageInit(dstPage, BufferGetPageSize(dstBuf), 0);
+		memcpy(dstPage, srcPage, BLCKSZ);
+		MarkBufferDirty(dstBuf);
+
+		/* WAL-log the copied page. */
+		if (use_wal)
+			log_newpage_buffer(dstBuf, true);
+
+		END_CRIT_SECTION();
+
+		UnlockReleaseBuffer(dstBuf);
+		ReleaseBuffer(srcBuf);
+	}
+}
+
+/*
+ * GetRelfileNodeFromFileName - Get relfilenode from the filename
+ *
+ * Return InvalidOid for the temp relation.  Also return InvalidOid if the file
+ * is not for the first segment or for the MAIN_FORKNUM.  Basically, for each
+ * relation we want to return a valid relfilenode only for the MAIN_FORKNUM and
+ * for the first segment.  And, based on the relfilenode the caller will take
+ * care of copying all the forks.
+ */
+static Oid
+GetRelfileNodeFromFileName(char *filename)
+{
+	int		nmatch;
+	int		segno;
+	int		backendId;
+	Oid		relfilenode;
+	char	forkname[FORKNAMECHARS + 1];
+
+	/* Return InvalidOid if it's file for temp relation. */
+	nmatch = sscanf(filename, "%d_%u", &backendId, &relfilenode);
+	if (nmatch == 2)
+		return InvalidOid;
+
+	/* If not first segment, return InvalidOid. */
+	nmatch = sscanf(filename, "%u.%u", &relfilenode, &segno);
+	if (nmatch == 2)
+		return InvalidOid;
+
+	/* If not main fork, return InvalidOid. */
+	nmatch = sscanf(filename, "%u_%s", &relfilenode, forkname);
+	if (nmatch == 2)
+		return InvalidOid;
+	else if (nmatch == 1)
+		return relfilenode;
+
+	return InvalidOid;
+}
+
+/*
+ * CopyDatabase - Copy source database to the target database.
+ *
+ * Create target database directory and copy data files from the source database
+ * to the target database, block by block and WAL log all the operations.
+ */
+static void
+CopyDatabase(Oid src_dboid, Oid dst_dboid, Oid src_tsid, Oid dst_tsid)
+{
+	DIR		   *xldir;
+	struct dirent *xlde;
+	char	   *srcpath;
+	char	   *dstpath;
+	char		fromfile[MAXPGPATH * 2];
+	Oid			relfilenode;
+	RelFileNode	srcrnode;
+	RelFileNode	dstrnode;
+
+	/* Get the source database path. */
+	srcpath = GetDatabasePath(src_dboid, src_tsid);
+
+	/* Get the destination database path. */
+	dstpath = GetDatabasePath(dst_dboid, dst_tsid);
+
+	/* Create database directory and write PG_VERSION file. */
+	CreateDirAndVersionFile(dstpath, dst_dboid, dst_tsid, false);
+
+	/* Copy relmap file from source database to the destination database. */
+	CopyRelationMap(dst_dboid, dst_tsid, srcpath, dstpath);
+
+	xldir = AllocateDir(srcpath);
+	srcrnode.spcNode = src_tsid;
+	srcrnode.dbNode = src_dboid;
+	dstrnode.spcNode = dst_tsid;
+	dstrnode.dbNode = dst_dboid;
+
+	while ((xlde = ReadDir(xldir, srcpath)) != NULL)
+	{
+		struct stat fst;
+
+		/* If we got a cancel signal during the copy of the directory, quit */
+		CHECK_FOR_INTERRUPTS();
+
+		if (strcmp(xlde->d_name, ".") == 0 ||
+			strcmp(xlde->d_name, "..") == 0)
+			continue;
+
+		snprintf(fromfile, sizeof(fromfile), "%s/%s", srcpath, xlde->d_name);
+
+		if (lstat(fromfile, &fst) < 0)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not stat file \"%s\": %m", fromfile)));
+
+		relfilenode = GetRelfileNodeFromFileName(xlde->d_name);
+
+		if (OidIsValid(relfilenode))
+		{
+			SMgrRelation	src_smgr;
+			SMgrRelation	dst_smgr;
+			char			relpersistence;
+
+			dstrnode.relNode = srcrnode.relNode = relfilenode;
+
+			/* Open the source and the destination relation at smgr level. */
+			src_smgr = smgropen(srcrnode, InvalidBackendId);
+			dst_smgr = smgropen(dstrnode, InvalidBackendId);
+
+			if (smgrexists(src_smgr, INIT_FORKNUM))
+				relpersistence = RELPERSISTENCE_UNLOGGED;
+			else
+				relpersistence = RELPERSISTENCE_PERMANENT;
+
+			RelationCopyAllFork(src_smgr, dst_smgr, relpersistence,
+								RelationCopyStorageUsingBuffer);
+		}
+	}
+	FreeDir(xldir);
+}
 
 /*
  * CREATE DATABASE
@@ -563,24 +850,11 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	InvokeObjectPostCreateHook(DatabaseRelationId, dboid, 0);
 
 	/*
-	 * Force a checkpoint before starting the copy. This will force all dirty
-	 * buffers, including those of unlogged tables, out to disk, to ensure
-	 * source database is up-to-date on disk for the copy.
-	 * FlushDatabaseBuffers() would suffice for that, but we also want to
-	 * process any pending unlink requests. Otherwise, if a checkpoint
-	 * happened while we're copying files, a file might be deleted just when
-	 * we're about to copy it, causing the lstat() call in copydir() to fail
-	 * with ENOENT.
-	 */
-	RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT
-					  | CHECKPOINT_FLUSH_ALL);
-
-	/*
-	 * Once we start copying subdirectories, we need to be able to clean 'em
-	 * up if we fail.  Use an ENSURE block to make sure this happens.  (This
-	 * is not a 100% solution, because of the possibility of failure during
-	 * transaction commit after we leave this routine, but it should handle
-	 * most scenarios.)
+	 * Once we start copying files from the source database, we need to be able
+	 * to clean 'em up if we fail.  Use an ENSURE block to make sure this
+	 * happens.  (This is not a 100% solution, because of the possibility of
+	 * failure during transaction commit after we leave this routine, but it
+	 * should handle most scenarios.)
 	 */
 	fparms.src_dboid = src_dboid;
 	fparms.dest_dboid = dboid;
@@ -599,7 +873,6 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 			Oid			srctablespace = spaceform->oid;
 			Oid			dsttablespace;
 			char	   *srcpath;
-			char	   *dstpath;
 			struct stat st;
 
 			/* No need to copy global tablespace */
@@ -621,80 +894,18 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 			else
 				dsttablespace = srctablespace;
 
-			dstpath = GetDatabasePath(dboid, dsttablespace);
-
-			/*
-			 * Copy this subdirectory to the new location
-			 *
-			 * We don't need to copy subdirectories
-			 */
-			copydir(srcpath, dstpath, false);
-
-			/* Record the filesystem change in XLOG */
-			{
-				xl_dbase_create_rec xlrec;
-
-				xlrec.db_id = dboid;
-				xlrec.tablespace_id = dsttablespace;
-				xlrec.src_db_id = src_dboid;
-				xlrec.src_tablespace_id = srctablespace;
-
-				XLogBeginInsert();
-				XLogRegisterData((char *) &xlrec, sizeof(xl_dbase_create_rec));
-
-				(void) XLogInsert(RM_DBASE_ID,
-								  XLOG_DBASE_CREATE | XLR_SPECIAL_REL_UPDATE);
-			}
+			CopyDatabase(src_dboid, dboid, srctablespace, dsttablespace);
 		}
 		table_endscan(scan);
 		table_close(rel, AccessShareLock);
-
-		/*
-		 * We force a checkpoint before committing.  This effectively means
-		 * that committed XLOG_DBASE_CREATE operations will never need to be
-		 * replayed (at least not in ordinary crash recovery; we still have to
-		 * make the XLOG entry for the benefit of PITR operations). This
-		 * avoids two nasty scenarios:
-		 *
-		 * #1: When PITR is off, we don't XLOG the contents of newly created
-		 * indexes; therefore the drop-and-recreate-whole-directory behavior
-		 * of DBASE_CREATE replay would lose such indexes.
-		 *
-		 * #2: Since we have to recopy the source database during DBASE_CREATE
-		 * replay, we run the risk of copying changes in it that were
-		 * committed after the original CREATE DATABASE command but before the
-		 * system crash that led to the replay.  This is at least unexpected
-		 * and at worst could lead to inconsistencies, eg duplicate table
-		 * names.
-		 *
-		 * (Both of these were real bugs in releases 8.0 through 8.0.3.)
-		 *
-		 * In PITR replay, the first of these isn't an issue, and the second
-		 * is only a risk if the CREATE DATABASE and subsequent template
-		 * database change both occur while a base backup is being taken.
-		 * There doesn't seem to be much we can do about that except document
-		 * it as a limitation.
-		 *
-		 * Perhaps if we ever implement CREATE DATABASE in a less cheesy way,
-		 * we can avoid this.
-		 */
-		RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT);
-
-		/*
-		 * Close pg_database, but keep lock till commit.
-		 */
-		table_close(pg_database_rel, NoLock);
-
-		/*
-		 * Force synchronous commit, thus minimizing the window between
-		 * creation of the database files and committal of the transaction. If
-		 * we crash before committing, we'll have a DB that's taking up disk
-		 * space but is not in pg_database, which is not good.
-		 */
-		ForceSyncCommit();
 	}
 	PG_END_ENSURE_ERROR_CLEANUP(createdb_failure_callback,
 								PointerGetDatum(&fparms));
+
+	/*
+	 * Close pg_database, but keep lock till commit.
+	 */
+	table_close(pg_database_rel, NoLock);
 
 	return dboid;
 }
@@ -1196,34 +1407,6 @@ movedb(const char *dbname, const char *tblspcname)
 	dst_dbpath = GetDatabasePath(db_id, dst_tblspcoid);
 
 	/*
-	 * Force a checkpoint before proceeding. This will force all dirty
-	 * buffers, including those of unlogged tables, out to disk, to ensure
-	 * source database is up-to-date on disk for the copy.
-	 * FlushDatabaseBuffers() would suffice for that, but we also want to
-	 * process any pending unlink requests. Otherwise, the check for existing
-	 * files in the target directory might fail unnecessarily, not to mention
-	 * that the copy might fail due to source files getting deleted under it.
-	 * On Windows, this also ensures that background procs don't hold any open
-	 * files, which would cause rmdir() to fail.
-	 */
-	RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT
-					  | CHECKPOINT_FLUSH_ALL);
-
-	/*
-	 * Now drop all buffers holding data of the target database; they should
-	 * no longer be dirty so DropDatabaseBuffers is safe.
-	 *
-	 * It might seem that we could just let these buffers age out of shared
-	 * buffers naturally, since they should not get referenced anymore.  The
-	 * problem with that is that if the user later moves the database back to
-	 * its original tablespace, any still-surviving buffers would appear to
-	 * contain valid data again --- but they'd be missing any changes made in
-	 * the database while it was in the new tablespace.  In any case, freeing
-	 * buffers that should never be used again seems worth the cycles.
-	 */
-	DropDatabaseBuffers(db_id, src_tblspcoid);
-
-	/*
 	 * Check for existence of files in the target directory, i.e., objects of
 	 * this database that are already in the target tablespace.  We can't
 	 * allow the move in such a case, because we would need to change those
@@ -1258,38 +1441,16 @@ movedb(const char *dbname, const char *tblspcname)
 	}
 
 	/*
-	 * Use an ENSURE block to make sure we remove the debris if the copy fails
-	 * (eg, due to out-of-disk-space).  This is not a 100% solution, because
-	 * of the possibility of failure during transaction commit, but it should
-	 * handle most scenarios.
+	 * Use an ENSURE block to make sure we remove the debris if the copy fails.
+	 * This is not a 100% solution, because of the possibility of failure
+	 * during transaction commit, but it should handle most scenarios.
 	 */
 	fparms.dest_dboid = db_id;
 	fparms.dest_tsoid = dst_tblspcoid;
 	PG_ENSURE_ERROR_CLEANUP(movedb_failure_callback,
 							PointerGetDatum(&fparms));
 	{
-		/*
-		 * Copy files from the old tablespace to the new one
-		 */
-		copydir(src_dbpath, dst_dbpath, false);
-
-		/*
-		 * Record the filesystem change in XLOG
-		 */
-		{
-			xl_dbase_create_rec xlrec;
-
-			xlrec.db_id = db_id;
-			xlrec.tablespace_id = dst_tblspcoid;
-			xlrec.src_db_id = db_id;
-			xlrec.src_tablespace_id = src_tblspcoid;
-
-			XLogBeginInsert();
-			XLogRegisterData((char *) &xlrec, sizeof(xl_dbase_create_rec));
-
-			(void) XLogInsert(RM_DBASE_ID,
-							  XLOG_DBASE_CREATE | XLR_SPECIAL_REL_UPDATE);
-		}
+		CopyDatabase(db_id, db_id, src_tblspcoid, dst_tblspcoid);
 
 		/*
 		 * Update the database's pg_database tuple
@@ -1323,28 +1484,27 @@ movedb(const char *dbname, const char *tblspcname)
 		systable_endscan(sysscan);
 
 		/*
-		 * Force another checkpoint here.  As in CREATE DATABASE, this is to
-		 * ensure that we don't have to replay a committed XLOG_DBASE_CREATE
-		 * operation, which would cause us to lose any unlogged operations
-		 * done in the new DB tablespace before the next checkpoint.
-		 */
-		RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT);
-
-		/*
-		 * Force synchronous commit, thus minimizing the window between
-		 * copying the database files and committal of the transaction. If we
-		 * crash before committing, we'll leave an orphaned set of files on
-		 * disk, which is not fatal but not good either.
-		 */
-		ForceSyncCommit();
-
-		/*
 		 * Close pg_database, but keep lock till commit.
 		 */
 		table_close(pgdbrel, NoLock);
 	}
 	PG_END_ENSURE_ERROR_CLEANUP(movedb_failure_callback,
 								PointerGetDatum(&fparms));
+
+	/*
+	 * Now drop all buffers holding data of the target database for the old
+	 * tablespace oid; We have already copied all the data to the new
+	 * tablespace so we no longer required the old buffers.
+	 *
+	 * It might seem that we could just let these buffers age out of shared
+	 * buffers naturally, since they should not get referenced anymore.  The
+	 * problem with that is that if the user later moves the database back to
+	 * its original tablespace, any still-surviving buffers would appear to
+	 * contain valid data again --- but they'd be missing any changes made in
+	 * the database while it was in the new tablespace.  In any case, freeing
+	 * buffers that should never be used again seems worth the cycles.
+	 */
+	DropDatabaseBuffers(db_id, src_tblspcoid);
 
 	/*
 	 * Commit the transaction so that the pg_database update is committed. If
@@ -2138,39 +2298,11 @@ dbase_redo(XLogReaderState *record)
 	if (info == XLOG_DBASE_CREATE)
 	{
 		xl_dbase_create_rec *xlrec = (xl_dbase_create_rec *) XLogRecGetData(record);
-		char	   *src_path;
-		char	   *dst_path;
-		struct stat st;
+		char	   *dbpath;
 
-		src_path = GetDatabasePath(xlrec->src_db_id, xlrec->src_tablespace_id);
-		dst_path = GetDatabasePath(xlrec->db_id, xlrec->tablespace_id);
-
-		/*
-		 * Our theory for replaying a CREATE is to forcibly drop the target
-		 * subdirectory if present, then re-copy the source data. This may be
-		 * more work than needed, but it is simple to implement.
-		 */
-		if (stat(dst_path, &st) == 0 && S_ISDIR(st.st_mode))
-		{
-			if (!rmtree(dst_path, true))
-				/* If this failed, copydir() below is going to error. */
-				ereport(WARNING,
-						(errmsg("some useless files may be left behind in old database directory \"%s\"",
-								dst_path)));
-		}
-
-		/*
-		 * Force dirty buffers out to disk, to ensure source database is
-		 * up-to-date for the copy.
-		 */
-		FlushDatabaseBuffers(xlrec->src_db_id);
-
-		/*
-		 * Copy this subdirectory to the new location
-		 *
-		 * We don't need to copy subdirectories
-		 */
-		copydir(src_path, dst_path, false);
+		dbpath = GetDatabasePath(xlrec->db_id, xlrec->tablespace_id);
+		CreateDirAndVersionFile(dbpath, xlrec->db_id, xlrec->tablespace_id,
+								true);
 	}
 	else if (info == XLOG_DBASE_DROP)
 	{

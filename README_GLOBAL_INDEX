@@ -1,0 +1,6 @@
+GLOBAL INDEX:
+
+Main Problems to be solved:
+
+1. Storing partition identifier in the index tuple
+- Currently, we just have 6 bytes TID which is not sufficient, because for the global index we should also identify the partition along with the block number and offset of the heap page. 

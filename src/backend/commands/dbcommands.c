@@ -995,7 +995,7 @@ dropdb(const char *dbname, bool missing_ok, bool force)
 	 * worse, it will delete files that belong to a newly created database
 	 * with the same OID.
 	 */
-	ForgetDatabaseSyncRequests(db_id);
+	ForgetDatabaseSyncRequests(db_id, InvalidOid);
 
 	/*
 	 * Force a checkpoint to make sure the checkpointer has received the
@@ -2241,7 +2241,7 @@ dbase_redo(XLogReaderState *record)
 		DropDatabaseBuffers(xlrec->db_id, InvalidOid);
 
 		/* Also, clean out any fsync requests that might be pending in md.c */
-		ForgetDatabaseSyncRequests(xlrec->db_id);
+		ForgetDatabaseSyncRequests(xlrec->db_id, InvalidOid);
 
 		/* Clean out the xlog relcache too */
 		XLogDropDatabase(xlrec->db_id);

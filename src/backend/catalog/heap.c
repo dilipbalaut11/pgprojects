@@ -359,7 +359,7 @@ heap_create(const char *relname,
 		 * with oid same as relid.
 		 */
 		if (!OidIsValid(relfilenode))
-			relfilenode = relid;
+			relfilenode = GetNewRelFileNode(reltablespace, relpersistence);
 	}
 
 	/*
@@ -1243,8 +1243,8 @@ heap_create_with_catalog(const char *relname,
 		}
 
 		if (!OidIsValid(relid))
-			relid = GetNewRelFileNode(reltablespace, pg_class_desc,
-									  relpersistence);
+			relid = GetNewOidWithIndex(pg_class_desc, ClassOidIndexId,
+									   Anum_pg_class_oid);
 	}
 
 	/*

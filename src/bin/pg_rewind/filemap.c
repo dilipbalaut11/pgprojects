@@ -512,6 +512,7 @@ isRelDataFile(const char *path)
 	RelFileNode rnode;
 	unsigned int segNo;
 	int			nmatch;
+	uint64		relNode;
 	bool		matched;
 
 	/*----
@@ -535,11 +536,12 @@ isRelDataFile(const char *path)
 	 */
 	rnode.spcNode = InvalidOid;
 	rnode.dbNode = InvalidOid;
-	rnode.relNode = InvalidOid;
+	RELFILENODE_SETRELNODE(rnode, InvalidRelfileNode);
 	segNo = 0;
 	matched = false;
 
-	nmatch = sscanf(path, "global/%u.%u", &rnode.relNode, &segNo);
+	nmatch = sscanf(path, "global/" UINT64_FORMAT ".%u", &relNode, &segNo);
+	RELFILENODE_SETRELNODE(rnode, relNode);
 	if (nmatch == 1 || nmatch == 2)
 	{
 		rnode.spcNode = GLOBALTABLESPACE_OID;
@@ -548,8 +550,9 @@ isRelDataFile(const char *path)
 	}
 	else
 	{
-		nmatch = sscanf(path, "base/%u/%u.%u",
-						&rnode.dbNode, &rnode.relNode, &segNo);
+		nmatch = sscanf(path, "base/%u/" UINT64_FORMAT ".%u",
+						&rnode.dbNode, &relNode, &segNo);
+		RELFILENODE_SETRELNODE(rnode, relNode);
 		if (nmatch == 2 || nmatch == 3)
 		{
 			rnode.spcNode = DEFAULTTABLESPACE_OID;
@@ -557,9 +560,10 @@ isRelDataFile(const char *path)
 		}
 		else
 		{
-			nmatch = sscanf(path, "pg_tblspc/%u/" TABLESPACE_VERSION_DIRECTORY "/%u/%u.%u",
-							&rnode.spcNode, &rnode.dbNode, &rnode.relNode,
+			nmatch = sscanf(path, "pg_tblspc/%u/" TABLESPACE_VERSION_DIRECTORY "/%u/" UINT64_FORMAT ".%u",
+							&rnode.spcNode, &rnode.dbNode, &relNode,
 							&segNo);
+			RELFILENODE_SETRELNODE(rnode, relNode);
 			if (nmatch == 3 || nmatch == 4)
 				matched = true;
 		}

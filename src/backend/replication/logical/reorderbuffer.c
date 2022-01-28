@@ -2134,7 +2134,7 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 					Assert(snapshot_now);
 
 					reloid = RelidByRelfilenode(change->data.tp.relnode.spcNode,
-												change->data.tp.relnode.relNode);
+							RELFILENODE_GETRELNODE(change->data.tp.relnode));
 
 					/*
 					 * Mapped catalog tuple without data, emitted while

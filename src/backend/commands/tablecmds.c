@@ -3304,7 +3304,7 @@ CheckRelationTableSpaceMove(Relation rel, Oid newTableSpaceId)
 void
 SetRelationTableSpace(Relation rel,
 					  Oid newTableSpaceId,
-					  Oid newRelFileNode)
+					  RelNode newRelFileNode)
 {
 	Relation	pg_class;
 	HeapTuple	tuple;
@@ -3324,7 +3324,7 @@ SetRelationTableSpace(Relation rel,
 	/* Update the pg_class row. */
 	rd_rel->reltablespace = (newTableSpaceId == MyDatabaseTableSpace) ?
 		InvalidOid : newTableSpaceId;
-	if (OidIsValid(newRelFileNode))
+	if (newRelFileNode != InvalidRelfileNode)
 		rd_rel->relfilenode = newRelFileNode;
 	CatalogTupleUpdate(pg_class, &tuple->t_self, tuple);
 
@@ -13441,7 +13441,7 @@ TryReuseIndex(Oid oldId, IndexStmt *stmt)
 		/* If it's a partitioned index, there is no storage to share. */
 		if (irel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
 		{
-			stmt->oldNode = irel->rd_node.relNode;
+			stmt->oldNode = RELFILENODE_GETRELNODE(irel->rd_node);
 			stmt->oldCreateSubid = irel->rd_createSubid;
 			stmt->oldFirstRelfilenodeSubid = irel->rd_firstRelfilenodeSubid;
 		}
@@ -14290,7 +14290,7 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 {
 	Relation	rel;
 	Oid			reltoastrelid;
-	Oid			newrelfilenode;
+	RelNode		newrelfilenode;
 	RelFileNode newrnode;
 	List	   *reltoastidxids = NIL;
 	ListCell   *lc;
@@ -14320,15 +14320,18 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	}
 
 	/*
-	 * Relfilenodes are not unique in databases across tablespaces, so we need
-	 * to allocate a new one in the new tablespace.
+	 * Generate a new relfilenode. Although relfilenodes are unique within a
+	 * cluster, we are unable to use the old relfilenode since unused
+	 * relfilenodes are not unlinked until commit.  So if within a transaction,
+	 * if we set the old tablespace again, we will get conflicting relfilenode
+	 * file.
 	 */
-	newrelfilenode = GetNewRelFileNode(newTableSpace, NULL,
+	newrelfilenode = GetNewRelFileNode(newTableSpace,
 									   rel->rd_rel->relpersistence);
 
 	/* Open old and new relation */
 	newrnode = rel->rd_node;
-	newrnode.relNode = newrelfilenode;
+	RELFILENODE_SETRELNODE(newrnode, newrelfilenode);
 	newrnode.spcNode = newTableSpace;
 
 	/* hand off to AM to actually create the new filenode and copy the data */

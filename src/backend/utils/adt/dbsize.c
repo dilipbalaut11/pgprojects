@@ -945,21 +945,21 @@ pg_relation_filepath(PG_FUNCTION_ARGS)
 		else
 			rnode.dbNode = MyDatabaseId;
 		if (relform->relfilenode)
-			rnode.relNode = relform->relfilenode;
+			RELFILENODE_SETRELNODE(rnode, relform->relfilenode);
 		else					/* Consult the relation mapper */
-			rnode.relNode = RelationMapOidToFilenode(relid,
-													 relform->relisshared);
+			RELFILENODE_SETRELNODE(rnode, RelationMapOidToFilenode(relid,
+													 relform->relisshared));
 	}
 	else
 	{
 		/* no storage, return NULL */
-		rnode.relNode = InvalidOid;
+		RELFILENODE_SETRELNODE(rnode, InvalidRelfileNode);
 		/* some compilers generate warnings without these next two lines */
 		rnode.dbNode = InvalidOid;
 		rnode.spcNode = InvalidOid;
 	}
 
-	if (!OidIsValid(rnode.relNode))
+	if (RELFILENODE_GETRELNODE(rnode) == InvalidRelfileNode)
 	{
 		ReleaseSysCache(tuple);
 		PG_RETURN_NULL();

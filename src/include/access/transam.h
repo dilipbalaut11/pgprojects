@@ -15,6 +15,7 @@
 #define TRANSAM_H
 
 #include "access/xlogdefs.h"
+#include "storage/relfilenode.h"
 
 
 /* ----------------
@@ -217,6 +218,9 @@ typedef struct VariableCacheData
 	 */
 	Oid			nextOid;		/* next OID to assign */
 	uint32		oidCount;		/* OIDs available before must do XLOG work */
+	RelNode		nextRelNode;	/* next relfilenode to assign */
+	uint32		relnodecount;	/* Relfilenode available before must do XLOG
+								   work */
 
 	/*
 	 * These fields are protected by XidGenLock.
@@ -298,6 +302,7 @@ extern void SetTransactionIdLimit(TransactionId oldest_datfrozenxid,
 extern void AdvanceOldestClogXid(TransactionId oldest_datfrozenxid);
 extern bool ForceTransactionIdLimitUpdate(void);
 extern Oid	GetNewObjectId(void);
+extern RelNode GetNewRelNode(void);
 extern void StopGeneratingPinnedObjectIds(void);
 
 #ifdef USE_ASSERT_CHECKING

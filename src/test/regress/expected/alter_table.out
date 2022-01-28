@@ -2175,10 +2175,10 @@ select relname,
            relname            | orig_oid | storage |     desc      
 ------------------------------+----------+---------+---------------
  at_partitioned               | t        | none    | 
- at_partitioned_0             | t        | own     | 
- at_partitioned_0_id_name_key | t        | own     | child 0 index
- at_partitioned_1             | t        | own     | 
- at_partitioned_1_id_name_key | t        | own     | child 1 index
+ at_partitioned_0             | t        | orig    | 
+ at_partitioned_0_id_name_key | t        | orig    | child 0 index
+ at_partitioned_1             | t        | orig    | 
+ at_partitioned_1_id_name_key | t        | orig    | child 1 index
  at_partitioned_id_name_key   | t        | none    | parent index
 (6 rows)
 
@@ -2209,10 +2209,10 @@ select relname,
            relname            | orig_oid | storage |     desc     
 ------------------------------+----------+---------+--------------
  at_partitioned               | t        | none    | 
- at_partitioned_0             | t        | own     | 
- at_partitioned_0_id_name_key | f        | own     | parent index
- at_partitioned_1             | t        | own     | 
- at_partitioned_1_id_name_key | f        | own     | parent index
+ at_partitioned_0             | t        | orig    | 
+ at_partitioned_0_id_name_key | f        | OTHER   | parent index
+ at_partitioned_1             | t        | orig    | 
+ at_partitioned_1_id_name_key | f        | OTHER   | parent index
  at_partitioned_id_name_key   | f        | none    | parent index
 (6 rows)
 

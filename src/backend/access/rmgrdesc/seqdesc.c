@@ -25,9 +25,9 @@ seq_desc(StringInfo buf, XLogReaderState *record)
 	xl_seq_rec *xlrec = (xl_seq_rec *) rec;
 
 	if (info == XLOG_SEQ_LOG)
-		appendStringInfo(buf, "rel %u/%u/%u",
+		appendStringInfo(buf, "rel %u/%u/" UINT64_FORMAT,
 						 xlrec->node.spcNode, xlrec->node.dbNode,
-						 xlrec->node.relNode);
+						 RELFILENODE_GETRELNODE(xlrec->node));
 }
 
 const char *

@@ -1288,7 +1288,7 @@ retry:
 static void
 RelationInitPhysicalAddr(Relation relation)
 {
-	Oid			oldnode = relation->rd_node.relNode;
+	Oid			oldnode = RELFILENODE_GETRELNODE(relation->rd_node);
 
 	/* these relations kinds never have storage */
 	if (!RELKIND_HAS_STORAGE(relation->rd_rel->relkind))
@@ -1335,15 +1335,16 @@ RelationInitPhysicalAddr(Relation relation)
 			heap_freetuple(phys_tuple);
 		}
 
-		relation->rd_node.relNode = relation->rd_rel->relfilenode;
+		RELFILENODE_SETRELNODE(relation->rd_node,
+							   relation->rd_rel->relfilenode);
 	}
 	else
 	{
 		/* Consult the relation mapper */
-		relation->rd_node.relNode =
-			RelationMapOidToFilenode(relation->rd_id,
-									 relation->rd_rel->relisshared);
-		if (!OidIsValid(relation->rd_node.relNode))
+		RELFILENODE_SETRELNODE(relation->rd_node,
+							   RelationMapOidToFilenode(relation->rd_id,
+											relation->rd_rel->relisshared));
+		if (RELFILENODE_GETRELNODE(relation->rd_node) == InvalidRelfileNode)
 			elog(ERROR, "could not find relation mapping for relation \"%s\", OID %u",
 				 RelationGetRelationName(relation), relation->rd_id);
 	}
@@ -1353,7 +1354,8 @@ RelationInitPhysicalAddr(Relation relation)
 	 * rd_firstRelfilenodeSubid.  No subtransactions start or end while in
 	 * parallel mode, so the specific SubTransactionId does not matter.
 	 */
-	if (IsParallelWorker() && oldnode != relation->rd_node.relNode)
+	if (IsParallelWorker() && oldnode !=
+		RELFILENODE_GETRELNODE(relation->rd_node))
 	{
 		if (RelFileNodeSkippingWAL(relation->rd_node))
 			relation->rd_firstRelfilenodeSubid = TopSubTransactionId;
@@ -1958,13 +1960,13 @@ formrdesc(const char *relationName, Oid relationReltype,
 	/*
 	 * All relations made with formrdesc are mapped.  This is necessarily so
 	 * because there is no other way to know what filenode they currently
-	 * have.  In bootstrap mode, add them to the initial relation mapper data,
-	 * specifying that the initial filenode is the same as the OID.
+	 * have.  In bootstrap mode, generate a new relfilenode and add them to the
+	 * initial relation mapper data.
 	 */
-	relation->rd_rel->relfilenode = InvalidOid;
+	relation->rd_rel->relfilenode = InvalidRelfileNode;
 	if (IsBootstrapProcessingMode())
 		RelationMapUpdateMap(RelationGetRelid(relation),
-							 RelationGetRelid(relation),
+							 GetNewRelNode(),
 							 isshared, true);
 
 	/*
@@ -3673,7 +3675,7 @@ RelationBuildLocalRelation(const char *relname,
 void
 RelationSetNewRelfilenode(Relation relation, char persistence)
 {
-	Oid			newrelfilenode;
+	RelNode		newrelfilenode;
 	Relation	pg_class;
 	HeapTuple	tuple;
 	Form_pg_class classform;
@@ -3682,7 +3684,7 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 	RelFileNode newrnode;
 
 	/* Allocate a new relfilenode */
-	newrelfilenode = GetNewRelFileNode(relation->rd_rel->reltablespace, NULL,
+	newrelfilenode = GetNewRelFileNode(relation->rd_rel->reltablespace,
 									   persistence);
 
 	/*
@@ -3711,7 +3713,8 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 	 * caught here, if GetNewRelFileNode messes up for any reason.
 	 */
 	newrnode = relation->rd_node;
-	newrnode.relNode = newrelfilenode;
+	RELFILENODE_SETRELNODE(newrnode, newrelfilenode);
+
 
 	if (RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind))
 	{

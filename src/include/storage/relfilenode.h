@@ -18,6 +18,27 @@
 #include "storage/backendid.h"
 
 /*
+ * RelNode data type identifies the specific relation.  RelNode is unique
+ * within a cluster.
+ */
+typedef	uint64	RelNode;
+
+#define InvalidRelfileNode		((RelNode) 0)
+#define FirstNormalRelfileNode	((RelNode) 1)
+
+/*
+ * RelNodeId:
+ *
+ * this is a storage type for RelNode.  The reasoning behind using this is same
+ * as using the BlockId so refer comment atop BlockId.
+ */
+typedef struct RelNodeId
+{
+	uint32	rn_hi;
+	uint32	rn_lo;
+} RelNodeId;
+
+/*
  * RelFileNode must provide all that we need to know to physically access
  * a relation, with the exception of the backend ID, which can be provided
  * separately. Note, however, that a "physical" relation is comprised of
@@ -31,11 +52,14 @@
  * "shared" relations (those common to all databases of a cluster).
  * Nonzero dbNode values correspond to pg_database.oid.
  *
- * relNode identifies the specific relation.  relNode corresponds to
- * pg_class.relfilenode (NOT pg_class.oid, because we need to be able
- * to assign new physical files to relations in some situations).
- * Notice that relNode is only unique within a database in a particular
- * tablespace.
+ * relNode identifies the specific relation and its fork number.  High 8 bits
+ * represent the fork number and the remaining 56 bits represent the
+ * relation.  relNode corresponds to pg_class.relfilenode (NOT pg_class.oid).
+ * Notice that relNode is unique within a cluster.
+ *
+ * Note: When RelFileNode is part of the BufferTag only then the first 8 bits
+ * of the relNode will represent the fork number otherwise those will be
+ * cleared.
  *
  * Note: spcNode must be GLOBALTABLESPACE_OID if and only if dbNode is
  * zero.  We support shared relations only in the "global" tablespace.
@@ -53,12 +77,14 @@
  * Note: various places use RelFileNode in hashtable keys.  Therefore,
  * there *must not* be any unused padding bytes in this struct.  That
  * should be safe as long as all the fields are of type Oid.
+ *
+ * We use RelNodeId in order to avoid the alignment padding.
  */
 typedef struct RelFileNode
 {
 	Oid			spcNode;		/* tablespace */
 	Oid			dbNode;			/* database */
-	Oid			relNode;		/* relation */
+	RelNodeId	relNode;		/* relation */
 } RelFileNode;
 
 /*
@@ -86,14 +112,50 @@ typedef struct RelFileNodeBackend
  * RelFileNodeBackendEquals.
  */
 #define RelFileNodeEquals(node1, node2) \
-	((node1).relNode == (node2).relNode && \
+	((RELFILENODE_GETRELNODE((node1)) == RELFILENODE_GETRELNODE((node2))) && \
 	 (node1).dbNode == (node2).dbNode && \
 	 (node1).spcNode == (node2).spcNode)
 
 #define RelFileNodeBackendEquals(node1, node2) \
-	((node1).node.relNode == (node2).node.relNode && \
+	(RELFILENODE_GETRELNODE((node1)) == RELFILENODE_GETRELNODE((node2)) && \
 	 (node1).node.dbNode == (node2).node.dbNode && \
 	 (node1).backend == (node2).backend && \
 	 (node1).node.spcNode == (node2).node.spcNode)
+
+/*
+ * These macros define the "relation" stored in the RelFileNode.relNode.  Its
+ * remaining 8 high-order bits identify the relation's fork number.
+ */
+#define RELFILENODE_RELNODE_BITS	56
+#define RELFILENODE_RELNODE_MASK	((((uint64) 1) << RELFILENODE_RELNODE_BITS) - 1)
+
+/* Retrieve the RelNode from a RelNodeId. */
+#define RELNODEID_GET_RELNODE(rnodeid) \
+	(uint64) (((uint64) (rnodeid).rn_hi << 32) | ((uint32) (rnodeid).rn_lo))
+
+/* Store the given value in RelNodeId. */
+#define RELNODEID_SET_RELNODE(rnodeid, val) \
+( \
+	(rnodeid).rn_hi = (val) >> 32, \
+	(rnodeid).rn_lo = (val) & 0xffffffff \
+)
+
+/* Gets the relfilenode stored in rnode.relNode. */
+#define RELFILENODE_GETRELNODE(rnode) \
+	(RELNODEID_GET_RELNODE((rnode).relNode) & RELFILENODE_RELNODE_MASK)
+
+/* Gets the fork number stored in rnode.relNode. */
+#define RELFILENODE_GETFORKNUM(rnode) \
+	(RELNODEID_GET_RELNODE((rnode).relNode) >> RELFILENODE_RELNODE_BITS)
+
+/* Sets input val in the relfilenode part of the rnode.relNode. */
+#define RELFILENODE_SETRELNODE(rnode, val) \
+	RELNODEID_SET_RELNODE((rnode).relNode, (val) & RELFILENODE_RELNODE_MASK)
+
+/* Sets input val in the fork number part of the rnode.relNode. */
+#define RELFILENODE_SETFORKNUM(rnode, val) \
+	RELNODEID_SET_RELNODE((rnode).relNode, \
+						  (RELNODEID_GET_RELNODE((rnode).relNode)) | \
+						  ((uint64) (val) << RELFILENODE_RELNODE_BITS))
 
 #endif							/* RELFILENODE_H */

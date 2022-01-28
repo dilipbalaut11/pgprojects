@@ -26,9 +26,9 @@ out_gistxlogPageUpdate(StringInfo buf, gistxlogPageUpdate *xlrec)
 static void
 out_gistxlogPageReuse(StringInfo buf, gistxlogPageReuse *xlrec)
 {
-	appendStringInfo(buf, "rel %u/%u/%u; blk %u; latestRemovedXid %u:%u",
+	appendStringInfo(buf, "rel %u/%u/" UINT64_FORMAT "; blk %u; latestRemovedXid %u:%u",
 					 xlrec->node.spcNode, xlrec->node.dbNode,
-					 xlrec->node.relNode, xlrec->block,
+					 RELFILENODE_GETRELNODE(xlrec->node), xlrec->block,
 					 EpochFromFullTransactionId(xlrec->latestRemovedFullXid),
 					 XidFromFullTransactionId(xlrec->latestRemovedFullXid));
 }

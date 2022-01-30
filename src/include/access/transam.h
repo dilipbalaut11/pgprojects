@@ -217,7 +217,7 @@ typedef struct VariableCacheData
 	 */
 	Oid			nextOid;		/* next OID to assign */
 	uint32		oidCount;		/* OIDs available before must do XLOG work */
-	uint64		nextRelNode;	/* next relfilenode to assign */
+	RelNode		nextRelNode;	/* next relfilenode to assign */
 	uint32		relnodecount;	/* Relfilenode available before must do XLOG
 								   work */
 

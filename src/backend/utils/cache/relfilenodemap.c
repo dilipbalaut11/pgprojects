@@ -196,7 +196,7 @@ RelidByRelfilenode(Oid reltablespace, RelNode relfilenode)
 
 		/* set scan arguments */
 		skey[0].sk_argument = ObjectIdGetDatum(reltablespace);
-		skey[1].sk_argument = UInt64GetDatum(relfilenode);
+		skey[1].sk_argument = Int64GetDatum(relfilenode);
 
 		scandesc = systable_beginscan(relation,
 									  ClassTblspcRelfilenodeIndexId,

@@ -52,6 +52,8 @@ typedef PG_INT64_TYPE pg_int64;
  */
 typedef	pg_int64	RelNode;
 
+#define atorelnode(x) ((RelNode) strtoul((x), NULL, 10))
+
 #define InvalidRelfileNode		((RelNode) 0)
 #define FirstNormalRelfileNode	((RelNode) 1)
 #define RelfileNodeIsValid(relNode)  ((bool) ((relNode) != InvalidRelfileNode))

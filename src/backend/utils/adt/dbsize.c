@@ -850,7 +850,7 @@ Datum
 pg_relation_filenode(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
-	Oid			result;
+	RelNode		result;
 	HeapTuple	tuple;
 	Form_pg_class relform;
 
@@ -870,7 +870,7 @@ pg_relation_filenode(PG_FUNCTION_ARGS)
 	else
 	{
 		/* no storage, return NULL */
-		result = InvalidOid;
+		result = InvalidRelfileNode;
 	}
 
 	ReleaseSysCache(tuple);
@@ -878,7 +878,7 @@ pg_relation_filenode(PG_FUNCTION_ARGS)
 	if (!OidIsValid(result))
 		PG_RETURN_NULL();
 
-	PG_RETURN_OID(result);
+	PG_RETURN_INT64(result);
 }
 
 /*
@@ -898,11 +898,11 @@ Datum
 pg_filenode_relation(PG_FUNCTION_ARGS)
 {
 	Oid			reltablespace = PG_GETARG_OID(0);
-	Oid			relfilenode = PG_GETARG_OID(1);
+	RelNode		relfilenode = PG_GETARG_OID(1);
 	Oid			heaprel;
 
 	/* test needed so RelidByRelfilenode doesn't misbehave */
-	if (!OidIsValid(relfilenode))
+	if (!RelfileNodeIsValid(relfilenode))
 		PG_RETURN_NULL();
 
 	heaprel = RelidByRelfilenode(reltablespace, relfilenode);

@@ -93,7 +93,7 @@
 Oid			binary_upgrade_next_heap_pg_class_oid = InvalidOid;
 Oid			binary_upgrade_next_heap_pg_class_relfilenode = InvalidOid;
 Oid			binary_upgrade_next_toast_pg_class_oid = InvalidOid;
-Oid			binary_upgrade_next_toast_pg_class_relfilenode = InvalidOid;
+RelNode		binary_upgrade_next_toast_pg_class_relfilenode = InvalidRelfileNode;
 
 static void AddNewRelationTuple(Relation pg_class_desc,
 								Relation new_rel_desc,
@@ -912,7 +912,7 @@ InsertPgClassTuple(Relation pg_class_desc,
 	values[Anum_pg_class_reloftype - 1] = ObjectIdGetDatum(rd_rel->reloftype);
 	values[Anum_pg_class_relowner - 1] = ObjectIdGetDatum(rd_rel->relowner);
 	values[Anum_pg_class_relam - 1] = ObjectIdGetDatum(rd_rel->relam);
-	values[Anum_pg_class_relfilenode - 1] = ObjectIdGetDatum(rd_rel->relfilenode);
+	values[Anum_pg_class_relfilenode - 1] = UInt64GetDatum(rd_rel->relfilenode);
 	values[Anum_pg_class_reltablespace - 1] = ObjectIdGetDatum(rd_rel->reltablespace);
 	values[Anum_pg_class_relpages - 1] = Int32GetDatum(rd_rel->relpages);
 	values[Anum_pg_class_reltuples - 1] = Float4GetDatum(rd_rel->reltuples);
@@ -1209,13 +1209,13 @@ heap_create_with_catalog(const char *relname,
 					relid = binary_upgrade_next_toast_pg_class_oid;
 					binary_upgrade_next_toast_pg_class_oid = InvalidOid;
 
-					if (!OidIsValid(binary_upgrade_next_toast_pg_class_relfilenode))
+					if (!RelfileNodeIsValid(binary_upgrade_next_toast_pg_class_relfilenode))
 						ereport(ERROR,
 								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 								  errmsg("toast relfilenode value not set when in binary upgrade mode")));
 
 					relfilenode = binary_upgrade_next_toast_pg_class_relfilenode;
-					binary_upgrade_next_toast_pg_class_relfilenode = InvalidOid;
+					binary_upgrade_next_toast_pg_class_relfilenode = InvalidRelfileNode;
 				}
 			}
 			else

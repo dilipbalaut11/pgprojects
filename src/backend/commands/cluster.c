@@ -1006,9 +1006,9 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 				reltup2;
 	Form_pg_class relform1,
 				relform2;
-	Oid			relfilenode1,
+	RelNode		relfilenode1,
 				relfilenode2;
-	Oid			swaptemp;
+	RelNode		swaptemp;
 	char		swptmpchr;
 
 	/* We need writable copies of both pg_class tuples. */

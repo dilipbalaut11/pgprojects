@@ -2896,7 +2896,7 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 			 * particular this eliminates all shared catalogs.).
 			 */
 			if (RELKIND_HAS_STORAGE(classtuple->relkind) &&
-				!OidIsValid(classtuple->relfilenode))
+				!RelfileNodeIsValid(classtuple->relfilenode))
 				skip_rel = true;
 
 			/*

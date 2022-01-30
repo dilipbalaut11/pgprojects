@@ -213,7 +213,7 @@ RelidByRelfilenode(Oid reltablespace, RelNode relfilenode)
 
 			if (found)
 				elog(ERROR,
-					 "unexpected duplicate for tablespace %u, relfilenode %u",
+					 "unexpected duplicate for tablespace %u, relfilenode" UINT64_FORMAT,
 					 reltablespace, relfilenode);
 			found = true;
 

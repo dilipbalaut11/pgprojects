@@ -4709,7 +4709,7 @@ binary_upgrade_set_pg_class_oids(Archive *fout,
 							  "SELECT pg_catalog.binary_upgrade_set_next_toast_pg_class_oid('%u'::pg_catalog.oid);\n",
 							  toast_oid);
 			appendPQExpBuffer(upgrade_buffer,
-							  "SELECT pg_catalog.binary_upgrade_set_next_toast_relfilenode('%u'::pg_catalog.oid);\n",
+							  "SELECT pg_catalog.binary_upgrade_set_next_toast_relfilenode('%u'::pg_catalog.int8);\n",
 							  toast_relfilenode);
 
 			/* every toast table has an index */
@@ -4717,7 +4717,7 @@ binary_upgrade_set_pg_class_oids(Archive *fout,
 							  "SELECT pg_catalog.binary_upgrade_set_next_index_pg_class_oid('%u'::pg_catalog.oid);\n",
 							  toast_index_oid);
 			appendPQExpBuffer(upgrade_buffer,
-							  "SELECT pg_catalog.binary_upgrade_set_next_index_relfilenode('%u'::pg_catalog.oid);\n",
+							  "SELECT pg_catalog.binary_upgrade_set_next_index_relfilenode('%u'::pg_catalog.int8);\n",
 							  toast_index_relfilenode);
 		}
 

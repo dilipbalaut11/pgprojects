@@ -3606,7 +3606,7 @@ RelationBuildLocalRelation(const char *relname,
 
 	if (mapped_relation)
 	{
-		rel->rd_rel->relfilenode = InvalidOid;
+		rel->rd_rel->relfilenode = InvalidRelfileNode;
 		/* Add it to the active mapping information */
 		RelationMapUpdateMap(relid, relfilenode, shared_relation, true);
 	}

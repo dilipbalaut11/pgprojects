@@ -901,8 +901,7 @@ index_create(Relation heapRelation,
 	/*
 	 * Allocate an OID for the index, unless we were told what to use.
 	 *
-	 * The OID will be the relfilenode as well, so make sure it doesn't
-	 * collide with either pg_class OIDs or existing physical files.
+	 * Make sure it doesn't collide with either pg_class OIDs.
 	 */
 	if (!OidIsValid(indexRelationId))
 	{

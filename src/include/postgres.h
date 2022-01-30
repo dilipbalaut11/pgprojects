@@ -812,7 +812,7 @@ extern Datum Float8GetDatum(float8 X);
 typedef	uint64	RelNode;
 
 #define InvalidRelfileNode		((RelNode) 0)
-#define FirstNormalRelfileNode	((RelNode) 0x1111FFFFFFFFFF)
+#define FirstNormalRelfileNode	((RelNode) 1)
 #define RelfileNodeIsValid(relNode)  ((bool) ((relNode) != InvalidRelfileNode))
 
 #endif							/* POSTGRES_H */

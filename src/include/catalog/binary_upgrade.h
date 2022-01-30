@@ -26,7 +26,7 @@ extern PGDLLIMPORT Oid binary_upgrade_next_heap_pg_class_relfilenode;
 extern PGDLLIMPORT Oid binary_upgrade_next_index_pg_class_oid;
 extern PGDLLIMPORT Oid binary_upgrade_next_index_pg_class_relfilenode;
 extern PGDLLIMPORT Oid binary_upgrade_next_toast_pg_class_oid;
-extern PGDLLIMPORT uint64 binary_upgrade_next_toast_pg_class_relfilenode;
+extern PGDLLIMPORT RelNode binary_upgrade_next_toast_pg_class_relfilenode;
 
 extern PGDLLIMPORT Oid binary_upgrade_next_pg_enum_oid;
 extern PGDLLIMPORT Oid binary_upgrade_next_pg_authid_oid;

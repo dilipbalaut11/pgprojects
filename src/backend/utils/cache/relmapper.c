@@ -132,7 +132,7 @@ static RelMapFile pending_local_updates;
 
 
 /* non-export function prototypes */
-static void apply_map_update(RelMapFile *map, Oid relationId, uint64 fileNode,
+static void apply_map_update(RelMapFile *map, Oid relationId, RelNode fileNode,
 							 bool add_okay);
 static void merge_map_updates(RelMapFile *map, const RelMapFile *updates,
 							  bool add_okay);

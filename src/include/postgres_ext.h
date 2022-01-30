@@ -46,6 +46,16 @@ typedef unsigned int Oid;
 /* Define a signed 64-bit integer type for use in client API declarations. */
 typedef PG_INT64_TYPE pg_int64;
 
+/*
+ * RelNode data type identifies the specific relation.  RelNode is unique
+ * within a cluster.
+ */
+typedef	pg_int64	RelNode;
+
+#define InvalidRelfileNode		((RelNode) 0)
+#define FirstNormalRelfileNode	((RelNode) 1)
+#define RelfileNodeIsValid(relNode)  ((bool) ((relNode) != InvalidRelfileNode))
+
 
 /*
  * Identifiers of error message fields.  Kept here to keep common

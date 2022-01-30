@@ -536,7 +536,7 @@ isRelDataFile(const char *path)
 	 */
 	rnode.spcNode = InvalidOid;
 	rnode.dbNode = InvalidOid;
-	RELFILENODE_SETRELNODE(rnode, InvalidRelfileNode);
+	RELFILENODE_SETRELNODE(rnode, 0);	/* FIXME-1 */
 	segNo = 0;
 	matched = false;
 

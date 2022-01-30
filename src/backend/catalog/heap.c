@@ -303,7 +303,7 @@ heap_create(const char *relname,
 			Oid relnamespace,
 			Oid reltablespace,
 			Oid relid,
-			Oid relfilenode,
+			RelNode relfilenode,
 			Oid accessmtd,
 			TupleDesc tupDesc,
 			char relkind,
@@ -358,7 +358,7 @@ heap_create(const char *relname,
 		 * If relfilenode is unspecified by the caller then create storage
 		 * with oid same as relid.
 		 */
-		if (!OidIsValid(relfilenode))
+		if (!RelfileNodeIsValid(relfilenode))
 			relfilenode = GetNewRelFileNode(reltablespace, relpersistence);
 	}
 
@@ -1129,7 +1129,7 @@ heap_create_with_catalog(const char *relname,
 	Oid			new_type_oid;
 
 	/* By default set to InvalidOid unless overridden by binary-upgrade */
-	Oid			relfilenode = InvalidOid;
+	RelNode		relfilenode = InvalidRelfileNode;
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
 
@@ -1187,8 +1187,7 @@ heap_create_with_catalog(const char *relname,
 	/*
 	 * Allocate an OID for the relation, unless we were told what to use.
 	 *
-	 * The OID will be the relfilenode as well, so make sure it doesn't
-	 * collide with either pg_class OIDs or existing physical files.
+	 * Make sure that the Oid doesn't collide with either pg_class OIDs.
 	 */
 	if (!OidIsValid(relid))
 	{

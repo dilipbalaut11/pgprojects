@@ -18,15 +18,6 @@
 #include "storage/backendid.h"
 
 /*
- * RelNode data type identifies the specific relation.  RelNode is unique
- * within a cluster.
- */
-typedef	uint64	RelNode;
-
-#define InvalidRelfileNode		((RelNode) 0)
-#define FirstNormalRelfileNode	((RelNode) 1)
-
-/*
  * RelNodeId:
  *
  * this is a storage type for RelNode.  The reasoning behind using this is same

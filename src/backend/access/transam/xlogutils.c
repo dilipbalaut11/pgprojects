@@ -593,7 +593,7 @@ CreateFakeRelcacheEntry(RelFileNode rnode)
 	rel->rd_rel->relpersistence = RELPERSISTENCE_PERMANENT;
 
 	/* We don't know the name of the relation; use relfilenode instead */
-	sprintf(RelationGetRelationName(rel), UINT64_FORMAT,
+	sprintf(RelationGetRelationName(rel), INT64_FORMAT,
 			RELFILENODE_GETRELNODE(rnode));
 
 	/*

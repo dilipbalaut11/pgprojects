@@ -169,10 +169,10 @@ heap2_desc(StringInfo buf, XLogReaderState *record)
 	{
 		xl_heap_new_cid *xlrec = (xl_heap_new_cid *) rec;
 
-		appendStringInfo(buf, "rel %u/%u/%u; tid %u/%u",
+		appendStringInfo(buf, "rel %u/%u/" INT64_FORMAT "; tid %u/%u",
 						 xlrec->target_node.spcNode,
 						 xlrec->target_node.dbNode,
-						 xlrec->target_node.relNode,
+						 RELFILENODE_GETRELNODE(xlrec->target_node),
 						 ItemPointerGetBlockNumber(&(xlrec->target_tid)),
 						 ItemPointerGetOffsetNumber(&(xlrec->target_tid)));
 		appendStringInfo(buf, "; cmin: %u, cmax: %u, combo: %u",

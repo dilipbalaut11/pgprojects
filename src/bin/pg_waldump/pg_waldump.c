@@ -518,15 +518,17 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 
 			XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blk);
 			if (forknum != MAIN_FORKNUM)
-				printf(", blkref #%d: rel %u/%u/%u fork %s blk %u",
+				printf(", blkref #%d: rel %u/%u/" INT64_FORMAT " fork %s blk %u",
 					   block_id,
-					   rnode.spcNode, rnode.dbNode, rnode.relNode,
+					   rnode.spcNode, rnode.dbNode,
+					   RELFILENODE_GETRELNODE(rnode),
 					   forkNames[forknum],
 					   blk);
 			else
-				printf(", blkref #%d: rel %u/%u/%u blk %u",
+				printf(", blkref #%d: rel %u/%u/" INT64_FORMAT "blk %u",
 					   block_id,
-					   rnode.spcNode, rnode.dbNode, rnode.relNode,
+					   rnode.spcNode, rnode.dbNode,
+					   RELFILENODE_GETRELNODE(rnode),
 					   blk);
 			if (XLogRecHasBlockImage(record, block_id))
 			{
@@ -548,9 +550,9 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 				continue;
 
 			XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blk);
-			printf("\tblkref #%d: rel %u/%u/%u fork %s blk %u",
+			printf("\tblkref #%d: rel %u/%u/" INT64_FORMAT " fork %s blk %u",
 				   block_id,
-				   rnode.spcNode, rnode.dbNode, rnode.relNode,
+				   rnode.spcNode, rnode.dbNode, RELFILENODE_GETRELNODE(rnode),
 				   forkNames[forknum],
 				   blk);
 			if (XLogRecHasBlockImage(record, block_id))

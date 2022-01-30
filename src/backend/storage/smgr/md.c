@@ -124,8 +124,6 @@ static void mdunlinkfork(RelFileNodeBackend rnode, ForkNumber forkNum,
 static MdfdVec *mdopenfork(SMgrRelation reln, ForkNumber forknum, int behavior);
 static void register_dirty_segment(SMgrRelation reln, ForkNumber forknum,
 								   MdfdVec *seg);
-static void register_unlink_segment(RelFileNodeBackend rnode, ForkNumber forknum,
-									BlockNumber segno);
 static void register_forget_request(RelFileNodeBackend rnode, ForkNumber forknum,
 									BlockNumber segno);
 static void _fdvec_resize(SMgrRelation reln,
@@ -321,36 +319,25 @@ mdunlinkfork(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 	/*
 	 * Delete or truncate the first segment.
 	 */
-	if (isRedo || forkNum != MAIN_FORKNUM || RelFileNodeBackendIsTemp(rnode))
-	{
-		if (!RelFileNodeBackendIsTemp(rnode))
-		{
-			/* Prevent other backends' fds from holding on to the disk space */
-			ret = do_truncate(path);
-
-			/* Forget any pending sync requests for the first segment */
-			register_forget_request(rnode, forkNum, 0 /* first seg */ );
-		}
-		else
-			ret = 0;
-
-		/* Next unlink the file, unless it was already found to be missing */
-		if (ret == 0 || errno != ENOENT)
-		{
-			ret = unlink(path);
-			if (ret < 0 && errno != ENOENT)
-				ereport(WARNING,
-						(errcode_for_file_access(),
-						 errmsg("could not remove file \"%s\": %m", path)));
-		}
-	}
-	else
+	if (!RelFileNodeBackendIsTemp(rnode))
 	{
 		/* Prevent other backends' fds from holding on to the disk space */
 		ret = do_truncate(path);
 
-		/* Register request to unlink first segment later */
-		register_unlink_segment(rnode, forkNum, 0 /* first seg */ );
+		/* Forget any pending sync requests for the first segment */
+		register_forget_request(rnode, forkNum, 0 /* first seg */ );
+	}
+	else
+		ret = 0;
+
+	/* Next unlink the file, unless it was already found to be missing */
+	if (ret == 0 || errno != ENOENT)
+	{
+		ret = unlink(path);
+		if (ret < 0 && errno != ENOENT)
+			ereport(WARNING,
+					(errcode_for_file_access(),
+						errmsg("could not remove file \"%s\": %m", path)));
 	}
 
 	/*
@@ -640,7 +627,7 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	TRACE_POSTGRESQL_SMGR_MD_READ_START(forknum, blocknum,
 										reln->smgr_rnode.node.spcNode,
 										reln->smgr_rnode.node.dbNode,
-										reln->smgr_rnode.node.relNode,
+										RELFILENODE_GETRELNODE(reln->smgr_rnode.node1),
 										reln->smgr_rnode.backend);
 
 	v = _mdfd_getseg(reln, forknum, blocknum, false,
@@ -655,7 +642,7 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	TRACE_POSTGRESQL_SMGR_MD_READ_DONE(forknum, blocknum,
 									   reln->smgr_rnode.node.spcNode,
 									   reln->smgr_rnode.node.dbNode,
-									   reln->smgr_rnode.node.relNode,
+									   RELFILENODE_GETRELNODE(reln->smgr_rnode.node1),
 									   reln->smgr_rnode.backend,
 									   nbytes,
 									   BLCKSZ);
@@ -710,7 +697,7 @@ mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	TRACE_POSTGRESQL_SMGR_MD_WRITE_START(forknum, blocknum,
 										 reln->smgr_rnode.node.spcNode,
 										 reln->smgr_rnode.node.dbNode,
-										 reln->smgr_rnode.node.relNode,
+										 RELFILENODE_GETRELNODE(reln->smgr_rnode.node1),
 										 reln->smgr_rnode.backend);
 
 	v = _mdfd_getseg(reln, forknum, blocknum, skipFsync,
@@ -725,7 +712,7 @@ mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	TRACE_POSTGRESQL_SMGR_MD_WRITE_DONE(forknum, blocknum,
 										reln->smgr_rnode.node.spcNode,
 										reln->smgr_rnode.node.dbNode,
-										reln->smgr_rnode.node.relNode,
+										RELFILENODE_GETRELNODE(reln->smgr_rnode.node1),
 										reln->smgr_rnode.backend,
 										nbytes,
 										BLCKSZ);
@@ -995,23 +982,6 @@ register_dirty_segment(SMgrRelation reln, ForkNumber forknum, MdfdVec *seg)
 }
 
 /*
- * register_unlink_segment() -- Schedule a file to be deleted after next checkpoint
- */
-static void
-register_unlink_segment(RelFileNodeBackend rnode, ForkNumber forknum,
-						BlockNumber segno)
-{
-	FileTag		tag;
-
-	INIT_MD_FILETAG(tag, rnode.node, forknum, segno);
-
-	/* Should never be used with temp relations */
-	Assert(!RelFileNodeBackendIsTemp(rnode));
-
-	RegisterSyncRequest(&tag, SYNC_UNLINK_REQUEST, true /* retryOnError */ );
-}
-
-/*
  * register_forget_request() -- forget any fsyncs for a relation fork's segment
  */
 static void
@@ -1036,7 +1006,7 @@ ForgetDatabaseSyncRequests(Oid dbid)
 
 	rnode.dbNode = dbid;
 	rnode.spcNode = 0;
-	rnode.relNode = 0;
+	RELFILENODE_SETRELNODE(rnode, 0);
 
 	INIT_MD_FILETAG(tag, rnode, InvalidForkNumber, InvalidBlockNumber);
 

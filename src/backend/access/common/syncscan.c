@@ -161,7 +161,8 @@ SyncScanShmemInit(void)
 			 */
 			item->location.relfilenode.spcNode = InvalidOid;
 			item->location.relfilenode.dbNode = InvalidOid;
-			item->location.relfilenode.relNode = InvalidOid;
+			RELFILENODE_SETRELNODE(item->location.relfilenode,
+								   InvalidRelfileNode);
 			item->location.location = InvalidBlockNumber;
 
 			item->prev = (i > 0) ?

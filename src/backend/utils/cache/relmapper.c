@@ -79,7 +79,7 @@
 typedef struct RelMapping
 {
 	Oid			mapoid;			/* OID of a catalog */
-	Oid			mapfilenode;	/* its filenode number */
+	RelNodeId	mapfilenode;	/* its filenode number */
 } RelMapping;
 
 typedef struct RelMapFile
@@ -132,7 +132,7 @@ static RelMapFile pending_local_updates;
 
 
 /* non-export function prototypes */
-static void apply_map_update(RelMapFile *map, Oid relationId, Oid fileNode,
+static void apply_map_update(RelMapFile *map, Oid relationId, RelNode fileNode,
 							 bool add_okay);
 static void merge_map_updates(RelMapFile *map, const RelMapFile *updates,
 							  bool add_okay);
@@ -155,7 +155,7 @@ static void perform_relmap_update(bool shared, const RelMapFile *updates);
  * Returns InvalidOid if the OID is not known (which should never happen,
  * but the caller is in a better position to report a meaningful error).
  */
-Oid
+RelNode
 RelationMapOidToFilenode(Oid relationId, bool shared)
 {
 	const RelMapFile *map;
@@ -168,13 +168,13 @@ RelationMapOidToFilenode(Oid relationId, bool shared)
 		for (i = 0; i < map->num_mappings; i++)
 		{
 			if (relationId == map->mappings[i].mapoid)
-				return map->mappings[i].mapfilenode;
+				return RELNODEID_GET_RELNODE(map->mappings[i].mapfilenode);
 		}
 		map = &shared_map;
 		for (i = 0; i < map->num_mappings; i++)
 		{
 			if (relationId == map->mappings[i].mapoid)
-				return map->mappings[i].mapfilenode;
+				return RELNODEID_GET_RELNODE(map->mappings[i].mapfilenode);
 		}
 	}
 	else
@@ -183,17 +183,17 @@ RelationMapOidToFilenode(Oid relationId, bool shared)
 		for (i = 0; i < map->num_mappings; i++)
 		{
 			if (relationId == map->mappings[i].mapoid)
-				return map->mappings[i].mapfilenode;
+				return RELNODEID_GET_RELNODE(map->mappings[i].mapfilenode);
 		}
 		map = &local_map;
 		for (i = 0; i < map->num_mappings; i++)
 		{
 			if (relationId == map->mappings[i].mapoid)
-				return map->mappings[i].mapfilenode;
+				return RELNODEID_GET_RELNODE(map->mappings[i].mapfilenode);
 		}
 	}
 
-	return InvalidOid;
+	return InvalidRelfileNode;
 }
 
 /*
@@ -209,7 +209,7 @@ RelationMapOidToFilenode(Oid relationId, bool shared)
  * relfilenode doesn't pertain to a mapped relation.
  */
 Oid
-RelationMapFilenodeToOid(Oid filenode, bool shared)
+RelationMapFilenodeToOid(RelNode filenode, bool shared)
 {
 	const RelMapFile *map;
 	int32		i;
@@ -220,13 +220,13 @@ RelationMapFilenodeToOid(Oid filenode, bool shared)
 		map = &active_shared_updates;
 		for (i = 0; i < map->num_mappings; i++)
 		{
-			if (filenode == map->mappings[i].mapfilenode)
+			if (filenode == RELNODEID_GET_RELNODE(map->mappings[i].mapfilenode))
 				return map->mappings[i].mapoid;
 		}
 		map = &shared_map;
 		for (i = 0; i < map->num_mappings; i++)
 		{
-			if (filenode == map->mappings[i].mapfilenode)
+			if (filenode == RELNODEID_GET_RELNODE(map->mappings[i].mapfilenode))
 				return map->mappings[i].mapoid;
 		}
 	}
@@ -235,13 +235,13 @@ RelationMapFilenodeToOid(Oid filenode, bool shared)
 		map = &active_local_updates;
 		for (i = 0; i < map->num_mappings; i++)
 		{
-			if (filenode == map->mappings[i].mapfilenode)
+			if (filenode == RELNODEID_GET_RELNODE(map->mappings[i].mapfilenode))
 				return map->mappings[i].mapoid;
 		}
 		map = &local_map;
 		for (i = 0; i < map->num_mappings; i++)
 		{
-			if (filenode == map->mappings[i].mapfilenode)
+			if (filenode == RELNODEID_GET_RELNODE(map->mappings[i].mapfilenode))
 				return map->mappings[i].mapoid;
 		}
 	}
@@ -258,7 +258,7 @@ RelationMapFilenodeToOid(Oid filenode, bool shared)
  * immediately.  Otherwise it is made pending until CommandCounterIncrement.
  */
 void
-RelationMapUpdateMap(Oid relationId, Oid fileNode, bool shared,
+RelationMapUpdateMap(Oid relationId, RelNode fileNode, bool shared,
 					 bool immediate)
 {
 	RelMapFile *map;
@@ -316,7 +316,8 @@ RelationMapUpdateMap(Oid relationId, Oid fileNode, bool shared,
  * add_okay = false to draw an error if not.
  */
 static void
-apply_map_update(RelMapFile *map, Oid relationId, Oid fileNode, bool add_okay)
+apply_map_update(RelMapFile *map, Oid relationId, RelNode fileNode,
+				 bool add_okay)
 {
 	int32		i;
 
@@ -325,7 +326,7 @@ apply_map_update(RelMapFile *map, Oid relationId, Oid fileNode, bool add_okay)
 	{
 		if (relationId == map->mappings[i].mapoid)
 		{
-			map->mappings[i].mapfilenode = fileNode;
+			RELNODEID_SET_RELNODE(map->mappings[i].mapfilenode, fileNode);
 			return;
 		}
 	}
@@ -337,7 +338,8 @@ apply_map_update(RelMapFile *map, Oid relationId, Oid fileNode, bool add_okay)
 	if (map->num_mappings >= MAX_MAPPINGS)
 		elog(ERROR, "ran out of space in relation map");
 	map->mappings[map->num_mappings].mapoid = relationId;
-	map->mappings[map->num_mappings].mapfilenode = fileNode;
+	RELNODEID_SET_RELNODE(map->mappings[map->num_mappings].mapfilenode,
+						  fileNode);
 	map->num_mappings++;
 }
 
@@ -356,7 +358,8 @@ merge_map_updates(RelMapFile *map, const RelMapFile *updates, bool add_okay)
 	{
 		apply_map_update(map,
 						 updates->mappings[i].mapoid,
-						 updates->mappings[i].mapfilenode,
+						 RELNODEID_GET_RELNODE(
+							 updates->mappings[i].mapfilenode),
 						 add_okay);
 	}
 }

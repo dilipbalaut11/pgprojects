@@ -13442,7 +13442,7 @@ TryReuseIndex(Oid oldId, IndexStmt *stmt)
 		/* If it's a partitioned index, there is no storage to share. */
 		if (irel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
 		{
-			stmt->oldNode = irel->rd_node.relNode;
+			stmt->oldNode = RelFileNodeGetRel(irel->rd_node);
 			stmt->oldCreateSubid = irel->rd_createSubid;
 			stmt->oldFirstRelfilenodeSubid = irel->rd_firstRelfilenodeSubid;
 		}
@@ -14329,7 +14329,7 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 
 	/* Open old and new relation */
 	newrnode = rel->rd_node;
-	newrnode.relNode = newrelfilenode;
+	RelFileNodeSetRel(newrnode, newrelfilenode);
 	newrnode.spcNode = newTableSpace;
 
 	/* hand off to AM to actually create the new filenode and copy the data */

@@ -76,7 +76,8 @@ extern char *GetRelationPath(Oid dbNode, Oid spcNode, Oid relNode,
 
 /* First argument is a RelFileNode */
 #define relpathbackend(rnode, backend, forknum) \
-	GetRelationPath((rnode).dbNode, (rnode).spcNode, (rnode).relNode, \
+	GetRelationPath((rnode).dbNode, (rnode).spcNode, \
+					RelFileNodeGetRel((rnode)), \
 					backend, forknum)
 
 /* First argument is a RelFileNode */

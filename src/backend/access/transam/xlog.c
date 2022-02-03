@@ -1542,7 +1542,7 @@ checkXLogConsistency(XLogReaderState *record)
 		{
 			elog(FATAL,
 				 "inconsistent page found, rel %u/%u/%u, forknum %u, blkno %u",
-				 rnode.spcNode, rnode.dbNode, rnode.relNode,
+				 rnode.spcNode, rnode.dbNode, RelFileNodeGetRel(rnode),
 				 forknum, blkno);
 		}
 	}
@@ -10715,13 +10715,15 @@ xlog_block_info(StringInfo buf, XLogReaderState *record)
 		if (forknum != MAIN_FORKNUM)
 			appendStringInfo(buf, "; blkref #%d: rel %u/%u/%u, fork %u, blk %u",
 							 block_id,
-							 rnode.spcNode, rnode.dbNode, rnode.relNode,
+							 rnode.spcNode, rnode.dbNode,
+							 RelFileNodeGetRel(rnode),
 							 forknum,
 							 blk);
 		else
 			appendStringInfo(buf, "; blkref #%d: rel %u/%u/%u, blk %u",
 							 block_id,
-							 rnode.spcNode, rnode.dbNode, rnode.relNode,
+							 rnode.spcNode, rnode.dbNode,
+							 RelFileNodeGetRel(rnode),
 							 blk);
 		if (XLogRecHasBlockImage(record, block_id))
 			appendStringInfoString(buf, " FPW");

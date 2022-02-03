@@ -2134,7 +2134,7 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 					Assert(snapshot_now);
 
 					reloid = RelidByRelfilenode(change->data.tp.relnode.spcNode,
-												change->data.tp.relnode.relNode);
+												RelFileNodeGetRel(change->data.tp.relnode));
 
 					/*
 					 * Mapped catalog tuple without data, emitted while
@@ -4866,7 +4866,7 @@ DisplayMapping(HTAB *tuplecid_data)
 		elog(DEBUG3, "mapping: node: %u/%u/%u tid: %u/%u cmin: %u, cmax: %u",
 			 ent->key.relnode.dbNode,
 			 ent->key.relnode.spcNode,
-			 ent->key.relnode.relNode,
+			 RelFileNodeGetRel(ent->key.relnode),
 			 ItemPointerGetBlockNumber(&ent->key.tid),
 			 ItemPointerGetOffsetNumber(&ent->key.tid),
 			 ent->cmin,

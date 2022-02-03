@@ -99,7 +99,7 @@ typedef struct buftag
 ( \
 	(a).rnode.spcNode = InvalidOid, \
 	(a).rnode.dbNode = InvalidOid, \
-	(a).rnode.relNode = InvalidOid, \
+	RelFileNodeSetRel((a).rnode, InvalidOid), \
 	(a).forkNum = InvalidForkNumber, \
 	(a).blockNum = InvalidBlockNumber \
 )

@@ -153,7 +153,7 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 			buf_state = LockBufHdr(bufHdr);
 
 			fctx->record[i].bufferid = BufferDescriptorGetBuffer(bufHdr);
-			fctx->record[i].relfilenode = bufHdr->tag.rnode.relNode;
+			fctx->record[i].relfilenode = RelFileNodeGetRel(bufHdr->tag.rnode);
 			fctx->record[i].reltablespace = bufHdr->tag.rnode.spcNode;
 			fctx->record[i].reldatabase = bufHdr->tag.rnode.dbNode;
 			fctx->record[i].forknum = bufHdr->tag.forkNum;

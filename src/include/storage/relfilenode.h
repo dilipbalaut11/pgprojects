@@ -78,6 +78,13 @@ typedef struct RelFileNodeBackend
 #define RelFileNodeBackendIsTemp(rnode) \
 	((rnode).backend != InvalidBackendId)
 
+/* Macros to get and set the relNode member of the RelFileNode structure. */
+#define RelFileNodeGetRel(node) \
+	((node).relNode)
+
+#define RelFileNodeSetRel(node, relnode) \
+	((node).relNode = (relnode))
+
 /*
  * Note: RelFileNodeEquals and RelFileNodeBackendEquals compare relNode first
  * since that is most likely to be different in two unequal RelFileNodes.  It
@@ -86,12 +93,12 @@ typedef struct RelFileNodeBackend
  * RelFileNodeBackendEquals.
  */
 #define RelFileNodeEquals(node1, node2) \
-	((node1).relNode == (node2).relNode && \
+	((RelFileNodeGetRel((node1)) == RelFileNodeGetRel((node2))) && \
 	 (node1).dbNode == (node2).dbNode && \
 	 (node1).spcNode == (node2).spcNode)
 
 #define RelFileNodeBackendEquals(node1, node2) \
-	((node1).node.relNode == (node2).node.relNode && \
+	(RelFileNodeGetRel((node1)) == RelFileNodeGetRel((node2)) && \
 	 (node1).node.dbNode == (node2).node.dbNode && \
 	 (node1).backend == (node2).backend && \
 	 (node1).node.spcNode == (node2).node.spcNode)

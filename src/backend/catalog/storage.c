@@ -593,7 +593,8 @@ RestorePendingSyncs(char *startAddress)
 	RelFileNode *rnode;
 
 	Assert(pendingSyncHash == NULL);
-	for (rnode = (RelFileNode *) startAddress; rnode->relNode != 0; rnode++)
+	for (rnode = (RelFileNode *) startAddress; RelFileNodeGetRel(*rnode) != 0;
+		 rnode++)
 		AddPendingSync(rnode);
 }
 

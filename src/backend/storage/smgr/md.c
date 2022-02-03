@@ -640,7 +640,7 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	TRACE_POSTGRESQL_SMGR_MD_READ_START(forknum, blocknum,
 										reln->smgr_rnode.node.spcNode,
 										reln->smgr_rnode.node.dbNode,
-										reln->smgr_rnode.node.relNode,
+										RelFileNodeGetRel(reln->smgr_rnode.node),
 										reln->smgr_rnode.backend);
 
 	v = _mdfd_getseg(reln, forknum, blocknum, false,
@@ -655,7 +655,7 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	TRACE_POSTGRESQL_SMGR_MD_READ_DONE(forknum, blocknum,
 									   reln->smgr_rnode.node.spcNode,
 									   reln->smgr_rnode.node.dbNode,
-									   reln->smgr_rnode.node.relNode,
+									   RelFileNodeGetRel(reln->smgr_rnode.node),
 									   reln->smgr_rnode.backend,
 									   nbytes,
 									   BLCKSZ);
@@ -710,7 +710,7 @@ mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	TRACE_POSTGRESQL_SMGR_MD_WRITE_START(forknum, blocknum,
 										 reln->smgr_rnode.node.spcNode,
 										 reln->smgr_rnode.node.dbNode,
-										 reln->smgr_rnode.node.relNode,
+										 RelFileNodeGetRel(reln->smgr_rnode.node),
 										 reln->smgr_rnode.backend);
 
 	v = _mdfd_getseg(reln, forknum, blocknum, skipFsync,
@@ -725,7 +725,7 @@ mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	TRACE_POSTGRESQL_SMGR_MD_WRITE_DONE(forknum, blocknum,
 										reln->smgr_rnode.node.spcNode,
 										reln->smgr_rnode.node.dbNode,
-										reln->smgr_rnode.node.relNode,
+										RelFileNodeGetRel(reln->smgr_rnode.node),
 										reln->smgr_rnode.backend,
 										nbytes,
 										BLCKSZ);
@@ -1036,7 +1036,7 @@ ForgetDatabaseSyncRequests(Oid dbid)
 
 	rnode.dbNode = dbid;
 	rnode.spcNode = 0;
-	rnode.relNode = 0;
+	RelFileNodeSetRel(rnode, 0);
 
 	INIT_MD_FILETAG(tag, rnode, InvalidForkNumber, InvalidBlockNumber);
 

@@ -1288,7 +1288,7 @@ retry:
 static void
 RelationInitPhysicalAddr(Relation relation)
 {
-	Oid			oldnode = relation->rd_node.relNode;
+	Oid			oldnode = RelFileNodeGetRel(relation->rd_node);
 
 	/* these relations kinds never have storage */
 	if (!RELKIND_HAS_STORAGE(relation->rd_rel->relkind))
@@ -1335,15 +1335,18 @@ RelationInitPhysicalAddr(Relation relation)
 			heap_freetuple(phys_tuple);
 		}
 
-		relation->rd_node.relNode = relation->rd_rel->relfilenode;
+		RelFileNodeSetRel(relation->rd_node, relation->rd_rel->relfilenode);
 	}
 	else
 	{
+		Oid		relnode;
+
 		/* Consult the relation mapper */
-		relation->rd_node.relNode =
-			RelationMapOidToFilenode(relation->rd_id,
-									 relation->rd_rel->relisshared);
-		if (!OidIsValid(relation->rd_node.relNode))
+		relnode = RelationMapOidToFilenode(relation->rd_id,
+									 	   relation->rd_rel->relisshared);
+		RelFileNodeSetRel(relation->rd_node, relnode);
+
+		if (!OidIsValid(relnode))
 			elog(ERROR, "could not find relation mapping for relation \"%s\", OID %u",
 				 RelationGetRelationName(relation), relation->rd_id);
 	}
@@ -1353,7 +1356,7 @@ RelationInitPhysicalAddr(Relation relation)
 	 * rd_firstRelfilenodeSubid.  No subtransactions start or end while in
 	 * parallel mode, so the specific SubTransactionId does not matter.
 	 */
-	if (IsParallelWorker() && oldnode != relation->rd_node.relNode)
+	if (IsParallelWorker() && oldnode != RelFileNodeGetRel(relation->rd_node))
 	{
 		if (RelFileNodeSkippingWAL(relation->rd_node))
 			relation->rd_firstRelfilenodeSubid = TopSubTransactionId;
@@ -3712,7 +3715,7 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 	 * caught here, if GetNewRelFileNode messes up for any reason.
 	 */
 	newrnode = relation->rd_node;
-	newrnode.relNode = newrelfilenode;
+	RelFileNodeSetRel(newrnode, newrelfilenode);
 
 	if (RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind))
 	{

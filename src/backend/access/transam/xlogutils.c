@@ -593,7 +593,7 @@ CreateFakeRelcacheEntry(RelFileNode rnode)
 	rel->rd_rel->relpersistence = RELPERSISTENCE_PERMANENT;
 
 	/* We don't know the name of the relation; use relfilenode instead */
-	sprintf(RelationGetRelationName(rel), "%u", rnode.relNode);
+	sprintf(RelationGetRelationName(rel), "%u", RelFileNodeGetRel(rnode));
 
 	/*
 	 * We set up the lockRelId in case anything tries to lock the dummy
@@ -603,7 +603,7 @@ CreateFakeRelcacheEntry(RelFileNode rnode)
 	 * conflicts.  While syncing, we already hold AccessExclusiveLock.
 	 */
 	rel->rd_lockInfo.lockRelId.dbId = rnode.dbNode;
-	rel->rd_lockInfo.lockRelId.relId = rnode.relNode;
+	rel->rd_lockInfo.lockRelId.relId = RelFileNodeGetRel(rnode);
 
 	rel->rd_smgr = NULL;
 

@@ -96,4 +96,11 @@ typedef struct RelFileNodeBackend
 	 (node1).backend == (node2).backend && \
 	 (node1).node.spcNode == (node2).node.spcNode)
 
+/* Macros to get and set the relNode member of the RelFileNode structure. */
+#define RelFileNodeGetRel(node) \
+	((node).relNode)
+
+#define RelFileNodeSetRel(node, relnode) \
+	((node).relNode = (relnode))
+
 #endif							/* RELFILENODE_H */

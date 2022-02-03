@@ -929,7 +929,7 @@ write_relmap_file(bool shared, RelMapFile *newmap,
 
 			rnode.spcNode = tsid;
 			rnode.dbNode = dbid;
-			rnode.relNode = newmap->mappings[i].mapfilenode;
+			RelFileNodeSetRel(rnode, newmap->mappings[i].mapfilenode);
 			RelationPreserveStorage(rnode, false);
 		}
 	}

@@ -819,7 +819,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	TRACE_POSTGRESQL_BUFFER_READ_START(forkNum, blockNum,
 									   smgr->smgr_rnode.node.spcNode,
 									   smgr->smgr_rnode.node.dbNode,
-									   smgr->smgr_rnode.node.relNode,
+									   RelFileNodeGetRel(smgr->smgr_rnode.node),
 									   smgr->smgr_rnode.backend,
 									   isExtend);
 
@@ -881,7 +881,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			TRACE_POSTGRESQL_BUFFER_READ_DONE(forkNum, blockNum,
 											  smgr->smgr_rnode.node.spcNode,
 											  smgr->smgr_rnode.node.dbNode,
-											  smgr->smgr_rnode.node.relNode,
+											  RelFileNodeGetRel(smgr->smgr_rnode.node),
 											  smgr->smgr_rnode.backend,
 											  isExtend,
 											  found);
@@ -1071,7 +1071,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	TRACE_POSTGRESQL_BUFFER_READ_DONE(forkNum, blockNum,
 									  smgr->smgr_rnode.node.spcNode,
 									  smgr->smgr_rnode.node.dbNode,
-									  smgr->smgr_rnode.node.relNode,
+									  RelFileNodeGetRel(smgr->smgr_rnode.node),
 									  smgr->smgr_rnode.backend,
 									  isExtend,
 									  found);
@@ -1250,7 +1250,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				TRACE_POSTGRESQL_BUFFER_WRITE_DIRTY_START(forkNum, blockNum,
 														  smgr->smgr_rnode.node.spcNode,
 														  smgr->smgr_rnode.node.dbNode,
-														  smgr->smgr_rnode.node.relNode);
+														  RelFileNodeGetRel(smgr->smgr_rnode.node));
 
 				FlushBuffer(buf, NULL);
 				LWLockRelease(BufferDescriptorGetContentLock(buf));
@@ -1261,7 +1261,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				TRACE_POSTGRESQL_BUFFER_WRITE_DIRTY_DONE(forkNum, blockNum,
 														 smgr->smgr_rnode.node.spcNode,
 														 smgr->smgr_rnode.node.dbNode,
-														 smgr->smgr_rnode.node.relNode);
+														 RelFileNodeGetRel(smgr->smgr_rnode.node));
 			}
 			else
 			{
@@ -1994,7 +1994,7 @@ BufferSync(int flags)
 			item = &CkptBufferIds[num_to_scan++];
 			item->buf_id = buf_id;
 			item->tsId = bufHdr->tag.rnode.spcNode;
-			item->relNode = bufHdr->tag.rnode.relNode;
+			item->relNode = RelFileNodeGetRel(bufHdr->tag.rnode);
 			item->forkNum = bufHdr->tag.forkNum;
 			item->blockNum = bufHdr->tag.blockNum;
 		}
@@ -2838,7 +2838,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 										buf->tag.blockNum,
 										reln->smgr_rnode.node.spcNode,
 										reln->smgr_rnode.node.dbNode,
-										reln->smgr_rnode.node.relNode);
+										RelFileNodeGetRel(reln->smgr_rnode.node));
 
 	buf_state = LockBufHdr(buf);
 
@@ -2918,7 +2918,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 									   buf->tag.blockNum,
 									   reln->smgr_rnode.node.spcNode,
 									   reln->smgr_rnode.node.dbNode,
-									   reln->smgr_rnode.node.relNode);
+									   RelFileNodeGetRel(reln->smgr_rnode.node));
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
@@ -4552,9 +4552,9 @@ rnode_comparator(const void *p1, const void *p2)
 	RelFileNode n1 = *(const RelFileNode *) p1;
 	RelFileNode n2 = *(const RelFileNode *) p2;
 
-	if (n1.relNode < n2.relNode)
+	if (RelFileNodeGetRel(n1) < RelFileNodeGetRel(n2))
 		return -1;
-	else if (n1.relNode > n2.relNode)
+	else if (RelFileNodeGetRel(n1) > RelFileNodeGetRel(n2))
 		return 1;
 
 	if (n1.dbNode < n2.dbNode)

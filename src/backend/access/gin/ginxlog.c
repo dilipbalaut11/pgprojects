@@ -101,7 +101,7 @@ ginRedoInsertEntry(Buffer buffer, bool isLeaf, BlockNumber rightblkno, void *rda
 
 		BufferGetTag(buffer, &node, &forknum, &blknum);
 		elog(ERROR, "failed to add item to index page in %u/%u/%u",
-			 node.spcNode, node.dbNode, node.relNode);
+			 node.spcNode, node.dbNode, RelFileNodeGetRel(node));
 	}
 }
 

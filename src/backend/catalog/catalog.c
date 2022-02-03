@@ -528,14 +528,18 @@ GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 
 	do
 	{
+		Oid		relnode;
+
 		CHECK_FOR_INTERRUPTS();
 
 		/* Generate the OID */
 		if (pg_class)
-			rnode.node.relNode = GetNewOidWithIndex(pg_class, ClassOidIndexId,
-													Anum_pg_class_oid);
+			relnode = GetNewOidWithIndex(pg_class, ClassOidIndexId,
+										 Anum_pg_class_oid);
 		else
-			rnode.node.relNode = GetNewObjectId();
+			relnode = GetNewObjectId();
+
+		RelFileNodeSetRel(rnode.node, relnode);
 
 		/* Check for existing file of same name */
 		rpath = relpath(rnode, MAIN_FORKNUM);
@@ -560,7 +564,7 @@ GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 		pfree(rpath);
 	} while (collides);
 
-	return rnode.node.relNode;
+	return RelFileNodeGetRel(rnode.node);
 }
 
 /*

@@ -593,17 +593,18 @@ CreateFakeRelcacheEntry(RelFileNode rnode)
 	rel->rd_rel->relpersistence = RELPERSISTENCE_PERMANENT;
 
 	/* We don't know the name of the relation; use relfilenode instead */
-	sprintf(RelationGetRelationName(rel), "%u", RelFileNodeGetRel(rnode));
+	sprintf(RelationGetRelationName(rel), INT64_FORMAT,
+			RelFileNodeGetRel(rnode));
 
 	/*
 	 * We set up the lockRelId in case anything tries to lock the dummy
-	 * relation.  Note that this is fairly bogus since relNode may be
-	 * different from the relation's OID.  It shouldn't really matter though.
+	 * relation.  Note we are setting relId to just FirstNormalObjectId which
+	 * is completely bogus.  It shouldn't really matter though.
 	 * In recovery, we are running by ourselves and can't have any lock
 	 * conflicts.  While syncing, we already hold AccessExclusiveLock.
 	 */
 	rel->rd_lockInfo.lockRelId.dbId = rnode.dbNode;
-	rel->rd_lockInfo.lockRelId.relId = RelFileNodeGetRel(rnode);
+	rel->rd_lockInfo.lockRelId.relId = FirstNormalObjectId;
 
 	rel->rd_smgr = NULL;
 

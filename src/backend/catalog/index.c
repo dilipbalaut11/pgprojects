@@ -662,7 +662,7 @@ UpdateIndexRelation(Oid indexoid,
  *		parent index; otherwise InvalidOid.
  * parentConstraintId: if creating a constraint on a partition, the OID
  *		of the constraint in the parent; otherwise InvalidOid.
- * relFileNode: normally, pass InvalidOid to get new storage.  May be
+ * relFileNode: normally, pass InvalidRelNode to get new storage.  May be
  *		nonzero to attach an existing valid build.
  * indexInfo: same info executor uses to insert into the index
  * indexColNames: column names to use for index (List of char *)
@@ -703,7 +703,7 @@ index_create(Relation heapRelation,
 			 Oid indexRelationId,
 			 Oid parentIndexRelid,
 			 Oid parentConstraintId,
-			 Oid relFileNode,
+			 RelNode relFileNode,
 			 IndexInfo *indexInfo,
 			 List *indexColNames,
 			 Oid accessMethodObjectId,
@@ -735,7 +735,7 @@ index_create(Relation heapRelation,
 	char		relkind;
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
-	bool		create_storage = !OidIsValid(relFileNode);
+	bool		create_storage = !RelfileNodeIsValid(relFileNode);
 
 	/* constraint flags can only be set when a constraint is requested */
 	Assert((constr_flags == 0) ||
@@ -902,8 +902,7 @@ index_create(Relation heapRelation,
 	/*
 	 * Allocate an OID for the index, unless we were told what to use.
 	 *
-	 * The OID will be the relfilenode as well, so make sure it doesn't
-	 * collide with either pg_class OIDs or existing physical files.
+	 * Make sure it doesn't collide with either pg_class OIDs.
 	 */
 	if (!OidIsValid(indexRelationId))
 	{
@@ -936,8 +935,8 @@ index_create(Relation heapRelation,
 		}
 		else
 		{
-			indexRelationId =
-				GetNewRelFileNode(tableSpaceId, pg_class, relpersistence);
+			indexRelationId = GetNewOidWithIndex(pg_class, ClassOidIndexId,
+												 Anum_pg_class_oid);
 		}
 	}
 
@@ -1408,7 +1407,7 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId,
 							  InvalidOid,	/* indexRelationId */
 							  InvalidOid,	/* parentIndexRelid */
 							  InvalidOid,	/* parentConstraintId */
-							  InvalidOid,	/* relFileNode */
+							  InvalidRelNode,	/* relFileNode */
 							  newInfo,
 							  indexColNames,
 							  indexRelation->rd_rel->relam,

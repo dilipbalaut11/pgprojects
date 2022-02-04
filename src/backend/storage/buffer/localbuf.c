@@ -222,7 +222,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 
 		/* And write... */
 		smgrwrite(oreln,
-				  bufHdr->tag.forkNum,
+				  RelFileNodeGetFork(bufHdr->tag.rnode),
 				  bufHdr->tag.blockNum,
 				  localpage,
 				  false);
@@ -339,14 +339,14 @@ DropRelFileNodeLocalBuffers(RelFileNode rnode, ForkNumber forkNum,
 
 		if ((buf_state & BM_TAG_VALID) &&
 			RelFileNodeEquals(bufHdr->tag.rnode, rnode) &&
-			bufHdr->tag.forkNum == forkNum &&
+			RelFileNodeGetFork(bufHdr->tag.rnode) == forkNum &&
 			bufHdr->tag.blockNum >= firstDelBlock)
 		{
 			if (LocalRefCount[i] != 0)
 				elog(ERROR, "block %u of %s is still referenced (local %u)",
 					 bufHdr->tag.blockNum,
 					 relpathbackend(bufHdr->tag.rnode, MyBackendId,
-									bufHdr->tag.forkNum),
+									RelFileNodeGetFork(bufHdr->tag.rnode)),
 					 LocalRefCount[i]);
 			/* Remove entry from hashtable */
 			hresult = (LocalBufferLookupEnt *)
@@ -390,7 +390,7 @@ DropRelFileNodeAllLocalBuffers(RelFileNode rnode)
 				elog(ERROR, "block %u of %s is still referenced (local %u)",
 					 bufHdr->tag.blockNum,
 					 relpathbackend(bufHdr->tag.rnode, MyBackendId,
-									bufHdr->tag.forkNum),
+									RelFileNodeGetFork(bufHdr->tag.rnode)),
 					 LocalRefCount[i]);
 			/* Remove entry from hashtable */
 			hresult = (LocalBufferLookupEnt *)

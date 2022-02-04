@@ -15,6 +15,7 @@
 #define CATALOG_H
 
 #include "catalog/pg_class.h"
+#include "storage/relfilenode.h"
 #include "utils/relcache.h"
 
 
@@ -38,7 +39,6 @@ extern bool IsPinnedObject(Oid classId, Oid objectId);
 
 extern Oid	GetNewOidWithIndex(Relation relation, Oid indexId,
 							   AttrNumber oidcolumn);
-extern Oid	GetNewRelFileNode(Oid reltablespace, Relation pg_class,
-							  char relpersistence);
+extern RelNode	GetNewRelFileNode(Oid reltablespace, char relpersistence);
 
 #endif							/* CATALOG_H */

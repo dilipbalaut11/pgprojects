@@ -512,8 +512,8 @@ isRelDataFile(const char *path)
 	RelFileNode rnode;
 	unsigned int segNo;
 	int			nmatch;
+	RelNode		relNode;
 	bool		matched;
-	Oid			relnode;
 
 	/*----
 	 * Relation data files can be in one of the following directories:
@@ -536,11 +536,12 @@ isRelDataFile(const char *path)
 	 */
 	rnode.spcNode = InvalidOid;
 	rnode.dbNode = InvalidOid;
-	relnode = InvalidOid;
+	RelFileNodeSetRel(rnode, 0);	/* FIXME-1 */
 	segNo = 0;
 	matched = false;
 
-	nmatch = sscanf(path, "global/%u.%u", &relnode, &segNo);
+	nmatch = sscanf(path, "global/" INT64_FORMAT ".%u", &relNode, &segNo);
+	RelFileNodeSetRel(rnode, relNode);
 	if (nmatch == 1 || nmatch == 2)
 	{
 		rnode.spcNode = GLOBALTABLESPACE_OID;
@@ -549,8 +550,9 @@ isRelDataFile(const char *path)
 	}
 	else
 	{
-		nmatch = sscanf(path, "base/%u/%u.%u",
-						&rnode.dbNode, &relnode, &segNo);
+		nmatch = sscanf(path, "base/%u/" INT64_FORMAT ".%u",
+						&rnode.dbNode, &relNode, &segNo);
+		RelFileNodeSetRel(rnode, relNode);
 		if (nmatch == 2 || nmatch == 3)
 		{
 			rnode.spcNode = DEFAULTTABLESPACE_OID;
@@ -558,10 +560,10 @@ isRelDataFile(const char *path)
 		}
 		else
 		{
-			nmatch = sscanf(path, "pg_tblspc/%u/" TABLESPACE_VERSION_DIRECTORY "/%u/%u.%u",
-							&rnode.spcNode, &rnode.dbNode,
-							&relnode,
+			nmatch = sscanf(path, "pg_tblspc/%u/" TABLESPACE_VERSION_DIRECTORY "/%u/" INT64_FORMAT ".%u",
+							&rnode.spcNode, &rnode.dbNode, &relNode,
 							&segNo);
+			RelFileNodeSetRel(rnode, relNode);
 			if (nmatch == 3 || nmatch == 4)
 				matched = true;
 		}
@@ -575,10 +577,7 @@ isRelDataFile(const char *path)
 	 */
 	if (matched)
 	{
-		char	   *check_path;
-
-		RelFileNodeSetRel(rnode, relnode);
-		check_path = datasegpath(rnode, MAIN_FORKNUM, segNo);
+		char	   *check_path = datasegpath(rnode, MAIN_FORKNUM, segNo);
 
 		if (strcmp(check_path, path) != 0)
 			matched = false;

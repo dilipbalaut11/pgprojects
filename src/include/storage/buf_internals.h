@@ -21,6 +21,7 @@
 #include "storage/condition_variable.h"
 #include "storage/latch.h"
 #include "storage/lwlock.h"
+#include "storage/relfilenode.h"
 #include "storage/shmem.h"
 #include "storage/smgr.h"
 #include "storage/spin.h"
@@ -91,7 +92,6 @@
 typedef struct buftag
 {
 	RelFileNode rnode;			/* physical relation identifier */
-	ForkNumber	forkNum;
 	BlockNumber blockNum;		/* blknum relative to begin of reln */
 } BufferTag;
 
@@ -99,23 +99,23 @@ typedef struct buftag
 ( \
 	(a).rnode.spcNode = InvalidOid, \
 	(a).rnode.dbNode = InvalidOid, \
-	RelFileNodeSetRel((a).rnode, InvalidOid), \
-	(a).forkNum = InvalidForkNumber, \
+	RelFileNodeSetRel((a).rnode, 0), \
+	RelFileNodeSetFork((a).rnode, InvalidForkNumber), \
 	(a).blockNum = InvalidBlockNumber \
 )
 
 #define INIT_BUFFERTAG(a,xx_rnode,xx_forkNum,xx_blockNum) \
 ( \
 	(a).rnode = (xx_rnode), \
-	(a).forkNum = (xx_forkNum), \
-	(a).blockNum = (xx_blockNum) \
+	(a).blockNum = (xx_blockNum), \
+	RelFileNodeSetFork((a).rnode, (xx_forkNum)) \
 )
 
 #define BUFFERTAGS_EQUAL(a,b) \
 ( \
 	RelFileNodeEquals((a).rnode, (b).rnode) && \
 	(a).blockNum == (b).blockNum && \
-	(a).forkNum == (b).forkNum \
+	RelFileNodeGetFork((a).rnode) == RelFileNodeGetFork((b).rnode) \
 )
 
 /*

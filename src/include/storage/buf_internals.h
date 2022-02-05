@@ -118,6 +118,10 @@ typedef struct buftag
 	(a).forkNum == (b).forkNum \
 )
 
+/* Macro to get the fork number from the buffer tag. */
+#define BUFFERTAG_GETFORK(a) \
+	((a).forkNum)
+
 /*
  * The shared buffer mapping table is partitioned to reduce contention.
  * To determine which partition lock a given tag requires, compute the tag's

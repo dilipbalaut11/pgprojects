@@ -156,7 +156,7 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 			fctx->record[i].relfilenode = RelFileNodeGetRel(bufHdr->tag.rnode);
 			fctx->record[i].reltablespace = bufHdr->tag.rnode.spcNode;
 			fctx->record[i].reldatabase = bufHdr->tag.rnode.dbNode;
-			fctx->record[i].forknum = bufHdr->tag.forkNum;
+			fctx->record[i].forknum = BUFFERTAG_GETFORK(bufHdr->tag);
 			fctx->record[i].blocknum = bufHdr->tag.blockNum;
 			fctx->record[i].usagecount = BUF_STATE_GET_USAGECOUNT(buf_state);
 			fctx->record[i].pinning_backends = BUF_STATE_GET_REFCOUNT(buf_state);

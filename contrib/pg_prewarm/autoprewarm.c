@@ -619,7 +619,8 @@ apw_dump_now(bool is_bgworker, bool dump_unlogged)
 			block_info_array[num_blocks].tablespace = bufHdr->tag.rnode.spcNode;
 			block_info_array[num_blocks].filenode =
 				RelFileNodeGetRel(bufHdr->tag.rnode);
-			block_info_array[num_blocks].forknum = bufHdr->tag.forkNum;
+			block_info_array[num_blocks].forknum =
+				BUFFERTAG_GETFORK(bufHdr->tag);
 			block_info_array[num_blocks].blocknum = bufHdr->tag.blockNum;
 			++num_blocks;
 		}

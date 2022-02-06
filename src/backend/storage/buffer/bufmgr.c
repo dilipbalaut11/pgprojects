@@ -2782,6 +2782,15 @@ BufferGetTag(Buffer buffer, RelFileNode *rnode, ForkNumber *forknum,
 
 	/* pinned, so OK to read tag without spinlock */
 	*rnode = bufHdr->tag.rnode;
+
+	/*
+	 * Inside BufferTag rnode->relNode store fork number + relNode.  So now
+	 * we are extracting the RelFileNode and ForkNumber separately from the
+	 * BufferTag so extract the actual relNode part without fork number and
+	 * set that into the destination RelFileNode.
+	 */
+	RelFileNodeSetRel(*rnode, RelFileNodeGetRel(*rnode));
+
 	*forknum = BUFFERTAG_GETFORK(bufHdr->tag);
 	*blknum = bufHdr->tag.blockNum;
 }

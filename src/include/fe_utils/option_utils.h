@@ -22,5 +22,8 @@ extern void handle_help_version_opts(int argc, char *argv[],
 extern bool option_parse_int(const char *optarg, const char *optname,
 							 int min_range, int max_range,
 							 int *result);
+extern bool option_parse_int64(const char *optarg, const char *optname,
+							   int64 min_range, int64 max_range,
+							   int64 *result);
 
 #endif							/* OPTION_UTILS_H */

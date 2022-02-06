@@ -21,6 +21,7 @@
 #include "storage/condition_variable.h"
 #include "storage/latch.h"
 #include "storage/lwlock.h"
+#include "storage/relfilenode.h"
 #include "storage/shmem.h"
 #include "storage/smgr.h"
 #include "storage/spin.h"
@@ -91,7 +92,6 @@
 typedef struct buftag
 {
 	RelFileNode rnode;			/* physical relation identifier */
-	ForkNumber	forkNum;
 	BlockNumber blockNum;		/* blknum relative to begin of reln */
 } BufferTag;
 
@@ -99,15 +99,15 @@ typedef struct buftag
 ( \
 	(a).rnode.spcNode = InvalidOid, \
 	(a).rnode.dbNode = InvalidOid, \
-	RelFileNodeSetRel((a).rnode, InvalidOid), \
-	(a).forkNum = InvalidForkNumber, \
+	RelFileNodeSetRel((a).rnode, InvalidRelNode), \
+	RelFileNodeSetFork((a).rnode, (InvalidForkNumber)), \
 	(a).blockNum = InvalidBlockNumber \
 )
 
 #define INIT_BUFFERTAG(a,xx_rnode,xx_forkNum,xx_blockNum) \
 ( \
 	(a).rnode = (xx_rnode), \
-	(a).forkNum = (xx_forkNum), \
+	RelFileNodeSetFork((a).rnode, (xx_forkNum)), \
 	(a).blockNum = (xx_blockNum) \
 )
 
@@ -115,12 +115,12 @@ typedef struct buftag
 ( \
 	RelFileNodeEquals((a).rnode, (b).rnode) && \
 	(a).blockNum == (b).blockNum && \
-	(a).forkNum == (b).forkNum \
+	RelFileNodeGetFork((a).rnode) == RelFileNodeGetFork((b).rnode) \
 )
 
 /* Macro to get the fork number from the buffer tag. */
 #define BUFFERTAG_GETFORK(a) \
-	((a).forkNum)
+	RelFileNodeGetFork((a).rnode)
 
 /*
  * The shared buffer mapping table is partitioned to reduce contention.

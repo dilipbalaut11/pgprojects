@@ -383,8 +383,8 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 				i_reloid,
 				i_indtable,
 				i_toastheap,
-				i_relfilenode,
 				i_reltablespace;
+	RelNode		i_relfilenode;
 	char		query[QUERY_ALLOC];
 	char	   *last_namespace = NULL,
 			   *last_tablespace = NULL;
@@ -511,7 +511,7 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 		relname = PQgetvalue(res, relnum, i_relname);
 		curr->relname = pg_strdup(relname);
 
-		curr->relfilenode = atooid(PQgetvalue(res, relnum, i_relfilenode));
+		curr->relfilenode = atorelnode(PQgetvalue(res, relnum, i_relfilenode));
 		curr->tblsp_alloc = false;
 
 		/* Is the tablespace oid non-default? */

@@ -37,7 +37,7 @@ static ScanKeyData relfilenode_skey[2];
 typedef struct
 {
 	Oid			reltablespace;
-	Oid			relfilenode;
+	RelNodeId	relfilenode;
 } RelfilenodeMapKey;
 
 typedef struct
@@ -135,7 +135,7 @@ InitializeRelfilenodeMap(void)
  * Returns InvalidOid if no relation matching the criteria could be found.
  */
 Oid
-RelidByRelfilenode(Oid reltablespace, Oid relfilenode)
+RelidByRelfilenode(Oid reltablespace, RelNode relfilenode)
 {
 	RelfilenodeMapKey key;
 	RelfilenodeMapEntry *entry;
@@ -155,7 +155,7 @@ RelidByRelfilenode(Oid reltablespace, Oid relfilenode)
 
 	MemSet(&key, 0, sizeof(key));
 	key.reltablespace = reltablespace;
-	key.relfilenode = relfilenode;
+	RelNodeIDSetRelNode(key.relfilenode, relfilenode);
 
 	/*
 	 * Check cache and return entry if one is found. Even if no target
@@ -196,7 +196,7 @@ RelidByRelfilenode(Oid reltablespace, Oid relfilenode)
 
 		/* set scan arguments */
 		skey[0].sk_argument = ObjectIdGetDatum(reltablespace);
-		skey[1].sk_argument = ObjectIdGetDatum(relfilenode);
+		skey[1].sk_argument = Int64GetDatum(relfilenode);
 
 		scandesc = systable_beginscan(relation,
 									  ClassTblspcRelfilenodeIndexId,
@@ -213,7 +213,7 @@ RelidByRelfilenode(Oid reltablespace, Oid relfilenode)
 
 			if (found)
 				elog(ERROR,
-					 "unexpected duplicate for tablespace %u, relfilenode %u",
+					 "unexpected duplicate for tablespace %u, relfilenode" INT64_FORMAT,
 					 reltablespace, relfilenode);
 			found = true;
 

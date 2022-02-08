@@ -202,92 +202,6 @@ SyncPreCheckpoint(void)
 }
 
 /*
- * SyncPostCheckpoint() -- Do post-checkpoint work
- *
- * Remove any lingering files that can now be safely removed.
- */
-void
-SyncPostCheckpoint(void)
-{
-	int			absorb_counter;
-	ListCell   *lc;
-
-	absorb_counter = UNLINKS_PER_ABSORB;
-	foreach(lc, pendingUnlinks)
-	{
-		PendingUnlinkEntry *entry = (PendingUnlinkEntry *) lfirst(lc);
-		char		path[MAXPGPATH];
-
-		/* Skip over any canceled entries */
-		if (entry->canceled)
-			continue;
-
-		/*
-		 * New entries are appended to the end, so if the entry is new we've
-		 * reached the end of old entries.
-		 *
-		 * Note: if just the right number of consecutive checkpoints fail, we
-		 * could be fooled here by cycle_ctr wraparound.  However, the only
-		 * consequence is that we'd delay unlinking for one more checkpoint,
-		 * which is perfectly tolerable.
-		 */
-		if (entry->cycle_ctr == checkpoint_cycle_ctr)
-			break;
-
-		/* Unlink the file */
-		if (syncsw[entry->tag.handler].sync_unlinkfiletag(&entry->tag,
-														  path) < 0)
-		{
-			/*
-			 * There's a race condition, when the database is dropped at the
-			 * same time that we process the pending unlink requests. If the
-			 * DROP DATABASE deletes the file before we do, we will get ENOENT
-			 * here. rmtree() also has to ignore ENOENT errors, to deal with
-			 * the possibility that we delete the file first.
-			 */
-			if (errno != ENOENT)
-				ereport(WARNING,
-						(errcode_for_file_access(),
-						 errmsg("could not remove file \"%s\": %m", path)));
-		}
-
-		/* Mark the list entry as canceled, just in case */
-		entry->canceled = true;
-
-		/*
-		 * As in ProcessSyncRequests, we don't want to stop absorbing fsync
-		 * requests for a long time when there are many deletions to be done.
-		 * We can safely call AbsorbSyncRequests() at this point in the loop.
-		 */
-		if (--absorb_counter <= 0)
-		{
-			AbsorbSyncRequests();
-			absorb_counter = UNLINKS_PER_ABSORB;
-		}
-	}
-
-	/*
-	 * If we reached the end of the list, we can just remove the whole list
-	 * (remembering to pfree all the PendingUnlinkEntry objects).  Otherwise,
-	 * we must keep the entries at or after "lc".
-	 */
-	if (lc == NULL)
-	{
-		list_free_deep(pendingUnlinks);
-		pendingUnlinks = NIL;
-	}
-	else
-	{
-		int			ntodelete = list_cell_number(pendingUnlinks, lc);
-
-		for (int i = 0; i < ntodelete; i++)
-			pfree(list_nth(pendingUnlinks, i));
-
-		pendingUnlinks = list_delete_first_n(pendingUnlinks, ntodelete);
-	}
-}
-
-/*
  *	ProcessSyncRequests() -- Process queued fsync requests.
  */
 void
@@ -532,21 +446,6 @@ RememberSyncRequest(const FileTag *ftag, SyncRequestType type)
 				syncsw[ftag->handler].sync_filetagmatches(ftag, &entry->tag))
 				entry->canceled = true;
 		}
-	}
-	else if (type == SYNC_UNLINK_REQUEST)
-	{
-		/* Unlink request: put it in the linked list */
-		MemoryContext oldcxt = MemoryContextSwitchTo(pendingOpsCxt);
-		PendingUnlinkEntry *entry;
-
-		entry = palloc(sizeof(PendingUnlinkEntry));
-		entry->tag = *ftag;
-		entry->cycle_ctr = checkpoint_cycle_ctr;
-		entry->canceled = false;
-
-		pendingUnlinks = lappend(pendingUnlinks, entry);
-
-		MemoryContextSwitchTo(oldcxt);
 	}
 	else
 	{

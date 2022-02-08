@@ -57,7 +57,6 @@ typedef struct FileTag
 
 extern void InitSync(void);
 extern void SyncPreCheckpoint(void);
-extern void SyncPostCheckpoint(void);
 extern void ProcessSyncRequests(void);
 extern void RememberSyncRequest(const FileTag *ftag, SyncRequestType type);
 extern bool RegisterSyncRequest(const FileTag *ftag, SyncRequestType type,

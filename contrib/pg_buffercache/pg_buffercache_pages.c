@@ -26,7 +26,7 @@ PG_MODULE_MAGIC;
 typedef struct
 {
 	uint32		bufferid;
-	Oid			relfilenode;
+	RelNode		relfilenode;
 	Oid			reltablespace;
 	Oid			reldatabase;
 	ForkNumber	forknum;
@@ -103,7 +103,7 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 		TupleDescInitEntry(tupledesc, (AttrNumber) 1, "bufferid",
 						   INT4OID, -1, 0);
 		TupleDescInitEntry(tupledesc, (AttrNumber) 2, "relfilenode",
-						   OIDOID, -1, 0);
+						   INT8OID, -1, 0);
 		TupleDescInitEntry(tupledesc, (AttrNumber) 3, "reltablespace",
 						   OIDOID, -1, 0);
 		TupleDescInitEntry(tupledesc, (AttrNumber) 4, "reldatabase",
@@ -153,7 +153,7 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 			buf_state = LockBufHdr(bufHdr);
 
 			fctx->record[i].bufferid = BufferDescriptorGetBuffer(bufHdr);
-			fctx->record[i].relfilenode = bufHdr->tag.fileNode;
+			fctx->record[i].relfilenode = BufTagGetFileNode(bufHdr->tag);
 			fctx->record[i].reltablespace = bufHdr->tag.spcOid;
 			fctx->record[i].reldatabase = bufHdr->tag.dbOid;
 			fctx->record[i].forknum = bufHdr->tag.forkNum;
@@ -209,7 +209,7 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 		}
 		else
 		{
-			values[1] = ObjectIdGetDatum(fctx->record[i].relfilenode);
+			values[1] = Int8GetDatum(fctx->record[i].relfilenode);
 			nulls[1] = false;
 			values[2] = ObjectIdGetDatum(fctx->record[i].reltablespace);
 			nulls[2] = false;

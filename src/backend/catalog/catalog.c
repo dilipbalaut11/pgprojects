@@ -472,26 +472,16 @@ GetNewOidWithIndex(Relation relation, Oid indexId, AttrNumber oidcolumn)
 
 /*
  * GetNewRelFileNode
- *		Generate a new relfilenode number that is unique within the
- *		database of the given tablespace.
+ *		Generate a new relfilenode number.
  *
- * If the relfilenode will also be used as the relation's OID, pass the
- * opened pg_class catalog, and this routine will guarantee that the result
- * is also an unused OID within pg_class.  If the result is to be used only
- * as a relfilenode for an existing relation, pass NULL for pg_class.
- *
- * As with GetNewOidWithIndex(), there is some theoretical risk of a race
- * condition, but it doesn't seem worth worrying about.
- *
- * Note: we don't support using this in bootstrap mode.  All relations
- * created by bootstrap have preassigned OIDs, so there's no need.
+ * We are using 56 bits for the relfilenode so we expect that to be unique for
+ * the cluster so if it is already exists then report and error.
  */
-Oid
-GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
+RelNode
+GetNewRelFileNode(Oid reltablespace, char relpersistence)
 {
 	RelFileNodeBackend rnode;
 	char	   *rpath;
-	bool		collides;
 	BackendId	backend;
 
 	/*
@@ -525,40 +515,13 @@ GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 	 * are properly detected.
 	 */
 	rnode.backend = backend;
+	rnode.node.relNode = GetNewRelNode();
 
-	do
-	{
-		CHECK_FOR_INTERRUPTS();
+	/* Check for existing file of same name */
+	rpath = relpath(rnode, MAIN_FORKNUM);
 
-		/* Generate the OID */
-		if (pg_class)
-			rnode.node.relNode = GetNewOidWithIndex(pg_class, ClassOidIndexId,
-													Anum_pg_class_oid);
-		else
-			rnode.node.relNode = GetNewObjectId();
-
-		/* Check for existing file of same name */
-		rpath = relpath(rnode, MAIN_FORKNUM);
-
-		if (access(rpath, F_OK) == 0)
-		{
-			/* definite collision */
-			collides = true;
-		}
-		else
-		{
-			/*
-			 * Here we have a little bit of a dilemma: if errno is something
-			 * other than ENOENT, should we declare a collision and loop? In
-			 * practice it seems best to go ahead regardless of the errno.  If
-			 * there is a colliding file we will get an smgr failure when we
-			 * attempt to create the new relation file.
-			 */
-			collides = false;
-		}
-
-		pfree(rpath);
-	} while (collides);
+	if (access(rpath, F_OK) == 0)
+		elog(ERROR, "new relfilenode file already exists: \"%s\"\n", rpath);
 
 	return rnode.node.relNode;
 }

@@ -1994,7 +1994,7 @@ BufferSync(int flags)
 			item = &CkptBufferIds[num_to_scan++];
 			item->buf_id = buf_id;
 			item->tsId = bufHdr->tag.spcOid;
-			item->relNode = bufHdr->tag.fileNode;
+			item->relNode = BufTagGetFileNode(bufHdr->tag);
 			item->forkNum = bufHdr->tag.forkNum;
 			item->blockNum = bufHdr->tag.blockNum;
 		}

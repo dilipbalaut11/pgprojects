@@ -66,7 +66,7 @@ extern int	forkname_chars(const char *str, ForkNumber *fork);
  */
 extern char *GetDatabasePath(Oid dbNode, Oid spcNode);
 
-extern char *GetRelationPath(Oid dbNode, Oid spcNode, Oid relNode,
+extern char *GetRelationPath(Oid dbNode, Oid spcNode, RelNode relNode,
 							 int backendId, ForkNumber forkNumber);
 
 /*

@@ -118,6 +118,17 @@ typedef struct buftag
 	(a).forkNum == (b).forkNum \
 )
 
+/* Copy the relfilenode stored in the buffertag to the input relfilenode. */
+#define BuffTagCopyRelFileNode(a, node) \
+	((node) = (a).rnode)
+
+/*
+ * The Input relfilenode is equal to the relfilenode stored inside the
+ * buffertag?
+ */
+#define BuffTagRelFileNodeEquals(a, node) \
+	(RelFileNodeEquals((a).rnode, (node)))
+
 /*
  * The shared buffer mapping table is partitioned to reduce contention.
  * To determine which partition lock a given tag requires, compute the tag's

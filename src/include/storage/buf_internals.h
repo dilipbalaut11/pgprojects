@@ -90,32 +90,52 @@
  */
 typedef struct buftag
 {
-	RelFileNode rnode;			/* physical relation identifier */
+	Oid			spcOid;			/* tablespace oid. */
+	Oid			dbOid;			/* database oid. */
+	Oid			fileNode;		/* relation file node. */
 	ForkNumber	forkNum;
 	BlockNumber blockNum;		/* blknum relative to begin of reln */
 } BufferTag;
 
 #define CLEAR_BUFFERTAG(a) \
 ( \
-	(a).rnode.spcNode = InvalidOid, \
-	(a).rnode.dbNode = InvalidOid, \
-	(a).rnode.relNode = InvalidOid, \
+	(a).spcOid = InvalidOid, \
+	(a).dbOid = InvalidOid, \
+	(a).fileNode = InvalidOid, \
 	(a).forkNum = InvalidForkNumber, \
 	(a).blockNum = InvalidBlockNumber \
 )
 
 #define INIT_BUFFERTAG(a,xx_rnode,xx_forkNum,xx_blockNum) \
 ( \
-	(a).rnode = (xx_rnode), \
+	(a).spcOid = (xx_rnode).spcNode, \
+	(a).dbOid = (xx_rnode).dbNode, \
+	(a).fileNode = (xx_rnode).relNode, \
 	(a).forkNum = (xx_forkNum), \
 	(a).blockNum = (xx_blockNum) \
 )
 
 #define BUFFERTAGS_EQUAL(a,b) \
 ( \
-	RelFileNodeEquals((a).rnode, (b).rnode) && \
+	(a).spcOid == (b).spcOid && \
+	(a).dbOid == (b).dbOid && \
+	(a).fileNode == (b).fileNode && \
 	(a).blockNum == (b).blockNum && \
 	(a).forkNum == (b).forkNum \
+)
+
+#define BuffTagGetRelFileNode(a, node) \
+do { \
+	(node).spcNode = (a).spcOid; \
+	(node).dbNode = (a).dbOid; \
+	(node).relNode = (a).fileNode; \
+} while(0)
+
+#define BuffTagRelFileNodeEquals(a, node) \
+( \
+	(a).spcOid == (node).spcNode && \
+	(a).dbOid == (node).dbNode && \
+	(a).fileNode == (node).relNode \
 )
 
 /*

@@ -213,9 +213,12 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 	{
 		SMgrRelation oreln;
 		Page		localpage = (char *) LocalBufHdrGetBlock(bufHdr);
+		RelFileNode	rnode;
+
+		BuffTagGetRelFileNode(bufHdr->tag, rnode);
 
 		/* Find smgr relation for buffer */
-		oreln = smgropen(bufHdr->tag.rnode, MyBackendId);
+		oreln = smgropen(rnode, MyBackendId);
 
 		PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
@@ -337,16 +340,21 @@ DropRelFileNodeLocalBuffers(RelFileNode rnode, ForkNumber forkNum,
 		buf_state = pg_atomic_read_u32(&bufHdr->state);
 
 		if ((buf_state & BM_TAG_VALID) &&
-			RelFileNodeEquals(bufHdr->tag.rnode, rnode) &&
+			BuffTagRelFileNodeEquals(bufHdr->tag, rnode) &&
 			bufHdr->tag.forkNum == forkNum &&
 			bufHdr->tag.blockNum >= firstDelBlock)
 		{
 			if (LocalRefCount[i] != 0)
+			{
+				RelFileNode		rnode;
+
+				BuffTagGetRelFileNode(bufHdr->tag, rnode);
 				elog(ERROR, "block %u of %s is still referenced (local %u)",
 					 bufHdr->tag.blockNum,
-					 relpathbackend(bufHdr->tag.rnode, MyBackendId,
-									bufHdr->tag.forkNum),
+					 relpathbackend(rnode, MyBackendId, bufHdr->tag.forkNum),
 					 LocalRefCount[i]);
+			}
+
 			/* Remove entry from hashtable */
 			hresult = (LocalBufferLookupEnt *)
 				hash_search(LocalBufHash, (void *) &bufHdr->tag,
@@ -383,13 +391,15 @@ DropRelFileNodeAllLocalBuffers(RelFileNode rnode)
 		buf_state = pg_atomic_read_u32(&bufHdr->state);
 
 		if ((buf_state & BM_TAG_VALID) &&
-			RelFileNodeEquals(bufHdr->tag.rnode, rnode))
+			BuffTagRelFileNodeEquals(bufHdr->tag, rnode))
 		{
+			RelFileNode		rnode;
+
+			BuffTagGetRelFileNode(bufHdr->tag, rnode);
 			if (LocalRefCount[i] != 0)
 				elog(ERROR, "block %u of %s is still referenced (local %u)",
 					 bufHdr->tag.blockNum,
-					 relpathbackend(bufHdr->tag.rnode, MyBackendId,
-									bufHdr->tag.forkNum),
+					 relpathbackend(rnode, MyBackendId, bufHdr->tag.forkNum),
 					 LocalRefCount[i]);
 			/* Remove entry from hashtable */
 			hresult = (LocalBufferLookupEnt *)

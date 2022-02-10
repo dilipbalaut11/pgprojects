@@ -74,6 +74,9 @@ typedef struct RelFileNodeBackend
 	BackendId	backend;
 } RelFileNodeBackend;
 
+#define SizeOfRelFileNodeBackend \
+	(offsetof(RelFileNodeBackend, backend) + sizeof(BackendId))
+
 /*
  * Max value of the relfilnode.  Relfilenode will be of 56bits wide for more
  * details refer comments atop BufferTag.

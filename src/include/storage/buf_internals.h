@@ -93,8 +93,8 @@ typedef struct buftag
 {
 	Oid			spcOid;			/* tablespace oid. */
 	Oid			dbOid;			/* database oid. */
-	uint32		fileNode_low:24;	/* relation file node 32 lower bits */
-	uint32		fileNode_hi:24;		/* relation file node 24 high bits */
+	uint32		fileNode_low;	/* relation file node 32 lower bits */
+	uint32		fileNode_hi:24;	/* relation file node 24 high bits */
 	uint32		forkNum:8;
 	BlockNumber blockNum;		/* blknum relative to begin of reln */
 } BufferTag;

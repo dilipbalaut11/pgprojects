@@ -184,7 +184,8 @@ extern Buffer ReadBufferExtended(Relation reln, ForkNumber forkNum,
 								 BufferAccessStrategy strategy);
 extern Buffer ReadBufferWithoutRelcache(RelFileNode rnode,
 										ForkNumber forkNum, BlockNumber blockNum,
-										ReadBufferMode mode, BufferAccessStrategy strategy);
+										ReadBufferMode mode, BufferAccessStrategy strategy,
+										bool permanent);
 extern void ReleaseBuffer(Buffer buffer);
 extern void UnlockReleaseBuffer(Buffer buffer);
 extern void MarkBufferDirty(Buffer buffer);

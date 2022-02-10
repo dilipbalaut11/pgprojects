@@ -772,23 +772,25 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
  * ReadBufferWithoutRelcache -- like ReadBufferExtended, but doesn't require
  *		a relcache entry for the relation.
  *
- * NB: At present, this function may only be used on permanent relations, which
- * is OK, because we only use it during XLOG replay.  If in the future we
- * want to use it on temporary or unlogged relations, we could pass additional
- * parameters.
+ * The caller should pass 'permanent' as true for the regular relation and
+ * false for the unlogged relation.
+ *
+ * NB: At present, this function may only be used on unlogged and regular
+ * relations, which is OK, because we only use it during XLOG replay and while
+ * copying the database.  If in the future we want to use it on temporary
+ * relations, we could pass additional parameters.
  */
 Buffer
 ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 						  BlockNumber blockNum, ReadBufferMode mode,
-						  BufferAccessStrategy strategy)
+						  BufferAccessStrategy strategy, bool permanent)
 {
 	bool		hit;
 
 	SMgrRelation smgr = smgropen(rnode, InvalidBackendId);
 
-	Assert(InRecovery);
-
-	return ReadBuffer_common(smgr, RELPERSISTENCE_PERMANENT, forkNum, blockNum,
+	return ReadBuffer_common(smgr, permanent ? RELPERSISTENCE_PERMANENT :
+							 RELPERSISTENCE_UNLOGGED, forkNum, blockNum,
 							 mode, strategy, &hit);
 }
 

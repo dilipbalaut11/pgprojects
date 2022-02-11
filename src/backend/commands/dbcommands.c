@@ -71,6 +71,7 @@ typedef struct
 {
 	Oid			src_dboid;		/* source (template) DB */
 	Oid			dest_dboid;		/* DB we are trying to create */
+	bool		dblogblock;		/* is block logging enabled */
 } createdb_failure_params;
 
 typedef struct
@@ -107,6 +108,8 @@ static bool check_db_file_conflict(Oid db_id);
 static int	errdetail_busy_db(int notherbackends, int npreparedxacts);
 static void CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid,
 									bool isRedo);
+static List *GetRelListFromPage(Page page, Buffer buf, Oid tbid, Oid dbid,
+								char *srcpath, List *rnodelist);
 static List *GetDatabaseRelationList(Oid srctbid, Oid srcdbid, char *srcpath);
 static void RelationCopyStorageUsingBuffer(SMgrRelation src, SMgrRelation dst,
 									ForkNumber forkNum, char relpersistence);
@@ -206,6 +209,100 @@ CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 }
 
 /*
+ * GetRelListFromPage - Helper function for GetDatabaseRelationList.
+ *
+ * Iterate over each tuple of input pg_class and get a list of all the valid
+ * relfilenodes of the given block and append them to input rnodelist.
+ */
+static List *
+GetRelListFromPage(Page page, Buffer buf, Oid tbid, Oid dbid, char *srcpath,
+				  List *rnodelist)
+{
+	BlockNumber		blkno = BufferGetBlockNumber(buf);
+	OffsetNumber	offnum;
+	OffsetNumber	maxoff;
+	HeapTupleData	tuple;
+	Form_pg_class	classForm;
+
+	maxoff = PageGetMaxOffsetNumber(page);
+
+	/* Iterate over each tuple on the page. */
+	for (offnum = FirstOffsetNumber;
+		 offnum <= maxoff;
+		 offnum = OffsetNumberNext(offnum))
+	{
+		ItemId		itemid;
+
+		itemid = PageGetItemId(page, offnum);
+
+		/* Nothing to do if slot is empty or already dead. */
+		if (!ItemIdIsUsed(itemid) || ItemIdIsDead(itemid) ||
+			ItemIdIsRedirected(itemid))
+			continue;
+
+		Assert(ItemIdIsNormal(itemid));
+		ItemPointerSet(&(tuple.t_self), blkno, offnum);
+
+		tuple.t_data = (HeapTupleHeader) PageGetItem(page, itemid);
+		tuple.t_len = ItemIdGetLength(itemid);
+		tuple.t_tableOid = RelationRelationId;
+
+		/*
+		 * If the tuple is visible then add its relfilenode info to the
+		 * list.
+		 */
+		if (HeapTupleSatisfiesVisibility(&tuple, GetActiveSnapshot(), buf))
+		{
+			Oid				relfilenode = InvalidOid;
+			CreateDBRelInfo   *relinfo;
+
+			classForm = (Form_pg_class) GETSTRUCT(&tuple);
+
+			/* We don't need to copy the shared objects to the target. */
+			if (classForm->reltablespace == GLOBALTABLESPACE_OID)
+				continue;
+
+			/*
+			 * If the object doesn't have the storage then nothing to be
+			 * done for that object so just ignore it.
+			 */
+			if (!RELKIND_HAS_STORAGE(classForm->relkind))
+				continue;
+
+			/*
+			 * If relfilenode is valid then directly use it.  Otherwise,
+			 * consult the relmapper for the mapped relation.
+			 */
+			if (OidIsValid(classForm->relfilenode))
+				relfilenode = classForm->relfilenode;
+			else
+				relfilenode = RelationMapOidToFilenodeForDatabase(srcpath,
+												classForm->oid);
+
+			/* We must have a valid relfilenode oid. */
+			Assert(OidIsValid(relfilenode));
+
+			/* Prepare a rel info element and add it to the list. */
+			relinfo = (CreateDBRelInfo *) palloc(sizeof(CreateDBRelInfo));
+			if (OidIsValid(classForm->reltablespace))
+				relinfo->rnode.spcNode = classForm->reltablespace;
+			else
+				relinfo->rnode.spcNode = tbid;
+
+			relinfo->rnode.dbNode = dbid;
+			relinfo->rnode.relNode = relfilenode;
+			relinfo->reloid = classForm->oid;
+			relinfo->relpersistence = classForm->relpersistence;
+
+			/* Add it to the list. */
+			rnodelist = lappend(rnodelist, relinfo);
+		}
+	}
+
+	return rnodelist;
+}
+
+/*
  * GetDatabaseRelationList - Get relfilenode list to be copied.
  *
  * Iterate over each block of the pg_class relation.  From there, we will check
@@ -219,14 +316,10 @@ GetDatabaseRelationList(Oid tbid, Oid dbid, char *srcpath)
 	RelFileNode		rnode;
 	BlockNumber		nblocks;
 	BlockNumber		blkno;
-	OffsetNumber	offnum;
-	OffsetNumber	maxoff;
 	Buffer			buf;
 	Oid				relfilenode;
 	Page			page;
 	List		   *rnodelist = NIL;
-	HeapTupleData	tuple;
-	Form_pg_class	classForm;
 	LockRelId		relid;
 	BufferAccessStrategy bstrategy;
 
@@ -280,80 +373,12 @@ GetDatabaseRelationList(Oid tbid, Oid dbid, char *srcpath)
 			continue;
 		}
 
-		maxoff = PageGetMaxOffsetNumber(page);
-
-		/* Iterate over each tuple on the page. */
-		for (offnum = FirstOffsetNumber;
-			 offnum <= maxoff;
-			 offnum = OffsetNumberNext(offnum))
-		{
-			ItemId		itemid;
-
-			itemid = PageGetItemId(page, offnum);
-
-			/* Nothing to do if slot is empty or already dead. */
-			if (!ItemIdIsUsed(itemid) || ItemIdIsDead(itemid) ||
-				ItemIdIsRedirected(itemid))
-				continue;
-
-			Assert(ItemIdIsNormal(itemid));
-			ItemPointerSet(&(tuple.t_self), blkno, offnum);
-
-			tuple.t_data = (HeapTupleHeader) PageGetItem(page, itemid);
-			tuple.t_len = ItemIdGetLength(itemid);
-			tuple.t_tableOid = RelationRelationId;
-
-			/*
-			 * If the tuple is visible then add its relfilenode info to the
-			 * list.
-			 */
-			if (HeapTupleSatisfiesVisibility(&tuple, GetActiveSnapshot(), buf))
-			{
-				Oid				relfilenode = InvalidOid;
-				CreateDBRelInfo   *relinfo;
-
-				classForm = (Form_pg_class) GETSTRUCT(&tuple);
-
-				/* We don't need to copy the shared objects to the target. */
-				if (classForm->reltablespace == GLOBALTABLESPACE_OID)
-					continue;
-
-				/*
-				 * If the object doesn't have the storage then nothing to be
-				 * done for that object so just ignore it.
-				 */
-				if (!RELKIND_HAS_STORAGE(classForm->relkind))
-					continue;
-
-				/*
-				 * If relfilenode is valid then directly use it.  Otherwise,
-				 * consult the relmapper for the mapped relation.
-				 */
-				if (OidIsValid(classForm->relfilenode))
-					relfilenode = classForm->relfilenode;
-				else
-					relfilenode = RelationMapOidToFilenodeForDatabase(srcpath,
-													classForm->oid);
-
-				/* We must have a valid relfilenode oid. */
-				Assert(OidIsValid(relfilenode));
-
-				/* Prepare a rel info element and add it to the list. */
-				relinfo = (CreateDBRelInfo *) palloc(sizeof(CreateDBRelInfo));
-				if (OidIsValid(classForm->reltablespace))
-					relinfo->rnode.spcNode = classForm->reltablespace;
-				else
-					relinfo->rnode.spcNode = tbid;
-
-				relinfo->rnode.dbNode = dbid;
-				relinfo->rnode.relNode = relfilenode;
-				relinfo->reloid = classForm->oid;
-				relinfo->relpersistence = classForm->relpersistence;
-
-				/* Add it to the list. */
-				rnodelist = lappend(rnodelist, relinfo);
-			}
-		}
+		/*
+		 * Process pg_class tuple for the current page and add all the valid
+		 * relfilenode entries to the rnodelist.
+		 */
+		rnodelist = GetRelListFromPage(page, buf, tbid, dbid, srcpath,
+									   rnodelist);
 
 		/* Release the buffer lock. */
 		UnlockReleaseBuffer(buf);
@@ -693,7 +718,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	DefElem    *distemplate = NULL;
 	DefElem    *dallowconnections = NULL;
 	DefElem    *dconnlimit = NULL;
-	DefElem    *diswallog = NULL;
+	DefElem    *dlogblock = NULL;
 	char	   *dbname = stmt->dbname;
 	char	   *dbowner = NULL;
 	const char *dbtemplate = NULL;
@@ -703,7 +728,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	int			encoding = -1;
 	bool		dbistemplate = false;
 	bool		dballowconnections = true;
-	bool		dbwallog = true;
+	bool		dblogblock = true;
 	int			dbconnlimit = -1;
 	int			notherbackends;
 	int			npreparedxacts;
@@ -806,11 +831,11 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE)),
 						errmsg("OIDs less than %u are reserved for system objects", FirstNormalObjectId));
 		}
-		else if (strcmp(defel->defname, "wal_log") == 0)
+		else if (strcmp(defel->defname, "log_copied_blocks") == 0)
 		{
-			if (!diswallog)
+			if (dlogblock)
 				errorConflictingDefElem(defel, pstate);
-			diswallog = defel;
+			dlogblock = defel;
 		}
 		else
 			ereport(ERROR,
@@ -878,8 +903,8 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("invalid connection limit: %d", dbconnlimit)));
 	}
-	if (diswallog && diswallog->arg)
-		dbwallog = defGetBoolean(diswallog);
+	if (dlogblock && dlogblock->arg)
+		dblogblock = defGetBoolean(dlogblock);
 
 	/* obtain OID of proposed owner */
 	if (dbowner)
@@ -1188,6 +1213,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	 */
 	fparms.src_dboid = src_dboid;
 	fparms.dest_dboid = dboid;
+	fparms.dblogblock = dblogblock;
 
 	PG_ENSURE_ERROR_CLEANUP(createdb_failure_callback,
 							PointerGetDatum(&fparms));
@@ -1198,7 +1224,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 		 * by block and log each new block. Otherwise call CopyDatabase
 		 * that will copy the database file by file.
 		 */
-		if (dbwallog)
+		if (dblogblock)
 		{
 			CopyDatabaseWithWal(src_dboid, dboid, src_deftablespace,
 								dst_deftablespace);
@@ -1298,14 +1324,20 @@ createdb_failure_callback(int code, Datum arg)
 {
 	createdb_failure_params *fparms = (createdb_failure_params *) DatumGetPointer(arg);
 
-	/* Drop pages for this database that are in the shared buffer cache. */
-	DropDatabaseBuffers(fparms->dest_dboid);
-
 	/*
-	 * Clean out any fsync requests w.r.t. the new database that might be
-	 * pending in md.c.
+	 * If we were copying database at block levels then drop pages for the
+	 * destination database that are in the shared buffer cache.  And tell
+	 * checkpointer to forget any pending fsync and unlink requests for
+	 * files in the database.  The reasoning behind doing this is same as
+	 * explained in dropdb function.  But unlike dropdb we don't need to call
+	 * pgstat_drop_database because this database is still not created so there
+	 * should not be any stat for this.
 	 */
-	ForgetDatabaseSyncRequests(fparms->dest_dboid);
+	if (fparms->dblogblock)
+	{
+		DropDatabaseBuffers(fparms->dest_dboid);
+		ForgetDatabaseSyncRequests(fparms->dest_dboid);
+	}
 
 	/*
 	 * Release lock on source database before doing recursive remove. This is

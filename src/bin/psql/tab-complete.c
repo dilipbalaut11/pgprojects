@@ -2738,10 +2738,12 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH("OWNER", "TEMPLATE", "ENCODING", "TABLESPACE",
 					  "IS_TEMPLATE",
 					  "ALLOW_CONNECTIONS", "CONNECTION LIMIT",
-					  "LC_COLLATE", "LC_CTYPE", "LOCALE", "OID");
+					  "LC_COLLATE", "LC_CTYPE", "LOCALE", "OID", "STRATEGY");
 
 	else if (Matches("CREATE", "DATABASE", MatchAny, "TEMPLATE"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_template_databases);
+	else if (Matches("CREATE", "DATABASE", MatchAny, "STRATEGY"))
+		COMPLETE_WITH("WAL_LOG", "FILE_COPY");
 
 	/* CREATE DOMAIN */
 	else if (Matches("CREATE", "DOMAIN", MatchAny))

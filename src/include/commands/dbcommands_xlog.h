@@ -21,6 +21,13 @@
 #define XLOG_DBASE_CREATE		0x00
 #define XLOG_DBASE_DROP			0x10
 
+/*
+ * This will be used for copying the database at file system level as well as
+ * using the wal log.  During wal log this will only be used for creating the
+ * destination database directory and other data will be copied with the
+ * individual wal operations so in that case we don't need to store the
+ * src_db_id and src_tablespace_id.
+ */
 typedef struct xl_dbase_create_rec
 {
 	/* Records copying of a single subdirectory incl. contents */

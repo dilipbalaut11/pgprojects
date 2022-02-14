@@ -460,6 +460,7 @@ CoverPos
 CreateAmStmt
 CreateCastStmt
 CreateConversionStmt
+CreateDBRelInfo
 CreateDomainStmt
 CreateEnumStmt
 CreateEventTrigStmt

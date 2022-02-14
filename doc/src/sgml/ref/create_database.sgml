@@ -34,6 +34,7 @@ CREATE DATABASE <replaceable class="parameter">name</replaceable>
            [ CONNECTION LIMIT [=] <replaceable class="parameter">connlimit</replaceable> ]
            [ IS_TEMPLATE [=] <replaceable class="parameter">istemplate</replaceable> ]
            [ OID [=] <replaceable class="parameter">oid</replaceable> ] ]
+           [ STRATEGY [=] <replaceable class="parameter">strategy</replaceable> ] ]
 </synopsis>
  </refsynopsisdiv>
 
@@ -236,6 +237,27 @@ CREATE DATABASE <replaceable class="parameter">name</replaceable>
          use by <application>pg_upgrade</application>, and only
          <application>pg_upgrade</application> can specify a value less
          than 16384.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><replaceable class="parameter">strategy</replaceable></term>
+       <listitem>
+        <para>
+         This is used for copying the database directory.  Currently, we have
+         two strategies the <literal>WAL_LOG</literal> and the
+         <literal>FILE_COPY</literal>.  If <literal>WAL_LOG</literal> strategy
+         is used then the database will be copied block by block and it will
+         also WAL log each copied block.  Otherwise, if <literal>FILE_COPY
+         </literal> strategy is used then it will do the file system level copy
+         so individual the block is not WAL logged.  If the <literal>FILE_COPY
+         </literal> strategy is used then it has to issue a checkpoint before
+         and after performing the copy and if the shared buffers are large and
+         there are a lot of dirty buffers then issuing checkpoint would be
+         costly and it may impact the performance of the whole system.  On the
+         other hand, if we WAL log each block then if the source database is
+         large then creating the database may take more time.
         </para>
        </listitem>
       </varlistentry>

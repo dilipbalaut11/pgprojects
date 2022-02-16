@@ -45,8 +45,8 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 		CheckPoint *checkpoint = (CheckPoint *) rec;
 
 		appendStringInfo(buf, "redo %X/%X; "
-						 "tli %u; prev tli %u; fpw %s; xid %u:%u; oid %u; multi %u; offset %u; "
-						 "oldest xid %u in DB %u; oldest multi %u in DB %u; "
+						 "tli %u; prev tli %u; fpw %s; xid %u:%u; relfilenode " INT64_FORMAT ";oid %u; "
+						 "multi %u; offset %u; oldest xid %u in DB %u; oldest multi %u in DB %u; "
 						 "oldest/newest commit timestamp xid: %u/%u; "
 						 "oldest running xid %u; %s",
 						 LSN_FORMAT_ARGS(checkpoint->redo),
@@ -55,6 +55,7 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 						 checkpoint->fullPageWrites ? "true" : "false",
 						 EpochFromFullTransactionId(checkpoint->nextXid),
 						 XidFromFullTransactionId(checkpoint->nextXid),
+						 checkpoint->nextRelNode,
 						 checkpoint->nextOid,
 						 checkpoint->nextMulti,
 						 checkpoint->nextMultiOffset,
@@ -73,6 +74,13 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 
 		memcpy(&nextOid, rec, sizeof(Oid));
 		appendStringInfo(buf, "%u", nextOid);
+	}
+	else if (info == XLOG_NEXT_RELFILENODE)
+	{
+		RelNode			nextRelFilenode;
+
+		memcpy(&nextRelFilenode, rec, sizeof(RelNode));
+		appendStringInfo(buf, INT64_FORMAT, nextRelFilenode);
 	}
 	else if (info == XLOG_RESTORE_POINT)
 	{
@@ -168,6 +176,9 @@ xlog_identify(uint8 info)
 			break;
 		case XLOG_NEXTOID:
 			id = "NEXTOID";
+			break;
+		case XLOG_NEXT_RELFILENODE:
+			id = "NEXT_RELFILENODE";
 			break;
 		case XLOG_SWITCH:
 			id = "SWITCH";

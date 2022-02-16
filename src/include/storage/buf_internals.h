@@ -21,6 +21,7 @@
 #include "storage/condition_variable.h"
 #include "storage/latch.h"
 #include "storage/lwlock.h"
+#include "storage/relfilenode.h"
 #include "storage/shmem.h"
 #include "storage/smgr.h"
 #include "storage/spin.h"
@@ -92,8 +93,9 @@ typedef struct buftag
 {
 	Oid			spcOid;			/* tablespace oid. */
 	Oid			dbOid;			/* database oid. */
-	Oid			fileNode;		/* relation file node. */
-	ForkNumber	forkNum;
+	uint32		fileNode_low;	/* relation file node 32 lower bits */
+	uint32		fileNode_hi:24;	/* relation file node 24 high bits */
+	uint32		forkNum:8;
 	BlockNumber blockNum;		/* blknum relative to begin of reln */
 } BufferTag;
 
@@ -101,7 +103,8 @@ typedef struct buftag
 ( \
 	(a).spcOid = InvalidOid, \
 	(a).dbOid = InvalidOid, \
-	(a).fileNode = InvalidOid, \
+	(a).fileNode_low = 0, \
+	(a).fileNode_hi = 0, \
 	(a).forkNum = InvalidForkNumber, \
 	(a).blockNum = InvalidBlockNumber \
 )
@@ -110,7 +113,7 @@ typedef struct buftag
 ( \
 	(a).spcOid = (xx_rnode).spcNode, \
 	(a).dbOid = (xx_rnode).dbNode, \
-	(a).fileNode = (xx_rnode).relNode, \
+	BufTagSetFileNode(a, (xx_rnode).relNode), \
 	(a).forkNum = (xx_forkNum), \
 	(a).blockNum = (xx_blockNum) \
 )
@@ -119,23 +122,33 @@ typedef struct buftag
 ( \
 	(a).spcOid == (b).spcOid && \
 	(a).dbOid == (b).dbOid && \
-	(a).fileNode == (b).fileNode && \
+	(a).fileNode_low == (b).fileNode_low && \
+	(a).fileNode_hi == (b).fileNode_hi && \
 	(a).blockNum == (b).blockNum && \
 	(a).forkNum == (b).forkNum \
+)
+
+#define	BufTagGetFileNode(a) \
+	((((uint64) (a).fileNode_hi << 32) | ((uint32) (a).fileNode_low)))
+
+#define	BufTagSetFileNode(a, node) \
+( \
+	(a).fileNode_hi = (node) >> 32, \
+	(a).fileNode_low = (node) & 0xffffffff \
 )
 
 #define BuffTagGetRelFileNode(a, node) \
 do { \
 	(node).spcNode = (a).spcOid; \
 	(node).dbNode = (a).dbOid; \
-	(node).relNode = (a).fileNode; \
+	(node).relNode = BufTagGetFileNode(a); \
 } while(0)
 
 #define BuffTagRelFileNodeEquals(a, node) \
 ( \
 	(a).spcOid == (node).spcNode && \
 	(a).dbOid == (node).dbNode && \
-	(a).fileNode == (node).relNode \
+	BufTagGetFileNode(a) == (node).relNode \
 )
 
 /*
@@ -312,7 +325,7 @@ extern BufferDesc *LocalBufferDescriptors;
 typedef struct CkptSortItem
 {
 	Oid			tsId;
-	Oid			relNode;
+	RelNode		relNode;
 	ForkNumber	forkNum;
 	BlockNumber blockNum;
 	int			buf_id;

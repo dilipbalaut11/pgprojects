@@ -1344,7 +1344,7 @@ RelationInitPhysicalAddr(Relation relation)
 		relation->rd_node.relNode =
 			RelationMapOidToFilenode(relation->rd_id,
 									 relation->rd_rel->relisshared);
-		if (!OidIsValid(relation->rd_node.relNode))
+		if (!RelNodeIsValid(relation->rd_node.relNode))
 			elog(ERROR, "could not find relation mapping for relation \"%s\", OID %u",
 				 RelationGetRelationName(relation), relation->rd_id);
 	}
@@ -1959,13 +1959,13 @@ formrdesc(const char *relationName, Oid relationReltype,
 	/*
 	 * All relations made with formrdesc are mapped.  This is necessarily so
 	 * because there is no other way to know what filenode they currently
-	 * have.  In bootstrap mode, add them to the initial relation mapper data,
-	 * specifying that the initial filenode is the same as the OID.
+	 * have.  In bootstrap mode, generate a new relfilenode and add them to the
+	 * initial relation mapper data.
 	 */
-	relation->rd_rel->relfilenode = InvalidOid;
+	relation->rd_rel->relfilenode = InvalidRelNode;
 	if (IsBootstrapProcessingMode())
 		RelationMapUpdateMap(RelationGetRelid(relation),
-							 RelationGetRelid(relation),
+							 GetNewRelNode(),
 							 isshared, true);
 
 	/*
@@ -3435,7 +3435,7 @@ RelationBuildLocalRelation(const char *relname,
 						   TupleDesc tupDesc,
 						   Oid relid,
 						   Oid accessmtd,
-						   Oid relfilenode,
+						   RelNode relfilenode,
 						   Oid reltablespace,
 						   bool shared_relation,
 						   bool mapped_relation,
@@ -3606,7 +3606,7 @@ RelationBuildLocalRelation(const char *relname,
 
 	if (mapped_relation)
 	{
-		rel->rd_rel->relfilenode = InvalidOid;
+		rel->rd_rel->relfilenode = InvalidRelNode;
 		/* Add it to the active mapping information */
 		RelationMapUpdateMap(relid, relfilenode, shared_relation, true);
 	}
@@ -3675,7 +3675,7 @@ RelationBuildLocalRelation(const char *relname,
 void
 RelationSetNewRelfilenode(Relation relation, char persistence)
 {
-	Oid			newrelfilenode;
+	RelNode		newrelfilenode;
 	Relation	pg_class;
 	HeapTuple	tuple;
 	Form_pg_class classform;
@@ -3684,7 +3684,7 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 	RelFileNode newrnode;
 
 	/* Allocate a new relfilenode */
-	newrelfilenode = GetNewRelFileNode(relation->rd_rel->reltablespace, NULL,
+	newrelfilenode = GetNewRelFileNode(relation->rd_rel->reltablespace,
 									   persistence);
 
 	/*

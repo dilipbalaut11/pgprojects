@@ -526,7 +526,7 @@ typedef struct ViewOptions
  */
 #define RelationIsMapped(relation) \
 	(RELKIND_HAS_STORAGE((relation)->rd_rel->relkind) && \
-	 ((relation)->rd_rel->relfilenode == InvalidOid))
+	 ((relation)->rd_rel->relfilenode == InvalidRelNode))
 
 /*
  * RelationGetSmgr

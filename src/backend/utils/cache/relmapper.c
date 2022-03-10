@@ -136,10 +136,12 @@ static void apply_map_update(RelMapFile *map, Oid relationId, Oid fileNode,
 							 bool add_okay);
 static void merge_map_updates(RelMapFile *map, const RelMapFile *updates,
 							  bool add_okay);
-static void load_relmap_file(bool shared, bool lock_held);
+static void load_relmap_file(bool shared, bool lock_held, RelMapFile *dstmap,
+							 const char *dbpath);
 static void write_relmap_file(bool shared, RelMapFile *newmap,
 							  bool write_wal, bool send_sinval, bool preserve_files,
-							  Oid dbid, Oid tsid, const char *dbpath);
+							  Oid dbid, Oid tsid, const char *dbpath,
+							  bool update_relmap);
 static void perform_relmap_update(bool shared, const RelMapFile *updates);
 
 
@@ -244,6 +246,32 @@ RelationMapFilenodeToOid(Oid filenode, bool shared)
 			if (filenode == map->mappings[i].mapfilenode)
 				return map->mappings[i].mapoid;
 		}
+	}
+
+	return InvalidOid;
+}
+
+/*
+ * RelationMapOidToFilenodeForDatabase
+ *
+ * Same as RelationMapOidToFilenode, but instead of reading the mapping from
+ * the database we are connected to it will read the mapping from the input
+ * database.
+ */
+Oid
+RelationMapOidToFilenodeForDatabase(const char *dbpath, Oid relationId)
+{
+	RelMapFile	map;
+	int			i;
+
+	/* Read the relmap file from the source database. */
+	load_relmap_file(false, false, &map, dbpath);
+
+	/* Iterate over the relmap entries to find the input relation oid. */
+	for (i = 0; i < map.num_mappings; i++)
+	{
+		if (relationId == map.mappings[i].mapoid)
+			return map.mappings[i].mapfilenode;
 	}
 
 	return InvalidOid;
@@ -405,12 +433,12 @@ RelationMapInvalidate(bool shared)
 	if (shared)
 	{
 		if (shared_map.magic == RELMAPPER_FILEMAGIC)
-			load_relmap_file(true, false);
+			load_relmap_file(true, false, NULL, NULL);
 	}
 	else
 	{
 		if (local_map.magic == RELMAPPER_FILEMAGIC)
-			load_relmap_file(false, false);
+			load_relmap_file(false, false, NULL, NULL);
 	}
 }
 
@@ -425,9 +453,9 @@ void
 RelationMapInvalidateAll(void)
 {
 	if (shared_map.magic == RELMAPPER_FILEMAGIC)
-		load_relmap_file(true, false);
+		load_relmap_file(true, false, NULL, NULL);
 	if (local_map.magic == RELMAPPER_FILEMAGIC)
-		load_relmap_file(false, false);
+		load_relmap_file(false, false, NULL, NULL);
 }
 
 /*
@@ -569,9 +597,9 @@ RelationMapFinishBootstrap(void)
 
 	/* Write the files; no WAL or sinval needed */
 	write_relmap_file(true, &shared_map, false, false, false,
-					  InvalidOid, GLOBALTABLESPACE_OID, NULL);
+					  InvalidOid, GLOBALTABLESPACE_OID, NULL, false);
 	write_relmap_file(false, &local_map, false, false, false,
-					  MyDatabaseId, MyDatabaseTableSpace, DatabasePath);
+					  MyDatabaseId, MyDatabaseTableSpace, DatabasePath, false);
 }
 
 /*
@@ -612,7 +640,7 @@ RelationMapInitializePhase2(void)
 	/*
 	 * Load the shared map file, die on error.
 	 */
-	load_relmap_file(true, false);
+	load_relmap_file(true, false, NULL, NULL);
 }
 
 /*
@@ -633,7 +661,7 @@ RelationMapInitializePhase3(void)
 	/*
 	 * Load the local map file, die on error.
 	 */
-	load_relmap_file(false, false);
+	load_relmap_file(false, false, NULL, NULL);
 }
 
 /*
@@ -687,15 +715,46 @@ RestoreRelationMap(char *startAddress)
 }
 
 /*
+ * CopyRelationMap
+ *
+ * Copy relmapfile from source db path to the destination db path and WAL log
+ * the operation.  This function is only called during the create database, so
+ * the destination database is not yet visible to anyone else, thus we don't
+ * need to acquire the relmap lock while updating the destination relmap.
+ */
+void
+CopyRelationMap(Oid dbid, Oid tsid, const char *srcdbpath,
+				const char *dstdbpath)
+{
+	RelMapFile map;
+
+	/* Read the relmap file from the source database. */
+	load_relmap_file(false, false, &map, srcdbpath);
+
+	/*
+	 * Write map contents into the destination database's relmap file; no
+	 * sinval needed because there could be no one else connected to the
+	 * database we are creating now.
+	 */
+	write_relmap_file(false, &map, true, false, true, dbid, tsid, dstdbpath,
+					  true);
+}
+
+/*
  * load_relmap_file -- load data from the shared or local map file
  *
  * Because the map file is essential for access to core system catalogs,
  * failure to read it is a fatal error.
  *
- * Note that the local case requires DatabasePath to be set up.
+ * Note that the local case requires DatabasePath to be set up.  But during
+ * createdb we are not connected to the source database so we will have to pass
+ * the dbpath of the source database from which we want to read the relmap
+ * file.  And, we will have to pass a valid memory for the 'dstmap' into which
+ * we want to read the relmap.
  */
 static void
-load_relmap_file(bool shared, bool lock_held)
+load_relmap_file(bool shared, bool lock_held, RelMapFile *dstmap,
+				 const char *dbpath)
 {
 	RelMapFile *map;
 	char		mapfilename[MAXPGPATH];
@@ -703,7 +762,20 @@ load_relmap_file(bool shared, bool lock_held)
 	int			fd;
 	int			r;
 
-	if (shared)
+	/*
+	 * Prepare relmap file path.  If a valid dbpath is given then read the file
+	 * from that path.
+	 */
+	if (dbpath != NULL)
+	{
+		/* We must pass a valid dstmap for reading the mapfile contents. */
+		Assert(dstmap != NULL);
+
+		snprintf(mapfilename, sizeof(mapfilename), "%s/%s",
+				 dbpath, RELMAPPER_FILENAME);
+		map = dstmap;
+	}
+	else if (shared)
 	{
 		snprintf(mapfilename, sizeof(mapfilename), "global/%s",
 				 RELMAPPER_FILENAME);
@@ -796,12 +868,15 @@ load_relmap_file(bool shared, bool lock_held)
  * Because this may be called during WAL replay when MyDatabaseId,
  * DatabasePath, etc aren't valid, we require the caller to pass in suitable
  * values.  The caller is also responsible for being sure no concurrent
- * map update could be happening.
+ * map update could be happening.  This will also be called during create
+ * database and that time we are not connected to the database for which we
+ * have to write the relmap.  So we have to pass the valid dbpath for which we
+ * want to write the relmap file and also pass create as true.
  */
 static void
 write_relmap_file(bool shared, RelMapFile *newmap,
 				  bool write_wal, bool send_sinval, bool preserve_files,
-				  Oid dbid, Oid tsid, const char *dbpath)
+				  Oid dbid, Oid tsid, const char *dbpath, bool create)
 {
 	int			fd;
 	RelMapFile *realmap;
@@ -819,10 +894,18 @@ write_relmap_file(bool shared, RelMapFile *newmap,
 	FIN_CRC32C(newmap->crc);
 
 	/*
-	 * Open the target file.  We prefer to do this before entering the
-	 * critical section, so that an open() failure need not force PANIC.
+	 * Prepare the target mapfilename, and also set which relmap we want to
+	 * update.  But if the create is passed true then we don't need to update
+	 * the memory relmap because we are not connected to database for which
+	 * we are writing the relmap file.
 	 */
-	if (shared)
+	if (create)
+	{
+		snprintf(mapfilename, sizeof(mapfilename), "%s/%s",
+				 dbpath, RELMAPPER_FILENAME);
+		realmap = NULL;
+	}
+	else if (shared)
 	{
 		snprintf(mapfilename, sizeof(mapfilename), "global/%s",
 				 RELMAPPER_FILENAME);
@@ -853,6 +936,7 @@ write_relmap_file(bool shared, RelMapFile *newmap,
 		xlrec.dbid = dbid;
 		xlrec.tsid = tsid;
 		xlrec.nbytes = sizeof(RelMapFile);
+		xlrec.create = create;
 
 		XLogBeginInsert();
 		XLogRegisterData((char *) (&xlrec), MinSizeOfRelmapUpdate);
@@ -935,14 +1019,17 @@ write_relmap_file(bool shared, RelMapFile *newmap,
 	}
 
 	/*
-	 * Success, update permanent copy.  During bootstrap, we might be working
-	 * on the permanent copy itself, in which case skip the memcpy() to avoid
-	 * invoking nominally-undefined behavior.
+	 * Success, update permanent copy.  During bootstrap and the create
+	 * database, skip the memcpy().  Because during bootstrap, we might be
+	 * working on the permanent copy itself, whereas during create database
+	 * we are not connected to the database for which we are creating the
+	 * relmap file so it will be wrong to update the shared map of the current
+	 * database to which we are connected.
 	 */
-	if (realmap != newmap)
+	if (realmap != NULL && realmap != newmap)
 		memcpy(realmap, newmap, sizeof(RelMapFile));
 	else
-		Assert(!send_sinval);	/* must be bootstrapping */
+		Assert(!send_sinval);	/* must be bootstrapping or createdb */
 
 	/* Critical section done */
 	if (write_wal)
@@ -975,7 +1062,7 @@ perform_relmap_update(bool shared, const RelMapFile *updates)
 	LWLockAcquire(RelationMappingLock, LW_EXCLUSIVE);
 
 	/* Be certain we see any other updates just made */
-	load_relmap_file(shared, true);
+	load_relmap_file(shared, true, NULL, NULL);
 
 	/* Prepare updated data in a local variable */
 	if (shared)
@@ -993,7 +1080,7 @@ perform_relmap_update(bool shared, const RelMapFile *updates)
 	write_relmap_file(shared, &newmap, true, true, true,
 					  (shared ? InvalidOid : MyDatabaseId),
 					  (shared ? GLOBALTABLESPACE_OID : MyDatabaseTableSpace),
-					  DatabasePath);
+					  DatabasePath, false);
 
 	/* Now we can release the lock */
 	LWLockRelease(RelationMappingLock);
@@ -1025,18 +1112,24 @@ relmap_redo(XLogReaderState *record)
 		dbpath = GetDatabasePath(xlrec->dbid, xlrec->tsid);
 
 		/*
-		 * Write out the new map and send sinval, but of course don't write a
-		 * new WAL entry.  There's no surrounding transaction to tell to
-		 * preserve files, either.
+		 * Write out the new map and send sinval if create is not set because
+		 * in case of create there should be no one else accessing the relmap.
+		 * But of course don't write a new WAL entry.  There's no surrounding
+		 * transaction to tell to preserve files, either.
 		 *
 		 * There shouldn't be anyone else updating relmaps during WAL replay,
-		 * but grab the lock to interlock against load_relmap_file().
+		 * but grab the lock to interlock against load_relmap_file().  But if
+		 * create is set then we don't need to lock because we are creating a
+		 * new database so there can be absolutely no one else looking at its
+		 * relmap file.
 		 */
-		LWLockAcquire(RelationMappingLock, LW_EXCLUSIVE);
+		if (!xlrec->create)
+			LWLockAcquire(RelationMappingLock, LW_EXCLUSIVE);
 		write_relmap_file((xlrec->dbid == InvalidOid), &newmap,
-						  false, true, false,
-						  xlrec->dbid, xlrec->tsid, dbpath);
-		LWLockRelease(RelationMappingLock);
+						  false, !xlrec->create, false,
+						  xlrec->dbid, xlrec->tsid, dbpath, xlrec->create);
+		if (!xlrec->create)
+			LWLockRelease(RelationMappingLock);
 
 		pfree(dbpath);
 	}

@@ -159,6 +159,22 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>-S <replaceable class="parameter">template</replaceable></option></term>
+      <term><option>--strategy=<replaceable class="parameter">strategy</replaceable></option></term>
+      <listitem>
+       <para>
+        Specifies the database creation strategy.  Currently, we have two
+        strategies the <literal>WAL_LOG</literal> and the <literal>FILE_COPY
+        </literal>.  If <literal>WAL_LOG</literal> strategy is used then the
+        database will be copied block by block and it will also WAL log each
+        copied block.  Otherwise, if <literal>FILE_COPY</literal> strategy is
+        used then it will do the file system level copy so individual the block
+        is not WAL logged.  The default strategy is <literal>WAL_LOG</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-T <replaceable class="parameter">template</replaceable></option></term>
       <term><option>--template=<replaceable class="parameter">template</replaceable></option></term>
       <listitem>

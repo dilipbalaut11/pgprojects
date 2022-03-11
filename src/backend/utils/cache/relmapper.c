@@ -252,6 +252,60 @@ RelationMapFilenodeToOid(Oid filenode, bool shared)
 }
 
 /*
+ * RelationMapOidToFilenodeForDatabase
+ *
+ * Same as RelationMapOidToFilenode, but instead of reading the mapping from
+ * the database we are connected to it will read the mapping from the input
+ * database.
+ */
+Oid
+RelationMapOidToFilenodeForDatabase(char *dbpath, Oid relationId)
+{
+	RelMapFile	map;
+	int			i;
+
+	/* Read the relmap file from the source database. */
+	load_relmap_file(&map, dbpath, false, ERROR);
+
+	/* Iterate over the relmap entries to find the input relation oid. */
+	for (i = 0; i < map.num_mappings; i++)
+	{
+		if (relationId == map.mappings[i].mapoid)
+			return map.mappings[i].mapfilenode;
+	}
+
+	return InvalidOid;
+}
+
+/*
+ * RelationMapCopy
+ *
+ * Copy relmapfile from source db path to the destination db path and WAL log
+ * the operation.
+ */
+void
+RelationMapCopy(Oid dbid, Oid tsid, char *srcdbpath, char *dstdbpath)
+{
+	RelMapFile map;
+
+	/*
+	 * Read the relmap file from the source database.  This function is only
+	 * called during the create database, so elevel can be ERROR.
+	 */
+	load_relmap_file(&map, srcdbpath, false, ERROR);
+
+	/*
+	 * Write map contents into the destination database's relmap file. No
+	 * sinval needed because we are creating new file while creating a new
+	 * database so no one else must be accessing this file and for the same
+	 * reason we don't need to acquire the RelationMappingLock as well.  And,
+	 * we also don't need to preserve files because we are creating a new
+	 * database so in case of anerror relation files will be deleted anyway.
+	 */
+	write_relmap_file(&map, true, false, false, dbid, tsid, dstdbpath);
+}
+
+/*
  * RelationMapUpdateMap
  *
  * Install a new relfilenode mapping for the specified relation.
@@ -1033,6 +1087,12 @@ relmap_redo(XLogReaderState *record)
 		 *
 		 * There shouldn't be anyone else updating relmaps during WAL replay,
 		 * but grab the lock to interlock against read_relmap_file().
+		 *
+		 * Note - this WAL is also written for copying the relmap file while
+		 * creating a database.  Therefore, it makes no sense to acquire a
+		 * relmap lock or send sinval.  But if we want to avoid that, then we
+		 * must set an extra flag in WAL.  So let it grab the lock and send
+		 * sinval because there is no harm in that.
 		 */
 		LWLockAcquire(RelationMappingLock, LW_EXCLUSIVE);
 		write_relmap_file(&newmap, false, true, false,

@@ -30,6 +30,9 @@
 /* Number of OIDs to prefetch (preallocate) per XLOG write */
 #define VAR_OID_PREFETCH		8192
 
+/* Number of RelFileNode to prefetch (preallocate) per XLOG write */
+#define VAR_RFN_PREFETCH		8192
+
 /* pointer to "variable cache" in shared memory (set up by shmem.c) */
 VariableCache ShmemVariableCache = NULL;
 
@@ -521,8 +524,7 @@ ForceTransactionIdLimitUpdate(void)
  * wide, counter wraparound will occur eventually, and therefore it is unwise
  * to assume they are unique unless precautions are taken to make them so.
  * Hence, this routine should generally not be used directly.  The only direct
- * callers should be GetNewOidWithIndex() and GetNewRelFileNode() in
- * catalog/catalog.c.
+ * callers should be GetNewOidWithIndex() in catalog/catalog.c.
  */
 Oid
 GetNewObjectId(void)
@@ -610,6 +612,98 @@ SetNextObjectId(Oid nextOid)
 	ShmemVariableCache->oidCount = 0;
 
 	LWLockRelease(OidGenLock);
+}
+
+/*
+ * GetNewRelNode
+ *
+ * Simmilar to GetNewObjectId but instead of new Oid it generates new relnode.
+ */
+RelNode
+GetNewRelNode(void)
+{
+	RelNode		result;
+
+	/* Safety check, we should never get this far in a HS standby */
+	if (RecoveryInProgress())
+		elog(ERROR, "cannot assign RelNode during recovery");
+
+	LWLockAcquire(RelNodeGenLock, LW_EXCLUSIVE);
+
+	/*
+	 * Check for the wraparound for the relnode counter.
+	 *
+	 * XXX Actually the relnode is 56 bits wide so we don't need to worry about
+	 * the wraparound case.
+	 */
+	if (ShmemVariableCache->nextRelNode > MAX_RELFILENODE)
+	{
+		ShmemVariableCache->nextRelNode = FirstNormalRelNode;
+		ShmemVariableCache->relnodecount = 0;
+	}
+
+	/* If we run out of logged for use RelNode then we must log more */
+	if (ShmemVariableCache->relnodecount == 0)
+	{
+		XLogPutNextRelFileNode(ShmemVariableCache->nextRelNode +
+							   VAR_RFN_PREFETCH);
+
+		ShmemVariableCache->relnodecount = VAR_RFN_PREFETCH;
+	}
+
+	result = ShmemVariableCache->nextRelNode;
+	(ShmemVariableCache->nextRelNode)++;
+	(ShmemVariableCache->relnodecount)--;
+
+	LWLockRelease(RelNodeGenLock);
+
+	return result;
+}
+
+/*
+ * SetNextRelNode
+ *
+ * This may only be called during pg_upgrade; it advances the RelNode counter
+ * to the specified value.
+ */
+void
+SetNextRelNode(RelNode relnode)
+{
+	int		relnodecount;
+	
+	/* Safety check, we should never get this far in a HS standby */
+	if (RecoveryInProgress())
+		elog(ERROR, "cannot forward RelNode during recovery");
+
+	LWLockAcquire(RelNodeGenLock, LW_EXCLUSIVE);
+
+	/*
+	 * If previous assigned value of the nextRelNode is already higher than the
+	 * current value then nothing to be done.  This is possible because during
+	 * upgrade the relfilenode for the objects can be in any order.
+	 */
+	if (relnode <= ShmemVariableCache->nextRelNode)
+	{
+		LWLockRelease(RelNodeGenLock);
+		return;
+	}
+
+	/*
+	 * Check if we set the new relnode then do we run out of the logged relnode
+	 * if so then we need to WAL log again.  Otherwise, just adjust the
+	 * relnodecount counter.
+	 */
+	relnodecount = relnode - ShmemVariableCache->nextRelNode;
+	if (ShmemVariableCache->relnodecount <= relnodecount)
+	{
+		XLogPutNextRelFileNode(relnode + VAR_RFN_PREFETCH);
+		ShmemVariableCache->relnodecount = VAR_RFN_PREFETCH;
+	}
+	else
+		ShmemVariableCache->relnodecount -= relnodecount;
+
+	ShmemVariableCache->nextRelNode = relnode;
+	LWLockRelease(RelNodeGenLock);
 }
 
 /*

@@ -79,7 +79,7 @@
 typedef struct RelMapping
 {
 	Oid			mapoid;			/* OID of a catalog */
-	Oid			mapfilenode;	/* its filenode number */
+	RelNode		mapfilenode;	/* its filenode number */
 } RelMapping;
 
 typedef struct RelMapFile
@@ -132,7 +132,7 @@ static RelMapFile pending_local_updates;
 
 
 /* non-export function prototypes */
-static void apply_map_update(RelMapFile *map, Oid relationId, Oid fileNode,
+static void apply_map_update(RelMapFile *map, Oid relationId, RelNode fileNode,
 							 bool add_okay);
 static void merge_map_updates(RelMapFile *map, const RelMapFile *updates,
 							  bool add_okay);
@@ -155,7 +155,7 @@ static void perform_relmap_update(bool shared, const RelMapFile *updates);
  * Returns InvalidOid if the OID is not known (which should never happen,
  * but the caller is in a better position to report a meaningful error).
  */
-Oid
+RelNode
 RelationMapOidToFilenode(Oid relationId, bool shared)
 {
 	const RelMapFile *map;
@@ -193,7 +193,7 @@ RelationMapOidToFilenode(Oid relationId, bool shared)
 		}
 	}
 
-	return InvalidOid;
+	return InvalidRelNode;
 }
 
 /*
@@ -209,7 +209,7 @@ RelationMapOidToFilenode(Oid relationId, bool shared)
  * relfilenode doesn't pertain to a mapped relation.
  */
 Oid
-RelationMapFilenodeToOid(Oid filenode, bool shared)
+RelationMapFilenodeToOid(RelNode filenode, bool shared)
 {
 	const RelMapFile *map;
 	int32		i;
@@ -258,7 +258,7 @@ RelationMapFilenodeToOid(Oid filenode, bool shared)
  * immediately.  Otherwise it is made pending until CommandCounterIncrement.
  */
 void
-RelationMapUpdateMap(Oid relationId, Oid fileNode, bool shared,
+RelationMapUpdateMap(Oid relationId, RelNode fileNode, bool shared,
 					 bool immediate)
 {
 	RelMapFile *map;
@@ -316,7 +316,8 @@ RelationMapUpdateMap(Oid relationId, Oid fileNode, bool shared,
  * add_okay = false to draw an error if not.
  */
 static void
-apply_map_update(RelMapFile *map, Oid relationId, Oid fileNode, bool add_okay)
+apply_map_update(RelMapFile *map, Oid relationId, RelNode fileNode,
+				 bool add_okay)
 {
 	int32		i;
 

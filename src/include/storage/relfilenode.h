@@ -34,8 +34,7 @@
  * relNode identifies the specific relation.  relNode corresponds to
  * pg_class.relfilenode (NOT pg_class.oid, because we need to be able
  * to assign new physical files to relations in some situations).
- * Notice that relNode is only unique within a database in a particular
- * tablespace.
+ * Notice that relNode is unique within a cluster.
  *
  * Note: spcNode must be GLOBALTABLESPACE_OID if and only if dbNode is
  * zero.  We support shared relations only in the "global" tablespace.
@@ -58,7 +57,7 @@ typedef struct RelFileNode
 {
 	Oid			spcNode;		/* tablespace */
 	Oid			dbNode;			/* database */
-	Oid			relNode;		/* relation */
+	RelNode		relNode;		/* relation */
 } RelFileNode;
 
 /*
@@ -74,6 +73,15 @@ typedef struct RelFileNodeBackend
 	RelFileNode node;
 	BackendId	backend;
 } RelFileNodeBackend;
+
+#define SizeOfRelFileNodeBackend \
+	(offsetof(RelFileNodeBackend, backend) + sizeof(BackendId))
+
+/*
+ * Max value of the relfilnode.  Relfilenode will be of 56bits wide for more
+ * details refer comments atop BufferTag.
+ */
+#define MAX_RELFILENODE		((((uint64) 1) << 56) - 1)
 
 #define RelFileNodeBackendIsTemp(rnode) \
 	((rnode).backend != InvalidBackendId)

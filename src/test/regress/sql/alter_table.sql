@@ -1478,7 +1478,6 @@ select relname,
   c.oid = oldoid as orig_oid,
   case relfilenode
     when 0 then 'none'
-    when c.oid then 'own'
     when oldfilenode then 'orig'
     else 'OTHER'
     end as storage,
@@ -1499,7 +1498,6 @@ select relname,
   c.oid = oldoid as orig_oid,
   case relfilenode
     when 0 then 'none'
-    when c.oid then 'own'
     when oldfilenode then 'orig'
     else 'OTHER'
     end as storage,
@@ -1638,7 +1636,7 @@ CREATE FUNCTION check_ddl_rewrite(p_tablename regclass, p_ddl text)
 RETURNS boolean
 LANGUAGE plpgsql AS $$
 DECLARE
-    v_relfilenode oid;
+    v_relfilenode int8;
 BEGIN
     v_relfilenode := relfilenode FROM pg_class WHERE oid = p_tablename;
 

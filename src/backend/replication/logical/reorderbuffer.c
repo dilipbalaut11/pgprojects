@@ -5268,7 +5268,7 @@ DisplayMapping(HTAB *tuplecid_data)
 	hash_seq_init(&hstat, tuplecid_data);
 	while ((ent = (ReorderBufferTupleCidEnt *) hash_seq_search(&hstat)) != NULL)
 	{
-		elog(DEBUG3, "mapping: node: %u/%u/%u tid: %u/%u cmin: %u, cmax: %u",
+		elog(DEBUG3, "mapping: node: %u/%u/" INT64_FORMAT "tid: %u/%u cmin: %u, cmax: %u",
 			 ent->key.relnode.dbNode,
 			 ent->key.relnode.spcNode,
 			 ent->key.relnode.relNode,

@@ -2150,13 +2150,13 @@ xlog_block_info(StringInfo buf, XLogReaderState *record)
 
 		XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blk);
 		if (forknum != MAIN_FORKNUM)
-			appendStringInfo(buf, "; blkref #%d: rel %u/%u/%u, fork %u, blk %u",
+			appendStringInfo(buf, "; blkref #%d: rel %u/%u/" INT64_FORMAT ", fork %u, blk %u",
 							 block_id,
 							 rnode.spcNode, rnode.dbNode, rnode.relNode,
 							 forknum,
 							 blk);
 		else
-			appendStringInfo(buf, "; blkref #%d: rel %u/%u/%u, blk %u",
+			appendStringInfo(buf, "; blkref #%d: rel %u/%u/" INT64_FORMAT ", blk %u",
 							 block_id,
 							 rnode.spcNode, rnode.dbNode, rnode.relNode,
 							 blk);
@@ -2349,7 +2349,7 @@ verifyBackupPageConsistency(XLogReaderState *record)
 		if (memcmp(replay_image_masked, primary_image_masked, BLCKSZ) != 0)
 		{
 			elog(FATAL,
-				 "inconsistent page found, rel %u/%u/%u, forknum %u, blkno %u",
+				 "inconsistent page found, rel %u/%u/" INT64_FORMAT ", forknum %u, blkno %u",
 				 rnode.spcNode, rnode.dbNode, rnode.relNode,
 				 forknum, blkno);
 		}

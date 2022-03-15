@@ -91,9 +91,9 @@
 
 /* Potentially set by pg_upgrade_support functions */
 Oid			binary_upgrade_next_heap_pg_class_oid = InvalidOid;
-Oid			binary_upgrade_next_heap_pg_class_relfilenode = InvalidOid;
+RelNode			binary_upgrade_next_heap_pg_class_relfilenode = InvalidRelNode;
 Oid			binary_upgrade_next_toast_pg_class_oid = InvalidOid;
-Oid			binary_upgrade_next_toast_pg_class_relfilenode = InvalidOid;
+RelNode		binary_upgrade_next_toast_pg_class_relfilenode = InvalidRelNode;
 
 static void AddNewRelationTuple(Relation pg_class_desc,
 								Relation new_rel_desc,
@@ -303,7 +303,7 @@ heap_create(const char *relname,
 			Oid relnamespace,
 			Oid reltablespace,
 			Oid relid,
-			Oid relfilenode,
+			RelNode relfilenode,
 			Oid accessmtd,
 			TupleDesc tupDesc,
 			char relkind,
@@ -358,8 +358,8 @@ heap_create(const char *relname,
 		 * If relfilenode is unspecified by the caller then create storage
 		 * with oid same as relid.
 		 */
-		if (!OidIsValid(relfilenode))
-			relfilenode = relid;
+		if (!RelNodeIsValid(relfilenode))
+			relfilenode = GetNewRelFileNode(reltablespace, relpersistence);
 	}
 
 	/*
@@ -912,7 +912,7 @@ InsertPgClassTuple(Relation pg_class_desc,
 	values[Anum_pg_class_reloftype - 1] = ObjectIdGetDatum(rd_rel->reloftype);
 	values[Anum_pg_class_relowner - 1] = ObjectIdGetDatum(rd_rel->relowner);
 	values[Anum_pg_class_relam - 1] = ObjectIdGetDatum(rd_rel->relam);
-	values[Anum_pg_class_relfilenode - 1] = ObjectIdGetDatum(rd_rel->relfilenode);
+	values[Anum_pg_class_relfilenode - 1] = Int64GetDatum(rd_rel->relfilenode);
 	values[Anum_pg_class_reltablespace - 1] = ObjectIdGetDatum(rd_rel->reltablespace);
 	values[Anum_pg_class_relpages - 1] = Int32GetDatum(rd_rel->relpages);
 	values[Anum_pg_class_reltuples - 1] = Float4GetDatum(rd_rel->reltuples);
@@ -1129,7 +1129,7 @@ heap_create_with_catalog(const char *relname,
 	Oid			new_type_oid;
 
 	/* By default set to InvalidOid unless overridden by binary-upgrade */
-	Oid			relfilenode = InvalidOid;
+	RelNode		relfilenode = InvalidRelNode;
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
 
@@ -1187,8 +1187,7 @@ heap_create_with_catalog(const char *relname,
 	/*
 	 * Allocate an OID for the relation, unless we were told what to use.
 	 *
-	 * The OID will be the relfilenode as well, so make sure it doesn't
-	 * collide with either pg_class OIDs or existing physical files.
+	 * Make sure that the Oid doesn't collide with other pg_class OIDs.
 	 */
 	if (!OidIsValid(relid))
 	{
@@ -1210,13 +1209,13 @@ heap_create_with_catalog(const char *relname,
 					relid = binary_upgrade_next_toast_pg_class_oid;
 					binary_upgrade_next_toast_pg_class_oid = InvalidOid;
 
-					if (!OidIsValid(binary_upgrade_next_toast_pg_class_relfilenode))
+					if (!RelNodeIsValid(binary_upgrade_next_toast_pg_class_relfilenode))
 						ereport(ERROR,
 								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 								  errmsg("toast relfilenode value not set when in binary upgrade mode")));
 
 					relfilenode = binary_upgrade_next_toast_pg_class_relfilenode;
-					binary_upgrade_next_toast_pg_class_relfilenode = InvalidOid;
+					binary_upgrade_next_toast_pg_class_relfilenode = InvalidRelNode;
 				}
 			}
 			else
@@ -1231,20 +1230,20 @@ heap_create_with_catalog(const char *relname,
 
 				if (RELKIND_HAS_STORAGE(relkind))
 				{
-					if (!OidIsValid(binary_upgrade_next_heap_pg_class_relfilenode))
+					if (!RelNodeIsValid(binary_upgrade_next_heap_pg_class_relfilenode))
 						ereport(ERROR,
 								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 								 errmsg("relfilenode value not set when in binary upgrade mode")));
 
 					relfilenode = binary_upgrade_next_heap_pg_class_relfilenode;
-					binary_upgrade_next_heap_pg_class_relfilenode = InvalidOid;
+					binary_upgrade_next_heap_pg_class_relfilenode = InvalidRelNode;
 				}
 			}
 		}
 
 		if (!OidIsValid(relid))
-			relid = GetNewRelFileNode(reltablespace, pg_class_desc,
-									  relpersistence);
+			relid = GetNewOidWithIndex(pg_class_desc, ClassOidIndexId,
+									   Anum_pg_class_oid);
 	}
 
 	/*

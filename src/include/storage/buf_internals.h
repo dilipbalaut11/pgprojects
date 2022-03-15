@@ -21,6 +21,7 @@
 #include "storage/condition_variable.h"
 #include "storage/latch.h"
 #include "storage/lwlock.h"
+#include "storage/relfilenode.h"
 #include "storage/shmem.h"
 #include "storage/smgr.h"
 #include "storage/spin.h"
@@ -90,44 +91,70 @@
  */
 typedef struct buftag
 {
-	RelFileNode rnode;			/* physical relation identifier */
-	ForkNumber	forkNum;
+	Oid			spcOid;			/* tablespace oid. */
+	Oid			dbOid;			/* database oid. */
+	uint32		fileNode_low;	/* relation file node 32 lower bits */
+	uint32		fileNode_hi:24;	/* relation file node 24 high bits */
+	uint32		forkNum:8;
 	BlockNumber blockNum;		/* blknum relative to begin of reln */
 } BufferTag;
 
 #define CLEAR_BUFFERTAG(a) \
 ( \
-	(a).rnode.spcNode = InvalidOid, \
-	(a).rnode.dbNode = InvalidOid, \
-	(a).rnode.relNode = InvalidOid, \
+	(a).spcOid = InvalidOid, \
+	(a).dbOid = InvalidOid, \
+	(a).fileNode_low = 0, \
+	(a).fileNode_hi = 0, \
 	(a).forkNum = InvalidForkNumber, \
 	(a).blockNum = InvalidBlockNumber \
 )
 
 #define INIT_BUFFERTAG(a,xx_rnode,xx_forkNum,xx_blockNum) \
 ( \
-	(a).rnode = (xx_rnode), \
+	(a).spcOid = (xx_rnode).spcNode, \
+	(a).dbOid = (xx_rnode).dbNode, \
+	BufTagSetFileNode(a, (xx_rnode).relNode), \
 	(a).forkNum = (xx_forkNum), \
 	(a).blockNum = (xx_blockNum) \
 )
 
 #define BUFFERTAGS_EQUAL(a,b) \
 ( \
-	RelFileNodeEquals((a).rnode, (b).rnode) && \
+	(a).spcOid == (b).spcOid && \
+	(a).dbOid == (b).dbOid && \
+	(a).fileNode_low == (b).fileNode_low && \
+	(a).fileNode_hi == (b).fileNode_hi && \
 	(a).blockNum == (b).blockNum && \
 	(a).forkNum == (b).forkNum \
 )
 
+#define	BufTagGetFileNode(a) \
+	((((uint64) (a).fileNode_hi << 32) | ((uint32) (a).fileNode_low)))
+
+#define	BufTagSetFileNode(a, node) \
+( \
+	(a).fileNode_hi = (node) >> 32, \
+	(a).fileNode_low = (node) & 0xffffffff \
+)
+
 /* Copy the relfilenode stored in the buffertag to the input relfilenode. */
 #define BuffTagCopyRelFileNode(a, node) \
-	((node) = (a).rnode)
+do { \
+	(node).spcNode = (a).spcOid; \
+	(node).dbNode = (a).dbOid; \
+	(node).relNode = BufTagGetFileNode(a); \
+} while(0)
 
 /*
  * The Input relfilenode is equal to the relfilenode stored inside the
  * buffertag?
  */
 #define BuffTagRelFileNodeEquals(a, node) \
-	(RelFileNodeEquals((a).rnode, (node)))
+( \
+	(a).spcOid == (node).spcNode && \
+	(a).dbOid == (node).dbNode && \
+	BufTagGetFileNode(a) == (node).relNode \
+)
 
 /*
  * The shared buffer mapping table is partitioned to reduce contention.
@@ -303,7 +330,7 @@ extern BufferDesc *LocalBufferDescriptors;
 typedef struct CkptSortItem
 {
 	Oid			tsId;
-	Oid			relNode;
+	RelNode		relNode;
 	ForkNumber	forkNum;
 	BlockNumber blockNum;
 	int			buf_id;

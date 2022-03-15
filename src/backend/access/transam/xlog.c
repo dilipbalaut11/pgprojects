@@ -4548,6 +4548,7 @@ BootStrapXLOG(void)
 	checkPoint.nextXid =
 		FullTransactionIdFromEpochAndXid(0, FirstNormalTransactionId);
 	checkPoint.nextOid = FirstGenbkiObjectId;
+	checkPoint.nextRelNode = FirstNormalRelNode;
 	checkPoint.nextMulti = FirstMultiXactId;
 	checkPoint.nextMultiOffset = 0;
 	checkPoint.oldestXid = FirstNormalTransactionId;
@@ -4561,7 +4562,9 @@ BootStrapXLOG(void)
 
 	ShmemVariableCache->nextXid = checkPoint.nextXid;
 	ShmemVariableCache->nextOid = checkPoint.nextOid;
+	ShmemVariableCache->nextRelNode = checkPoint.nextRelNode;
 	ShmemVariableCache->oidCount = 0;
+	ShmemVariableCache->relnodecount = 0;
 	MultiXactSetNextMXact(checkPoint.nextMulti, checkPoint.nextMultiOffset);
 	AdvanceOldestClogXid(checkPoint.oldestXid);
 	SetTransactionIdLimit(checkPoint.oldestXid, checkPoint.oldestXidDB);
@@ -5024,7 +5027,9 @@ StartupXLOG(void)
 	/* initialize shared memory variables from the checkpoint record */
 	ShmemVariableCache->nextXid = checkPoint.nextXid;
 	ShmemVariableCache->nextOid = checkPoint.nextOid;
+	ShmemVariableCache->nextRelNode = checkPoint.nextRelNode;
 	ShmemVariableCache->oidCount = 0;
+	ShmemVariableCache->relnodecount = 0;
 	MultiXactSetNextMXact(checkPoint.nextMulti, checkPoint.nextMultiOffset);
 	AdvanceOldestClogXid(checkPoint.oldestXid);
 	SetTransactionIdLimit(checkPoint.oldestXid, checkPoint.oldestXidDB);
@@ -6458,6 +6463,12 @@ CreateCheckPoint(int flags)
 		checkPoint.nextOid += ShmemVariableCache->oidCount;
 	LWLockRelease(OidGenLock);
 
+	LWLockAcquire(RelNodeGenLock, LW_SHARED);
+	checkPoint.nextRelNode = ShmemVariableCache->nextRelNode;
+	if (!shutdown)
+		checkPoint.nextRelNode += ShmemVariableCache->relnodecount;
+	LWLockRelease(RelNodeGenLock);
+
 	MultiXactGetCheckptMulti(shutdown,
 							 &checkPoint.nextMulti,
 							 &checkPoint.nextMultiOffset,
@@ -7312,6 +7323,29 @@ XLogPutNextOid(Oid nextOid)
 }
 
 /*
+ * Simmialr to the XLogPutNextOid but instead of writing NEXTOID log record it
+ * writes a NEXT_RELFILENODE log record.
+ */
+void
+XLogPutNextRelFileNode(RelNode nextrelnode)
+{
+	XLogRecPtr	recptr;
+
+	XLogBeginInsert();
+	XLogRegisterData((char *) (&nextrelnode), sizeof(RelNode));
+	recptr = XLogInsert(RM_XLOG_ID, XLOG_NEXT_RELFILENODE);
+
+	/*
+	 * Flush xlog record to disk before returning.  To protect agains file
+	 * system changes reaching the disk before the XLOG_NEXT_RELFILENODE log.
+	 *
+	 * This should not impact the performance because we are WAL logging the
+	 * RelNode after assigning every 64 RelNode
+	 */
+	XLogFlush(recptr);
+}
+
+/*
  * Write an XLOG SWITCH record.
  *
  * Here we just blindly issue an XLogInsert request for the record.
@@ -7526,6 +7560,16 @@ xlog_redo(XLogReaderState *record)
 		ShmemVariableCache->oidCount = 0;
 		LWLockRelease(OidGenLock);
 	}
+	if (info == XLOG_NEXT_RELFILENODE)
+	{
+		RelNode		nextRelNode;
+
+		memcpy(&nextRelNode, XLogRecGetData(record), sizeof(RelNode));
+		LWLockAcquire(RelNodeGenLock, LW_EXCLUSIVE);
+		ShmemVariableCache->nextRelNode = nextRelNode;
+		ShmemVariableCache->relnodecount = 0;
+		LWLockRelease(RelNodeGenLock);
+	}
 	else if (info == XLOG_CHECKPOINT_SHUTDOWN)
 	{
 		CheckPoint	checkPoint;
@@ -7540,6 +7584,10 @@ xlog_redo(XLogReaderState *record)
 		ShmemVariableCache->nextOid = checkPoint.nextOid;
 		ShmemVariableCache->oidCount = 0;
 		LWLockRelease(OidGenLock);
+		LWLockAcquire(RelNodeGenLock, LW_EXCLUSIVE);
+		ShmemVariableCache->nextRelNode = checkPoint.nextRelNode;
+		ShmemVariableCache->relnodecount = 0;
+		LWLockRelease(RelNodeGenLock);
 		MultiXactSetNextMXact(checkPoint.nextMulti,
 							  checkPoint.nextMultiOffset);
 

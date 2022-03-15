@@ -1086,7 +1086,7 @@ DefineIndex(Oid relationId,
 	 * A valid stmt->oldNode implies that we already have a built form of the
 	 * index.  The caller should also decline any index build.
 	 */
-	Assert(!OidIsValid(stmt->oldNode) || (skip_build && !concurrent));
+	Assert(!RelNodeIsValid(stmt->oldNode) || (skip_build && !concurrent));
 
 	/*
 	 * Make the catalog entries for the index, including constraints. This
@@ -1316,7 +1316,7 @@ DefineIndex(Oid relationId,
 					childStmt->idxname = NULL;
 					childStmt->relation = NULL;
 					childStmt->indexOid = InvalidOid;
-					childStmt->oldNode = InvalidOid;
+					childStmt->oldNode = InvalidRelNode;
 					childStmt->oldCreateSubid = InvalidSubTransactionId;
 					childStmt->oldFirstRelfilenodeSubid = InvalidSubTransactionId;
 
@@ -2897,7 +2897,7 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 			 * particular this eliminates all shared catalogs.).
 			 */
 			if (RELKIND_HAS_STORAGE(classtuple->relkind) &&
-				!OidIsValid(classtuple->relfilenode))
+				!RelNodeIsValid(classtuple->relfilenode))
 				skip_rel = true;
 
 			/*

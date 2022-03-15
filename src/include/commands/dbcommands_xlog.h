@@ -18,17 +18,31 @@
 #include "lib/stringinfo.h"
 
 /* record types */
-#define XLOG_DBASE_CREATE		0x00
-#define XLOG_DBASE_DROP			0x10
+#define XLOG_DBASE_CREATE_FILE_COPY		0x00
+#define XLOG_DBASE_CREATE_WAL_LOG		0x10
+#define XLOG_DBASE_DROP					0x20
 
-typedef struct xl_dbase_create_rec
+/*
+ * Records copying of a single subdirectory incl. contents, while creating a
+ * database using FILE COPY strategy.
+ */
+typedef struct xl_dbase_create_file_copy_rec
 {
-	/* Records copying of a single subdirectory incl. contents */
 	Oid			db_id;
 	Oid			tablespace_id;
 	Oid			src_db_id;
 	Oid			src_tablespace_id;
-} xl_dbase_create_rec;
+} xl_dbase_create_file_copy_rec;
+
+/*
+ * Records creating a database directory with version file, while creating a
+ * database using WAL LOG strategy.
+ */
+typedef struct xl_dbase_create_wal_log_rec
+{
+	Oid			db_id;
+	Oid			tablespace_id;
+} xl_dbase_create_wal_log_rec;
 
 typedef struct xl_dbase_drop_rec
 {

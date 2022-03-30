@@ -596,7 +596,7 @@ static void ATExecForceNoForceRowSecurity(Relation rel, bool force_rls);
 static ObjectAddress ATExecSetCompression(AlteredTableInfo *tab, Relation rel,
 										  const char *column, Node *newValue, LOCKMODE lockmode);
 
-static void index_copy_data(Relation rel, RelFileNode newrnode);
+static void index_copy_data(Relation rel, RelFileLocator newrlocator);
 static const char *storage_name(char c);
 
 static void RangeVarCallbackForDropRelation(const RangeVar *rel, Oid relOid,
@@ -3319,7 +3319,7 @@ CheckRelationTableSpaceMove(Relation rel, Oid newTableSpaceId)
  *		Set new reltablespace and relfilenode in pg_class entry.
  *
  * newTableSpaceId is the new tablespace for the relation, and
- * newRelFileNode its new filenode.  If newRelFileNode is InvalidOid,
+ * newRelFileLocator its new filenode.  If newRelFileLocator is InvalidOid,
  * this field is not updated.
  *
  * NOTE: The caller must hold AccessExclusiveLock on the relation.
@@ -3332,7 +3332,7 @@ CheckRelationTableSpaceMove(Relation rel, Oid newTableSpaceId)
 void
 SetRelationTableSpace(Relation rel,
 					  Oid newTableSpaceId,
-					  Oid newRelFileNode)
+					  Oid newRelFileLocator)
 {
 	Relation	pg_class;
 	HeapTuple	tuple;
@@ -3352,8 +3352,8 @@ SetRelationTableSpace(Relation rel,
 	/* Update the pg_class row. */
 	rd_rel->reltablespace = (newTableSpaceId == MyDatabaseTableSpace) ?
 		InvalidOid : newTableSpaceId;
-	if (OidIsValid(newRelFileNode))
-		rd_rel->relfilenode = newRelFileNode;
+	if (OidIsValid(newRelFileLocator))
+		rd_rel->relfilenode = newRelFileLocator;
 	CatalogTupleUpdate(pg_class, &tuple->t_self, tuple);
 
 	/*
@@ -8604,7 +8604,7 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 
 		irel->rd_createSubid = stmt->oldCreateSubid;
 		irel->rd_firstRelfilenodeSubid = stmt->oldFirstRelfilenodeSubid;
-		RelationPreserveStorage(irel->rd_node, true);
+		RelationPreserveStorage(irel->rd_locator, true);
 		index_close(irel, NoLock);
 	}
 
@@ -13466,7 +13466,7 @@ TryReuseIndex(Oid oldId, IndexStmt *stmt)
 		/* If it's a partitioned index, there is no storage to share. */
 		if (irel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
 		{
-			stmt->oldNode = irel->rd_node.relNode;
+			stmt->oldNode = irel->rd_locator.relNode;
 			stmt->oldCreateSubid = irel->rd_createSubid;
 			stmt->oldFirstRelfilenodeSubid = irel->rd_firstRelfilenodeSubid;
 		}
@@ -14315,8 +14315,8 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 {
 	Relation	rel;
 	Oid			reltoastrelid;
-	Oid			newrelfilenode;
-	RelFileNode newrnode;
+	Oid			newrellocator;
+	RelFileLocator newrlocator;
 	List	   *reltoastidxids = NIL;
 	ListCell   *lc;
 
@@ -14348,23 +14348,23 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	 * Relfilenodes are not unique in databases across tablespaces, so we need
 	 * to allocate a new one in the new tablespace.
 	 */
-	newrelfilenode = GetNewRelFileNode(newTableSpace, NULL,
-									   rel->rd_rel->relpersistence);
+	newrellocator = GetNewRelFileLocator(newTableSpace, NULL,
+										 rel->rd_rel->relpersistence);
 
 	/* Open old and new relation */
-	newrnode = rel->rd_node;
-	newrnode.relNode = newrelfilenode;
-	newrnode.spcNode = newTableSpace;
+	newrlocator = rel->rd_locator;
+	newrlocator.relNode = newrellocator;
+	newrlocator.spcNode = newTableSpace;
 
 	/* hand off to AM to actually create the new filenode and copy the data */
 	if (rel->rd_rel->relkind == RELKIND_INDEX)
 	{
-		index_copy_data(rel, newrnode);
+		index_copy_data(rel, newrlocator);
 	}
 	else
 	{
 		Assert(RELKIND_HAS_TABLE_AM(rel->rd_rel->relkind));
-		table_relation_copy_data(rel, &newrnode);
+		table_relation_copy_data(rel, &newrlocator);
 	}
 
 	/*
@@ -14375,7 +14375,7 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	 * the updated pg_class entry), but that's forbidden with
 	 * CheckRelationTableSpaceMove().
 	 */
-	SetRelationTableSpace(rel, newTableSpace, newrelfilenode);
+	SetRelationTableSpace(rel, newTableSpace, newrellocator);
 
 	InvokeObjectPostAlterHook(RelationRelationId, RelationGetRelid(rel), 0);
 
@@ -14605,11 +14605,11 @@ AlterTableMoveAll(AlterTableMoveAllStmt *stmt)
 }
 
 static void
-index_copy_data(Relation rel, RelFileNode newrnode)
+index_copy_data(Relation rel, RelFileLocator newrlocator)
 {
 	SMgrRelation dstrel;
 
-	dstrel = smgropen(newrnode, rel->rd_backend);
+	dstrel = smgropen(newrlocator, rel->rd_backend);
 
 	/*
 	 * Since we copy the file directly without looking at the shared buffers,
@@ -14626,7 +14626,7 @@ index_copy_data(Relation rel, RelFileNode newrnode)
 	 * NOTE: any conflict in relfilenode value will be caught in
 	 * RelationCreateStorage().
 	 */
-	RelationCreateStorage(newrnode, rel->rd_rel->relpersistence, true);
+	RelationCreateStorage(newrlocator, rel->rd_rel->relpersistence, true);
 
 	/* copy main fork */
 	RelationCopyStorage(RelationGetSmgr(rel), dstrel, MAIN_FORKNUM,
@@ -14647,7 +14647,7 @@ index_copy_data(Relation rel, RelFileNode newrnode)
 			if (RelationIsPermanent(rel) ||
 				(rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED &&
 				 forkNum == INIT_FORKNUM))
-				log_smgrcreate(&newrnode, forkNum);
+				log_smgrcreate(&newrlocator, forkNum);
 			RelationCopyStorage(RelationGetSmgr(rel), dstrel, forkNum,
 								rel->rd_rel->relpersistence);
 		}

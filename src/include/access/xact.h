@@ -250,12 +250,12 @@ typedef struct xl_xact_subxacts
 } xl_xact_subxacts;
 #define MinSizeOfXactSubxacts offsetof(xl_xact_subxacts, subxacts)
 
-typedef struct xl_xact_relfilenodes
+typedef struct xl_xact_rellocator
 {
 	int			nrels;			/* number of relations */
-	RelFileNode xnodes[FLEXIBLE_ARRAY_MEMBER];
-} xl_xact_relfilenodes;
-#define MinSizeOfXactRelfilenodes offsetof(xl_xact_relfilenodes, xnodes)
+	RelFileLocator xlocators[FLEXIBLE_ARRAY_MEMBER];
+} xl_xact_rellocator;
+#define MinSizeOfXactRelfilenodes offsetof(xl_xact_rellocator, xlocators)
 
 typedef struct xl_xact_invals
 {
@@ -282,7 +282,7 @@ typedef struct xl_xact_commit
 	/* xl_xact_xinfo follows if XLOG_XACT_HAS_INFO */
 	/* xl_xact_dbinfo follows if XINFO_HAS_DBINFO */
 	/* xl_xact_subxacts follows if XINFO_HAS_SUBXACT */
-	/* xl_xact_relfilenodes follows if XINFO_HAS_RELFILENODES */
+	/* xl_xact_rellocator follows if XINFO_HAS_RELFILENODES */
 	/* xl_xact_invals follows if XINFO_HAS_INVALS */
 	/* xl_xact_twophase follows if XINFO_HAS_TWOPHASE */
 	/* twophase_gid follows if XINFO_HAS_GID. As a null-terminated string. */
@@ -297,7 +297,7 @@ typedef struct xl_xact_abort
 	/* xl_xact_xinfo follows if XLOG_XACT_HAS_INFO */
 	/* xl_xact_dbinfo follows if XINFO_HAS_DBINFO */
 	/* xl_xact_subxacts follows if XINFO_HAS_SUBXACT */
-	/* xl_xact_relfilenodes follows if XINFO_HAS_RELFILENODES */
+	/* xl_xact_rellocator follows if XINFO_HAS_RELFILENODES */
 	/* No invalidation messages needed. */
 	/* xl_xact_twophase follows if XINFO_HAS_TWOPHASE */
 	/* twophase_gid follows if XINFO_HAS_GID. As a null-terminated string. */
@@ -340,7 +340,7 @@ typedef struct xl_xact_parsed_commit
 	TransactionId *subxacts;
 
 	int			nrels;
-	RelFileNode *xnodes;
+	RelFileLocator *xlocators;
 
 	int			nmsgs;
 	SharedInvalidationMessage *msgs;
@@ -348,7 +348,7 @@ typedef struct xl_xact_parsed_commit
 	TransactionId twophase_xid; /* only for 2PC */
 	char		twophase_gid[GIDSIZE];	/* only for 2PC */
 	int			nabortrels;		/* only for 2PC */
-	RelFileNode *abortnodes;	/* only for 2PC */
+	RelFileLocator *abortnodes;	/* only for 2PC */
 
 	XLogRecPtr	origin_lsn;
 	TimestampTz origin_timestamp;
@@ -368,7 +368,7 @@ typedef struct xl_xact_parsed_abort
 	TransactionId *subxacts;
 
 	int			nrels;
-	RelFileNode *xnodes;
+	RelFileLocator *xlocators;
 
 	TransactionId twophase_xid; /* only for 2PC */
 	char		twophase_gid[GIDSIZE];	/* only for 2PC */
@@ -448,7 +448,7 @@ extern int	xactGetCommittedChildren(TransactionId **ptr);
 
 extern XLogRecPtr XactLogCommitRecord(TimestampTz commit_time,
 									  int nsubxacts, TransactionId *subxacts,
-									  int nrels, RelFileNode *rels,
+									  int nrels, RelFileLocator *rels,
 									  int nmsgs, SharedInvalidationMessage *msgs,
 									  bool relcacheInval,
 									  int xactflags,
@@ -457,7 +457,7 @@ extern XLogRecPtr XactLogCommitRecord(TimestampTz commit_time,
 
 extern XLogRecPtr XactLogAbortRecord(TimestampTz abort_time,
 									 int nsubxacts, TransactionId *subxacts,
-									 int nrels, RelFileNode *rels,
+									 int nrels, RelFileLocator *rels,
 									 int xactflags, TransactionId twophase_xid,
 									 const char *twophase_gid);
 extern void xact_redo(XLogReaderState *record);

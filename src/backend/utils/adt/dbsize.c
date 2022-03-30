@@ -292,7 +292,7 @@ pg_tablespace_size_name(PG_FUNCTION_ARGS)
  * is no check here or at the call sites for that.
  */
 static int64
-calculate_relation_size(RelFileNode *rfn, BackendId backend, ForkNumber forknum)
+calculate_relation_size(RelFileLocator *rfn, BackendId backend, ForkNumber forknum)
 {
 	int64		totalsize = 0;
 	char	   *relationpath;
@@ -349,7 +349,7 @@ pg_relation_size(PG_FUNCTION_ARGS)
 	if (rel == NULL)
 		PG_RETURN_NULL();
 
-	size = calculate_relation_size(&(rel->rd_node), rel->rd_backend,
+	size = calculate_relation_size(&(rel->rd_locator), rel->rd_backend,
 								   forkname_to_number(text_to_cstring(forkName)));
 
 	relation_close(rel, AccessShareLock);
@@ -374,7 +374,7 @@ calculate_toast_table_size(Oid toastrelid)
 
 	/* toast heap size, including FSM and VM size */
 	for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
-		size += calculate_relation_size(&(toastRel->rd_node),
+		size += calculate_relation_size(&(toastRel->rd_locator),
 										toastRel->rd_backend, forkNum);
 
 	/* toast index size, including FSM and VM size */
@@ -388,7 +388,7 @@ calculate_toast_table_size(Oid toastrelid)
 		toastIdxRel = relation_open(lfirst_oid(lc),
 									AccessShareLock);
 		for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
-			size += calculate_relation_size(&(toastIdxRel->rd_node),
+			size += calculate_relation_size(&(toastIdxRel->rd_locator),
 											toastIdxRel->rd_backend, forkNum);
 
 		relation_close(toastIdxRel, AccessShareLock);
@@ -417,7 +417,7 @@ calculate_table_size(Relation rel)
 	 * heap size, including FSM and VM
 	 */
 	for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
-		size += calculate_relation_size(&(rel->rd_node), rel->rd_backend,
+		size += calculate_relation_size(&(rel->rd_locator), rel->rd_backend,
 										forkNum);
 
 	/*
@@ -456,7 +456,7 @@ calculate_indexes_size(Relation rel)
 			idxRel = relation_open(idxOid, AccessShareLock);
 
 			for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
-				size += calculate_relation_size(&(idxRel->rd_node),
+				size += calculate_relation_size(&(idxRel->rd_locator),
 												idxRel->rd_backend,
 												forkNum);
 
@@ -924,7 +924,7 @@ pg_relation_filepath(PG_FUNCTION_ARGS)
 	Oid			relid = PG_GETARG_OID(0);
 	HeapTuple	tuple;
 	Form_pg_class relform;
-	RelFileNode rnode;
+	RelFileLocator rlocator;
 	BackendId	backend;
 	char	   *path;
 
@@ -937,29 +937,29 @@ pg_relation_filepath(PG_FUNCTION_ARGS)
 	{
 		/* This logic should match RelationInitPhysicalAddr */
 		if (relform->reltablespace)
-			rnode.spcNode = relform->reltablespace;
+			rlocator.spcNode = relform->reltablespace;
 		else
-			rnode.spcNode = MyDatabaseTableSpace;
-		if (rnode.spcNode == GLOBALTABLESPACE_OID)
-			rnode.dbNode = InvalidOid;
+			rlocator.spcNode = MyDatabaseTableSpace;
+		if (rlocator.spcNode == GLOBALTABLESPACE_OID)
+			rlocator.dbNode = InvalidOid;
 		else
-			rnode.dbNode = MyDatabaseId;
+			rlocator.dbNode = MyDatabaseId;
 		if (relform->relfilenode)
-			rnode.relNode = relform->relfilenode;
+			rlocator.relNode = relform->relfilenode;
 		else					/* Consult the relation mapper */
-			rnode.relNode = RelationMapOidToFilenode(relid,
+			rlocator.relNode = RelationMapOidToFilenode(relid,
 													 relform->relisshared);
 	}
 	else
 	{
 		/* no storage, return NULL */
-		rnode.relNode = InvalidOid;
+		rlocator.relNode = InvalidOid;
 		/* some compilers generate warnings without these next two lines */
-		rnode.dbNode = InvalidOid;
-		rnode.spcNode = InvalidOid;
+		rlocator.dbNode = InvalidOid;
+		rlocator.spcNode = InvalidOid;
 	}
 
-	if (!OidIsValid(rnode.relNode))
+	if (!OidIsValid(rlocator.relNode))
 	{
 		ReleaseSysCache(tuple);
 		PG_RETURN_NULL();
@@ -990,7 +990,7 @@ pg_relation_filepath(PG_FUNCTION_ARGS)
 
 	ReleaseSysCache(tuple);
 
-	path = relpathbackend(rnode, backend, MAIN_FORKNUM);
+	path = relpathbackend(rlocator, backend, MAIN_FORKNUM);
 
 	PG_RETURN_TEXT_P(cstring_to_text(path));
 }

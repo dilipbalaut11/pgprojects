@@ -56,7 +56,7 @@ static uint32 hash_string_pointer(const char *s);
 static filehash_hash *filehash;
 
 static bool isRelDataFile(const char *path);
-static char *datasegpath(RelFileNode rnode, ForkNumber forknum,
+static char *datasegpath(RelFileLocator rlocator, ForkNumber forknum,
 						 BlockNumber segno);
 
 static file_entry_t *insert_filehash_entry(const char *path);
@@ -289,7 +289,7 @@ process_target_file(const char *path, file_type_t type, size_t size,
  * hash table!
  */
 void
-process_target_wal_block_change(ForkNumber forknum, RelFileNode rnode,
+process_target_wal_block_change(ForkNumber forknum, RelFileLocator rlocator,
 								BlockNumber blkno)
 {
 	char	   *path;
@@ -300,7 +300,7 @@ process_target_wal_block_change(ForkNumber forknum, RelFileNode rnode,
 	segno = blkno / RELSEG_SIZE;
 	blkno_inseg = blkno % RELSEG_SIZE;
 
-	path = datasegpath(rnode, forknum, segno);
+	path = datasegpath(rlocator, forknum, segno);
 	entry = lookup_filehash_entry(path);
 	pfree(path);
 
@@ -509,7 +509,7 @@ print_filemap(filemap_t *filemap)
 static bool
 isRelDataFile(const char *path)
 {
-	RelFileNode rnode;
+	RelFileLocator rlocator;
 	unsigned int segNo;
 	int			nmatch;
 	bool		matched;
@@ -533,32 +533,32 @@ isRelDataFile(const char *path)
 	 *
 	 *----
 	 */
-	rnode.spcNode = InvalidOid;
-	rnode.dbNode = InvalidOid;
-	rnode.relNode = InvalidOid;
+	rlocator.spcNode = InvalidOid;
+	rlocator.dbNode = InvalidOid;
+	rlocator.relNode = InvalidOid;
 	segNo = 0;
 	matched = false;
 
-	nmatch = sscanf(path, "global/%u.%u", &rnode.relNode, &segNo);
+	nmatch = sscanf(path, "global/%u.%u", &rlocator.relNode, &segNo);
 	if (nmatch == 1 || nmatch == 2)
 	{
-		rnode.spcNode = GLOBALTABLESPACE_OID;
-		rnode.dbNode = 0;
+		rlocator.spcNode = GLOBALTABLESPACE_OID;
+		rlocator.dbNode = 0;
 		matched = true;
 	}
 	else
 	{
 		nmatch = sscanf(path, "base/%u/%u.%u",
-						&rnode.dbNode, &rnode.relNode, &segNo);
+						&rlocator.dbNode, &rlocator.relNode, &segNo);
 		if (nmatch == 2 || nmatch == 3)
 		{
-			rnode.spcNode = DEFAULTTABLESPACE_OID;
+			rlocator.spcNode = DEFAULTTABLESPACE_OID;
 			matched = true;
 		}
 		else
 		{
 			nmatch = sscanf(path, "pg_tblspc/%u/" TABLESPACE_VERSION_DIRECTORY "/%u/%u.%u",
-							&rnode.spcNode, &rnode.dbNode, &rnode.relNode,
+							&rlocator.spcNode, &rlocator.dbNode, &rlocator.relNode,
 							&segNo);
 			if (nmatch == 3 || nmatch == 4)
 				matched = true;
@@ -568,12 +568,12 @@ isRelDataFile(const char *path)
 	/*
 	 * The sscanf tests above can match files that have extra characters at
 	 * the end. To eliminate such cases, cross-check that GetRelationPath
-	 * creates the exact same filename, when passed the RelFileNode
+	 * creates the exact same filename, when passed the RelFileLocator
 	 * information we extracted from the filename.
 	 */
 	if (matched)
 	{
-		char	   *check_path = datasegpath(rnode, MAIN_FORKNUM, segNo);
+		char	   *check_path = datasegpath(rlocator, MAIN_FORKNUM, segNo);
 
 		if (strcmp(check_path, path) != 0)
 			matched = false;
@@ -590,12 +590,12 @@ isRelDataFile(const char *path)
  * The returned path is palloc'd
  */
 static char *
-datasegpath(RelFileNode rnode, ForkNumber forknum, BlockNumber segno)
+datasegpath(RelFileLocator rlocator, ForkNumber forknum, BlockNumber segno)
 {
 	char	   *path;
 	char	   *segpath;
 
-	path = relpathperm(rnode, forknum);
+	path = relpathperm(rlocator, forknum);
 	if (segno > 0)
 	{
 		segpath = psprintf("%s.%u", path, segno);

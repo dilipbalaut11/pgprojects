@@ -101,7 +101,7 @@ typedef struct
  */
 typedef struct CreateDBRelInfo
 {
-	RelFileNode rnode;			/* physical relation identifier */
+	RelFileLocator rlocator;			/* physical relation identifier */
 	Oid			reloid;			/* relation oid */
 	bool		permanent;		/* relation is permanent or unlogged */
 } CreateDBRelInfo;
@@ -151,8 +151,8 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 	ListCell   *cell;
 	LockRelId	srcrelid;
 	LockRelId	dstrelid;
-	RelFileNode srcrnode;
-	RelFileNode dstrnode;
+	RelFileLocator srcrlocator;
+	RelFileLocator dstrlocator;
 	CreateDBRelInfo *relinfo;
 
 	/* Get source and destination database paths. */
@@ -180,7 +180,7 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 	foreach(cell, rnodelist)
 	{
 		relinfo = lfirst(cell);
-		srcrnode = relinfo->rnode;
+		srcrlocator = relinfo->rlocator;
 
 		/*
 		 * If the relation is from the source db's default tablespace then we
@@ -188,13 +188,13 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 		 * Otherwise, we need to create in the same tablespace as it is in the
 		 * source database.
 		 */
-		if (srcrnode.spcNode == src_tsid)
-			dstrnode.spcNode = dst_tsid;
+		if (srcrlocator.spcNode == src_tsid)
+			dstrlocator.spcNode = dst_tsid;
 		else
-			dstrnode.spcNode = srcrnode.spcNode;
+			dstrlocator.spcNode = srcrlocator.spcNode;
 
-		dstrnode.dbNode = dst_dboid;
-		dstrnode.relNode = srcrnode.relNode;
+		dstrlocator.dbNode = dst_dboid;
+		dstrlocator.relNode = srcrlocator.relNode;
 
 		/*
 		 * Acquire locks on source and target relations before copying.
@@ -210,7 +210,7 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 		LockRelationId(&dstrelid, AccessShareLock);
 
 		/* Copy relation storage from source to the destination. */
-		CreateAndCopyRelationData(srcrnode, dstrnode, relinfo->permanent);
+		CreateAndCopyRelationData(srcrlocator, dstrlocator, relinfo->permanent);
 
 		/* Release the relation locks. */
 		UnlockRelationId(&srcrelid, AccessShareLock);
@@ -244,7 +244,7 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 static List *
 ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 {
-	RelFileNode rnode;
+	RelFileLocator rlocator;
 	BlockNumber nblocks;
 	BlockNumber blkno;
 	Buffer		buf;
@@ -265,10 +265,10 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	relid.relId = RelationRelationId;
 	LockRelationId(&relid, AccessShareLock);
 
-	/* Prepare a RelFileNode for the pg_class relation. */
-	rnode.spcNode = tbid;
-	rnode.dbNode = dbid;
-	rnode.relNode = relfilenode;
+	/* Prepare a RelFileLocator for the pg_class relation. */
+	rlocator.spcNode = tbid;
+	rlocator.dbNode = dbid;
+	rlocator.relNode = relfilenode;
 
 	/*
 	 * We can't use a real relcache entry for a relation in some other
@@ -277,7 +277,7 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	 * and used the smgr layer directly, we would have to worry about
 	 * invalidations.
 	 */
-	rel = CreateFakeRelcacheEntry(rnode);
+	rel = CreateFakeRelcacheEntry(rlocator);
 	nblocks = smgrnblocks(RelationGetSmgr(rel), MAIN_FORKNUM);
 	FreeFakeRelcacheEntry(rel);
 
@@ -297,7 +297,7 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	{
 		CHECK_FOR_INTERRUPTS();
 
-		buf = ReadBufferWithoutRelcache(rnode, MAIN_FORKNUM, blkno,
+		buf = ReadBufferWithoutRelcache(rlocator, MAIN_FORKNUM, blkno,
 										RBM_NORMAL, bstrategy, false);
 
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
@@ -433,12 +433,12 @@ ScanSourceDatabasePgClassTuple(HeapTupleData *tuple, Oid tbid, Oid dbid,
 	/* Prepare a rel info element and add it to the list. */
 	relinfo = (CreateDBRelInfo *) palloc(sizeof(CreateDBRelInfo));
 	if (OidIsValid(classForm->reltablespace))
-		relinfo->rnode.spcNode = classForm->reltablespace;
+		relinfo->rlocator.spcNode = classForm->reltablespace;
 	else
-		relinfo->rnode.spcNode = tbid;
+		relinfo->rlocator.spcNode = tbid;
 
-	relinfo->rnode.dbNode = dbid;
-	relinfo->rnode.relNode = relfilenode;
+	relinfo->rlocator.dbNode = dbid;
+	relinfo->rlocator.relNode = relfilenode;
 	relinfo->reloid = classForm->oid;
 
 	/* Temporary relations were rejected above. */
@@ -2862,7 +2862,7 @@ remove_dbtablespaces(Oid db_id)
  * try to remove that already-existing subdirectory during the cleanup in
  * remove_dbtablespaces.  Nuking existing files seems like a bad idea, so
  * instead we make this extra check before settling on the OID of the new
- * database.  This exactly parallels what GetNewRelFileNode() does for table
+ * database.  This exactly parallels what GetNewRelFileLocator() does for table
  * relfilenode values.
  */
 static bool

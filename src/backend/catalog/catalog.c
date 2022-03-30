@@ -471,7 +471,7 @@ GetNewOidWithIndex(Relation relation, Oid indexId, AttrNumber oidcolumn)
 }
 
 /*
- * GetNewRelFileNode
+ * GetNewRelFileLocator
  *		Generate a new relfilenode number that is unique within the
  *		database of the given tablespace.
  *
@@ -487,9 +487,9 @@ GetNewOidWithIndex(Relation relation, Oid indexId, AttrNumber oidcolumn)
  * created by bootstrap have preassigned OIDs, so there's no need.
  */
 Oid
-GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
+GetNewRelFileLocator(Oid reltablespace, Relation pg_class, char relpersistence)
 {
-	RelFileNodeBackend rnode;
+	RelFileLocatorBackend rlocator;
 	char	   *rpath;
 	bool		collides;
 	BackendId	backend;
@@ -516,15 +516,15 @@ GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 	}
 
 	/* This logic should match RelationInitPhysicalAddr */
-	rnode.node.spcNode = reltablespace ? reltablespace : MyDatabaseTableSpace;
-	rnode.node.dbNode = (rnode.node.spcNode == GLOBALTABLESPACE_OID) ? InvalidOid : MyDatabaseId;
+	rlocator.locator.spcNode = reltablespace ? reltablespace : MyDatabaseTableSpace;
+	rlocator.locator.dbNode = (rlocator.locator.spcNode == GLOBALTABLESPACE_OID) ? InvalidOid : MyDatabaseId;
 
 	/*
 	 * The relpath will vary based on the backend ID, so we must initialize
 	 * that properly here to make sure that any collisions based on filename
 	 * are properly detected.
 	 */
-	rnode.backend = backend;
+	rlocator.backend = backend;
 
 	do
 	{
@@ -532,13 +532,13 @@ GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 
 		/* Generate the OID */
 		if (pg_class)
-			rnode.node.relNode = GetNewOidWithIndex(pg_class, ClassOidIndexId,
+			rlocator.locator.relNode = GetNewOidWithIndex(pg_class, ClassOidIndexId,
 													Anum_pg_class_oid);
 		else
-			rnode.node.relNode = GetNewObjectId();
+			rlocator.locator.relNode = GetNewObjectId();
 
 		/* Check for existing file of same name */
-		rpath = relpath(rnode, MAIN_FORKNUM);
+		rpath = relpath(rlocator, MAIN_FORKNUM);
 
 		if (access(rpath, F_OK) == 0)
 		{
@@ -560,7 +560,7 @@ GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 		pfree(rpath);
 	} while (collides);
 
-	return rnode.node.relNode;
+	return rlocator.locator.relNode;
 }
 
 /*

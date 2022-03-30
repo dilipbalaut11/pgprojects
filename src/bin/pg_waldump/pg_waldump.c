@@ -31,7 +31,7 @@ static const char *progname;
 static int	WalSegSz;
 static volatile sig_atomic_t time_to_stop = false;
 
-static const RelFileNode emptyRelFileNode = {0, 0, 0};
+static const RelFileLocator emptyRelFileLocator = {0, 0, 0};
 
 typedef struct XLogDumpPrivate
 {
@@ -57,7 +57,7 @@ typedef struct XLogDumpConfig
 	bool		filter_by_rmgr_enabled;
 	TransactionId filter_by_xid;
 	bool		filter_by_xid_enabled;
-	RelFileNode filter_by_relation;
+	RelFileLocator filter_by_relation;
 	bool		filter_by_extended;
 	bool		filter_by_relation_enabled;
 	BlockNumber filter_by_relation_block;
@@ -406,7 +406,7 @@ WALDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
  */
 static bool
 XLogRecordMatchesRelationBlock(XLogReaderState *record,
-							   RelFileNode matchRnode,
+							   RelFileLocator matchRlocator,
 							   BlockNumber matchBlock,
 							   ForkNumber matchFork)
 {
@@ -414,18 +414,18 @@ XLogRecordMatchesRelationBlock(XLogReaderState *record,
 
 	for (block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
 	{
-		RelFileNode rnode;
+		RelFileLocator rlocator;
 		ForkNumber	forknum;
 		BlockNumber blk;
 
 		if (!XLogRecHasBlockRef(record, block_id))
 			continue;
 
-		XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blk);
+		XLogRecGetBlockTag(record, block_id, &rlocator, &forknum, &blk);
 
 		if ((matchFork == InvalidForkNumber || matchFork == forknum) &&
-			(RelFileNodeEquals(matchRnode, emptyRelFileNode) ||
-			 RelFileNodeEquals(matchRnode, rnode)) &&
+			(RelFileLocatorEquals(matchRlocator, emptyRelFileLocator) ||
+			 RelFileLocatorEquals(matchRlocator, rlocator)) &&
 			(matchBlock == InvalidBlockNumber || matchBlock == blk))
 			return true;
 	}
@@ -538,7 +538,7 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 	const RmgrDescData *desc = &RmgrDescTable[XLogRecGetRmid(record)];
 	uint32		rec_len;
 	uint32		fpi_len;
-	RelFileNode rnode;
+	RelFileLocator rlocator;
 	ForkNumber	forknum;
 	BlockNumber blk;
 	int			block_id;
@@ -574,17 +574,17 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 			if (!XLogRecHasBlockRef(record, block_id))
 				continue;
 
-			XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blk);
+			XLogRecGetBlockTag(record, block_id, &rlocator, &forknum, &blk);
 			if (forknum != MAIN_FORKNUM)
 				printf(", blkref #%d: rel %u/%u/%u fork %s blk %u",
 					   block_id,
-					   rnode.spcNode, rnode.dbNode, rnode.relNode,
+					   rlocator.spcNode, rlocator.dbNode, rlocator.relNode,
 					   forkNames[forknum],
 					   blk);
 			else
 				printf(", blkref #%d: rel %u/%u/%u blk %u",
 					   block_id,
-					   rnode.spcNode, rnode.dbNode, rnode.relNode,
+					   rlocator.spcNode, rlocator.dbNode, rlocator.relNode,
 					   blk);
 			if (XLogRecHasBlockImage(record, block_id))
 			{
@@ -605,10 +605,10 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 			if (!XLogRecHasBlockRef(record, block_id))
 				continue;
 
-			XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blk);
+			XLogRecGetBlockTag(record, block_id, &rlocator, &forknum, &blk);
 			printf("\tblkref #%d: rel %u/%u/%u fork %s blk %u",
 				   block_id,
-				   rnode.spcNode, rnode.dbNode, rnode.relNode,
+				   rlocator.spcNode, rlocator.dbNode, rlocator.relNode,
 				   forkNames[forknum],
 				   blk);
 			if (XLogRecHasBlockImage(record, block_id))
@@ -1274,7 +1274,7 @@ main(int argc, char **argv)
 			!XLogRecordMatchesRelationBlock(xlogreader_state,
 											config.filter_by_relation_enabled ?
 											config.filter_by_relation :
-											emptyRelFileNode,
+											emptyRelFileLocator,
 											config.filter_by_relation_block_enabled ?
 											config.filter_by_relation_block :
 											InvalidBlockNumber,

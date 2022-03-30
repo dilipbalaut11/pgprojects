@@ -38,8 +38,8 @@
  */
 typedef struct SMgrRelationData
 {
-	/* rnode is the hashtable lookup key, so it must be first! */
-	RelFileNodeBackend smgr_rnode;	/* relation physical identifier */
+	/* rlocator is the hashtable lookup key, so it must be first! */
+	RelFileLocatorBackend smgr_rlocator;	/* relation physical identifier */
 
 	/* pointer to owning pointer, or NULL if none */
 	struct SMgrRelationData **smgr_owner;
@@ -75,16 +75,16 @@ typedef struct SMgrRelationData
 typedef SMgrRelationData *SMgrRelation;
 
 #define SmgrIsTemp(smgr) \
-	RelFileNodeBackendIsTemp((smgr)->smgr_rnode)
+	RelFileLocatorBackendIsTemp((smgr)->smgr_rlocator)
 
 extern void smgrinit(void);
-extern SMgrRelation smgropen(RelFileNode rnode, BackendId backend);
+extern SMgrRelation smgropen(RelFileLocator rlocator, BackendId backend);
 extern bool smgrexists(SMgrRelation reln, ForkNumber forknum);
 extern void smgrsetowner(SMgrRelation *owner, SMgrRelation reln);
 extern void smgrclearowner(SMgrRelation *owner, SMgrRelation reln);
 extern void smgrclose(SMgrRelation reln);
 extern void smgrcloseall(void);
-extern void smgrclosenode(RelFileNodeBackend rnode);
+extern void smgrclosenode(RelFileLocatorBackend rlocator);
 extern void smgrcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo);
 extern void smgrdosyncall(SMgrRelation *rels, int nrels);
 extern void smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo);

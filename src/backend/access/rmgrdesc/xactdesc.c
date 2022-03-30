@@ -75,13 +75,13 @@ ParseCommitRecord(uint8 info, xl_xact_commit *xlrec, xl_xact_parsed_commit *pars
 
 	if (parsed->xinfo & XACT_XINFO_HAS_RELFILENODES)
 	{
-		xl_xact_relfilenodes *xl_relfilenodes = (xl_xact_relfilenodes *) data;
+		xl_xact_rellocator *xl_rellocator = (xl_xact_rellocator *) data;
 
-		parsed->nrels = xl_relfilenodes->nrels;
-		parsed->xnodes = xl_relfilenodes->xnodes;
+		parsed->nrels = xl_rellocator->nrels;
+		parsed->xlocators = xl_rellocator->xlocators;
 
 		data += MinSizeOfXactRelfilenodes;
-		data += xl_relfilenodes->nrels * sizeof(RelFileNode);
+		data += xl_rellocator->nrels * sizeof(RelFileLocator);
 	}
 
 	if (parsed->xinfo & XACT_XINFO_HAS_INVALS)
@@ -170,13 +170,13 @@ ParseAbortRecord(uint8 info, xl_xact_abort *xlrec, xl_xact_parsed_abort *parsed)
 
 	if (parsed->xinfo & XACT_XINFO_HAS_RELFILENODES)
 	{
-		xl_xact_relfilenodes *xl_relfilenodes = (xl_xact_relfilenodes *) data;
+		xl_xact_rellocator *xl_rellocator = (xl_xact_rellocator *) data;
 
-		parsed->nrels = xl_relfilenodes->nrels;
-		parsed->xnodes = xl_relfilenodes->xnodes;
+		parsed->nrels = xl_rellocator->nrels;
+		parsed->xlocators = xl_rellocator->xlocators;
 
 		data += MinSizeOfXactRelfilenodes;
-		data += xl_relfilenodes->nrels * sizeof(RelFileNode);
+		data += xl_rellocator->nrels * sizeof(RelFileLocator);
 	}
 
 	if (parsed->xinfo & XACT_XINFO_HAS_TWOPHASE)
@@ -238,11 +238,11 @@ ParsePrepareRecord(uint8 info, xl_xact_prepare *xlrec, xl_xact_parsed_prepare *p
 	parsed->subxacts = (TransactionId *) bufptr;
 	bufptr += MAXALIGN(xlrec->nsubxacts * sizeof(TransactionId));
 
-	parsed->xnodes = (RelFileNode *) bufptr;
-	bufptr += MAXALIGN(xlrec->ncommitrels * sizeof(RelFileNode));
+	parsed->xlocators = (RelFileLocator *) bufptr;
+	bufptr += MAXALIGN(xlrec->ncommitrels * sizeof(RelFileLocator));
 
-	parsed->abortnodes = (RelFileNode *) bufptr;
-	bufptr += MAXALIGN(xlrec->nabortrels * sizeof(RelFileNode));
+	parsed->abortnodes = (RelFileLocator *) bufptr;
+	bufptr += MAXALIGN(xlrec->nabortrels * sizeof(RelFileLocator));
 
 	parsed->msgs = (SharedInvalidationMessage *) bufptr;
 	bufptr += MAXALIGN(xlrec->ninvalmsgs * sizeof(SharedInvalidationMessage));
@@ -250,7 +250,7 @@ ParsePrepareRecord(uint8 info, xl_xact_prepare *xlrec, xl_xact_parsed_prepare *p
 
 static void
 xact_desc_relations(StringInfo buf, char *label, int nrels,
-					RelFileNode *xnodes)
+					RelFileLocator *xlocators)
 {
 	int			i;
 
@@ -259,7 +259,7 @@ xact_desc_relations(StringInfo buf, char *label, int nrels,
 		appendStringInfo(buf, "; %s:", label);
 		for (i = 0; i < nrels; i++)
 		{
-			char	   *path = relpathperm(xnodes[i], MAIN_FORKNUM);
+			char	   *path = relpathperm(xlocators[i], MAIN_FORKNUM);
 
 			appendStringInfo(buf, " %s", path);
 			pfree(path);
@@ -293,7 +293,7 @@ xact_desc_commit(StringInfo buf, uint8 info, xl_xact_commit *xlrec, RepOriginId 
 
 	appendStringInfoString(buf, timestamptz_to_str(xlrec->xact_time));
 
-	xact_desc_relations(buf, "rels", parsed.nrels, parsed.xnodes);
+	xact_desc_relations(buf, "rels", parsed.nrels, parsed.xlocators);
 	xact_desc_subxacts(buf, parsed.nsubxacts, parsed.subxacts);
 
 	standby_desc_invalidations(buf, parsed.nmsgs, parsed.msgs, parsed.dbId,
@@ -328,7 +328,7 @@ xact_desc_abort(StringInfo buf, uint8 info, xl_xact_abort *xlrec, RepOriginId or
 
 	appendStringInfoString(buf, timestamptz_to_str(xlrec->xact_time));
 
-	xact_desc_relations(buf, "rels", parsed.nrels, parsed.xnodes);
+	xact_desc_relations(buf, "rels", parsed.nrels, parsed.xlocators);
 	xact_desc_subxacts(buf, parsed.nsubxacts, parsed.subxacts);
 
 	if (parsed.xinfo & XACT_XINFO_HAS_ORIGIN)
@@ -350,7 +350,7 @@ xact_desc_prepare(StringInfo buf, uint8 info, xl_xact_prepare *xlrec, RepOriginI
 	appendStringInfo(buf, "gid %s: ", parsed.twophase_gid);
 	appendStringInfoString(buf, timestamptz_to_str(parsed.xact_time));
 
-	xact_desc_relations(buf, "rels(commit)", parsed.nrels, parsed.xnodes);
+	xact_desc_relations(buf, "rels(commit)", parsed.nrels, parsed.xlocators);
 	xact_desc_relations(buf, "rels(abort)", parsed.nabortrels,
 						parsed.abortnodes);
 	xact_desc_subxacts(buf, parsed.nsubxacts, parsed.subxacts);

@@ -196,7 +196,7 @@ RecordPageWithFreeSpace(Relation rel, BlockNumber heapBlk, Size spaceAvail)
  *		WAL replay
  */
 void
-XLogRecordPageWithFreeSpace(RelFileNode rnode, BlockNumber heapBlk,
+XLogRecordPageWithFreeSpace(RelFileLocator rlocator, BlockNumber heapBlk,
 							Size spaceAvail)
 {
 	int			new_cat = fsm_space_avail_to_cat(spaceAvail);
@@ -211,7 +211,7 @@ XLogRecordPageWithFreeSpace(RelFileNode rnode, BlockNumber heapBlk,
 	blkno = fsm_logical_to_physical(addr);
 
 	/* If the page doesn't exist already, extend */
-	buf = XLogReadBufferExtended(rnode, FSM_FORKNUM, blkno, RBM_ZERO_ON_ERROR);
+	buf = XLogReadBufferExtended(rlocator, FSM_FORKNUM, blkno, RBM_ZERO_ON_ERROR);
 	LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 
 	page = BufferGetPage(buf);

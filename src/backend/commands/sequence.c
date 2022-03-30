@@ -384,7 +384,7 @@ SetSequence_non_transactional(Oid seqrelid, int64 last_value, int64 log_cnt, boo
 		XLogBeginInsert();
 		XLogRegisterBuffer(0, buf, REGBUF_WILL_INIT);
 
-		xlrec.node = seqrel->rd_node;
+		xlrec.locator = seqrel->rd_locator;
 		xlrec.created = false;
 
 		XLogRegisterData((char *) &xlrec, sizeof(xl_seq_rec));
@@ -557,7 +557,7 @@ fill_seq_with_data(Relation rel, HeapTuple tuple)
 		XLogBeginInsert();
 		XLogRegisterBuffer(0, buf, REGBUF_WILL_INIT);
 
-		xlrec.node = rel->rd_node;
+		xlrec.locator = rel->rd_locator;
 		xlrec.created = true;
 
 		XLogRegisterData((char *) &xlrec, sizeof(xl_seq_rec));
@@ -972,7 +972,7 @@ nextval_internal(Oid relid, bool check_permissions)
 		seq->is_called = true;
 		seq->log_cnt = 0;
 
-		xlrec.node = seqrel->rd_node;
+		xlrec.locator = seqrel->rd_locator;
 		xlrec.created = false;
 
 		XLogRegisterData((char *) &xlrec, sizeof(xl_seq_rec));
@@ -1165,7 +1165,7 @@ do_setval(Oid relid, int64 next, bool iscalled)
 		XLogBeginInsert();
 		XLogRegisterBuffer(0, buf, REGBUF_WILL_INIT);
 
-		xlrec.node = seqrel->rd_node;
+		xlrec.locator = seqrel->rd_locator;
 		xlrec.created = false;
 
 		XLogRegisterData((char *) &xlrec, sizeof(xl_seq_rec));

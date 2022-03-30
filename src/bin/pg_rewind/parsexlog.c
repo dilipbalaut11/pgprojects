@@ -443,17 +443,17 @@ extractPageInfo(XLogReaderState *record)
 
 	for (block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
 	{
-		RelFileNode rnode;
+		RelFileLocator rlocator;
 		ForkNumber	forknum;
 		BlockNumber blkno;
 
-		if (!XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blkno))
+		if (!XLogRecGetBlockTag(record, block_id, &rlocator, &forknum, &blkno))
 			continue;
 
 		/* We only care about the main fork; others are copied in toto */
 		if (forknum != MAIN_FORKNUM)
 			continue;
 
-		process_target_wal_block_change(forknum, rnode, blkno);
+		process_target_wal_block_change(forknum, rlocator, blkno);
 	}
 }

@@ -937,7 +937,7 @@ index_create(Relation heapRelation,
 		else
 		{
 			indexRelationId =
-				GetNewRelFileNode(tableSpaceId, pg_class, relpersistence);
+				GetNewRelFileLocator(tableSpaceId, pg_class, relpersistence);
 		}
 	}
 

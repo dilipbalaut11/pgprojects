@@ -8037,7 +8037,7 @@ log_heap_freeze(Relation reln, Buffer buffer, TransactionId cutoff_xid,
  * heap_buffer, if necessary.
  */
 XLogRecPtr
-log_heap_visible(RelFileNode rnode, Buffer heap_buffer, Buffer vm_buffer,
+log_heap_visible(RelFileLocator rlocator, Buffer heap_buffer, Buffer vm_buffer,
 				 TransactionId cutoff_xid, uint8 vmflags)
 {
 	xl_heap_visible xlrec;
@@ -8302,7 +8302,7 @@ log_heap_new_cid(Relation relation, HeapTuple tup)
 	Assert(tup->t_tableOid != InvalidOid);
 
 	xlrec.top_xid = GetTopTransactionId();
-	xlrec.target_node = relation->rd_node;
+	xlrec.target_locator = relation->rd_locator;
 	xlrec.target_tid = tup->t_self;
 
 	/*
@@ -8472,18 +8472,18 @@ heap_xlog_prune(XLogReaderState *record)
 	XLogRecPtr	lsn = record->EndRecPtr;
 	xl_heap_prune *xlrec = (xl_heap_prune *) XLogRecGetData(record);
 	Buffer		buffer;
-	RelFileNode rnode;
+	RelFileLocator rlocator;
 	BlockNumber blkno;
 	XLogRedoAction action;
 
-	XLogRecGetBlockTag(record, 0, &rnode, NULL, &blkno);
+	XLogRecGetBlockTag(record, 0, &rlocator, NULL, &blkno);
 
 	/*
 	 * We're about to remove tuples. In Hot Standby mode, ensure that there's
 	 * no queries running for which the removed tuples are still visible.
 	 */
 	if (InHotStandby)
-		ResolveRecoveryConflictWithSnapshot(xlrec->latestRemovedXid, rnode);
+		ResolveRecoveryConflictWithSnapshot(xlrec->latestRemovedXid, rlocator);
 
 	/*
 	 * If we have a full-page image, restore it (using a cleanup lock) and
@@ -8543,7 +8543,7 @@ heap_xlog_prune(XLogReaderState *record)
 		 * Do this regardless of a full-page image being applied, since the
 		 * FSM data is not in the page anyway.
 		 */
-		XLogRecordPageWithFreeSpace(rnode, blkno, freespace);
+		XLogRecordPageWithFreeSpace(rlocator, blkno, freespace);
 	}
 }
 
@@ -8600,9 +8600,9 @@ heap_xlog_vacuum(XLogReaderState *record)
 	if (BufferIsValid(buffer))
 	{
 		Size		freespace = PageGetHeapFreeSpace(BufferGetPage(buffer));
-		RelFileNode rnode;
+		RelFileLocator rlocator;
 
-		XLogRecGetBlockTag(record, 0, &rnode, NULL, &blkno);
+		XLogRecGetBlockTag(record, 0, &rlocator, NULL, &blkno);
 
 		UnlockReleaseBuffer(buffer);
 
@@ -8615,7 +8615,7 @@ heap_xlog_vacuum(XLogReaderState *record)
 		 * Do this regardless of a full-page image being applied, since the
 		 * FSM data is not in the page anyway.
 		 */
-		XLogRecordPageWithFreeSpace(rnode, blkno, freespace);
+		XLogRecordPageWithFreeSpace(rlocator, blkno, freespace);
 	}
 }
 
@@ -8635,11 +8635,11 @@ heap_xlog_visible(XLogReaderState *record)
 	Buffer		vmbuffer = InvalidBuffer;
 	Buffer		buffer;
 	Page		page;
-	RelFileNode rnode;
+	RelFileLocator rlocator;
 	BlockNumber blkno;
 	XLogRedoAction action;
 
-	XLogRecGetBlockTag(record, 1, &rnode, NULL, &blkno);
+	XLogRecGetBlockTag(record, 1, &rlocator, NULL, &blkno);
 
 	/*
 	 * If there are any Hot Standby transactions running that have an xmin
@@ -8651,7 +8651,7 @@ heap_xlog_visible(XLogReaderState *record)
 	 * rather than killing the transaction outright.
 	 */
 	if (InHotStandby)
-		ResolveRecoveryConflictWithSnapshot(xlrec->cutoff_xid, rnode);
+		ResolveRecoveryConflictWithSnapshot(xlrec->cutoff_xid, rlocator);
 
 	/*
 	 * Read the heap page, if it still exists. If the heap file has dropped or
@@ -8714,7 +8714,7 @@ heap_xlog_visible(XLogReaderState *record)
 		 * FSM data is not in the page anyway.
 		 */
 		if (xlrec->flags & VISIBILITYMAP_VALID_BITS)
-			XLogRecordPageWithFreeSpace(rnode, blkno, space);
+			XLogRecordPageWithFreeSpace(rlocator, blkno, space);
 	}
 
 	/*
@@ -8739,7 +8739,7 @@ heap_xlog_visible(XLogReaderState *record)
 		 */
 		LockBuffer(vmbuffer, BUFFER_LOCK_UNLOCK);
 
-		reln = CreateFakeRelcacheEntry(rnode);
+		reln = CreateFakeRelcacheEntry(rlocator);
 		visibilitymap_pin(reln, blkno, &vmbuffer);
 
 		/*
@@ -8782,13 +8782,13 @@ heap_xlog_freeze_page(XLogReaderState *record)
 	 */
 	if (InHotStandby)
 	{
-		RelFileNode rnode;
+		RelFileLocator rlocator;
 		TransactionId latestRemovedXid = cutoff_xid;
 
 		TransactionIdRetreat(latestRemovedXid);
 
-		XLogRecGetBlockTag(record, 0, &rnode, NULL, NULL);
-		ResolveRecoveryConflictWithSnapshot(latestRemovedXid, rnode);
+		XLogRecGetBlockTag(record, 0, &rlocator, NULL, NULL);
+		ResolveRecoveryConflictWithSnapshot(latestRemovedXid, rlocator);
 	}
 
 	if (XLogReadBufferForRedo(record, 0, &buffer) == BLK_NEEDS_REDO)
@@ -8856,10 +8856,10 @@ heap_xlog_delete(XLogReaderState *record)
 	ItemId		lp = NULL;
 	HeapTupleHeader htup;
 	BlockNumber blkno;
-	RelFileNode target_node;
+	RelFileLocator target_locator;
 	ItemPointerData target_tid;
 
-	XLogRecGetBlockTag(record, 0, &target_node, NULL, &blkno);
+	XLogRecGetBlockTag(record, 0, &target_locator, NULL, &blkno);
 	ItemPointerSetBlockNumber(&target_tid, blkno);
 	ItemPointerSetOffsetNumber(&target_tid, xlrec->offnum);
 
@@ -8869,7 +8869,7 @@ heap_xlog_delete(XLogReaderState *record)
 	 */
 	if (xlrec->flags & XLH_DELETE_ALL_VISIBLE_CLEARED)
 	{
-		Relation	reln = CreateFakeRelcacheEntry(target_node);
+		Relation	reln = CreateFakeRelcacheEntry(target_locator);
 		Buffer		vmbuffer = InvalidBuffer;
 
 		visibilitymap_pin(reln, blkno, &vmbuffer);
@@ -8935,12 +8935,12 @@ heap_xlog_insert(XLogReaderState *record)
 	xl_heap_header xlhdr;
 	uint32		newlen;
 	Size		freespace = 0;
-	RelFileNode target_node;
+	RelFileLocator target_locator;
 	BlockNumber blkno;
 	ItemPointerData target_tid;
 	XLogRedoAction action;
 
-	XLogRecGetBlockTag(record, 0, &target_node, NULL, &blkno);
+	XLogRecGetBlockTag(record, 0, &target_locator, NULL, &blkno);
 	ItemPointerSetBlockNumber(&target_tid, blkno);
 	ItemPointerSetOffsetNumber(&target_tid, xlrec->offnum);
 
@@ -8950,7 +8950,7 @@ heap_xlog_insert(XLogReaderState *record)
 	 */
 	if (xlrec->flags & XLH_INSERT_ALL_VISIBLE_CLEARED)
 	{
-		Relation	reln = CreateFakeRelcacheEntry(target_node);
+		Relation	reln = CreateFakeRelcacheEntry(target_locator);
 		Buffer		vmbuffer = InvalidBuffer;
 
 		visibilitymap_pin(reln, blkno, &vmbuffer);
@@ -9033,7 +9033,7 @@ heap_xlog_insert(XLogReaderState *record)
 	 * totally accurate anyway.
 	 */
 	if (action == BLK_NEEDS_REDO && freespace < BLCKSZ / 5)
-		XLogRecordPageWithFreeSpace(target_node, blkno, freespace);
+		XLogRecordPageWithFreeSpace(target_locator, blkno, freespace);
 }
 
 /*
@@ -9044,7 +9044,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 {
 	XLogRecPtr	lsn = record->EndRecPtr;
 	xl_heap_multi_insert *xlrec;
-	RelFileNode rnode;
+	RelFileLocator rlocator;
 	BlockNumber blkno;
 	Buffer		buffer;
 	Page		page;
@@ -9066,7 +9066,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 	 */
 	xlrec = (xl_heap_multi_insert *) XLogRecGetData(record);
 
-	XLogRecGetBlockTag(record, 0, &rnode, NULL, &blkno);
+	XLogRecGetBlockTag(record, 0, &rlocator, NULL, &blkno);
 
 	/* check that the mutually exclusive flags are not both set */
 	Assert(!((xlrec->flags & XLH_INSERT_ALL_VISIBLE_CLEARED) &&
@@ -9078,7 +9078,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 	 */
 	if (xlrec->flags & XLH_INSERT_ALL_VISIBLE_CLEARED)
 	{
-		Relation	reln = CreateFakeRelcacheEntry(rnode);
+		Relation	reln = CreateFakeRelcacheEntry(rlocator);
 		Buffer		vmbuffer = InvalidBuffer;
 
 		visibilitymap_pin(reln, blkno, &vmbuffer);
@@ -9180,7 +9180,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 	 * totally accurate anyway.
 	 */
 	if (action == BLK_NEEDS_REDO && freespace < BLCKSZ / 5)
-		XLogRecordPageWithFreeSpace(rnode, blkno, freespace);
+		XLogRecordPageWithFreeSpace(rlocator, blkno, freespace);
 }
 
 /*
@@ -9191,7 +9191,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 {
 	XLogRecPtr	lsn = record->EndRecPtr;
 	xl_heap_update *xlrec = (xl_heap_update *) XLogRecGetData(record);
-	RelFileNode rnode;
+	RelFileLocator rlocator;
 	BlockNumber oldblk;
 	BlockNumber newblk;
 	ItemPointerData newtid;
@@ -9220,7 +9220,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	oldtup.t_data = NULL;
 	oldtup.t_len = 0;
 
-	XLogRecGetBlockTag(record, 0, &rnode, NULL, &newblk);
+	XLogRecGetBlockTag(record, 0, &rlocator, NULL, &newblk);
 	if (XLogRecGetBlockTag(record, 1, NULL, NULL, &oldblk))
 	{
 		/* HOT updates are never done across pages */
@@ -9237,7 +9237,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	 */
 	if (xlrec->flags & XLH_UPDATE_OLD_ALL_VISIBLE_CLEARED)
 	{
-		Relation	reln = CreateFakeRelcacheEntry(rnode);
+		Relation	reln = CreateFakeRelcacheEntry(rlocator);
 		Buffer		vmbuffer = InvalidBuffer;
 
 		visibilitymap_pin(reln, oldblk, &vmbuffer);
@@ -9321,7 +9321,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	 */
 	if (xlrec->flags & XLH_UPDATE_NEW_ALL_VISIBLE_CLEARED)
 	{
-		Relation	reln = CreateFakeRelcacheEntry(rnode);
+		Relation	reln = CreateFakeRelcacheEntry(rlocator);
 		Buffer		vmbuffer = InvalidBuffer;
 
 		visibilitymap_pin(reln, newblk, &vmbuffer);
@@ -9455,7 +9455,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	 * totally accurate anyway.
 	 */
 	if (newaction == BLK_NEEDS_REDO && !hot_update && freespace < BLCKSZ / 5)
-		XLogRecordPageWithFreeSpace(rnode, newblk, freespace);
+		XLogRecordPageWithFreeSpace(rlocator, newblk, freespace);
 }
 
 static void
@@ -9511,13 +9511,13 @@ heap_xlog_lock(XLogReaderState *record)
 	 */
 	if (xlrec->flags & XLH_LOCK_ALL_FROZEN_CLEARED)
 	{
-		RelFileNode rnode;
+		RelFileLocator rlocator;
 		Buffer		vmbuffer = InvalidBuffer;
 		BlockNumber block;
 		Relation	reln;
 
-		XLogRecGetBlockTag(record, 0, &rnode, NULL, &block);
-		reln = CreateFakeRelcacheEntry(rnode);
+		XLogRecGetBlockTag(record, 0, &rlocator, NULL, &block);
+		reln = CreateFakeRelcacheEntry(rlocator);
 
 		visibilitymap_pin(reln, block, &vmbuffer);
 		visibilitymap_clear(reln, block, vmbuffer, VISIBILITYMAP_ALL_FROZEN);
@@ -9584,13 +9584,13 @@ heap_xlog_lock_updated(XLogReaderState *record)
 	 */
 	if (xlrec->flags & XLH_LOCK_ALL_FROZEN_CLEARED)
 	{
-		RelFileNode rnode;
+		RelFileLocator rlocator;
 		Buffer		vmbuffer = InvalidBuffer;
 		BlockNumber block;
 		Relation	reln;
 
-		XLogRecGetBlockTag(record, 0, &rnode, NULL, &block);
-		reln = CreateFakeRelcacheEntry(rnode);
+		XLogRecGetBlockTag(record, 0, &rlocator, NULL, &block);
+		reln = CreateFakeRelcacheEntry(rlocator);
 
 		visibilitymap_pin(reln, block, &vmbuffer);
 		visibilitymap_clear(reln, block, vmbuffer, VISIBILITYMAP_ALL_FROZEN);

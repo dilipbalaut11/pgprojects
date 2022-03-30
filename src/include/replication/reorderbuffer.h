@@ -100,7 +100,7 @@ typedef struct ReorderBufferChange
 		struct
 		{
 			/* relation that has been changed */
-			RelFileNode relnode;
+			RelFileLocator rlocator;
 
 			/* no previously reassembled toast chunks are necessary anymore */
 			bool		clear_toast_afterwards;
@@ -146,7 +146,7 @@ typedef struct ReorderBufferChange
 		 */
 		struct
 		{
-			RelFileNode node;
+			RelFileLocator locator;
 			ItemPointerData tid;
 			CommandId	cmin;
 			CommandId	cmax;
@@ -163,7 +163,7 @@ typedef struct ReorderBufferChange
 		/* Context data for Sequence changes */
 		struct
 		{
-			RelFileNode relnode;
+			RelFileLocator rlocator;
 			ReorderBufferTupleBuf *tuple;
 		}			sequence;
 	}			data;
@@ -671,7 +671,7 @@ void		ReorderBufferQueueMessage(ReorderBuffer *, TransactionId, Snapshot snapsho
 									  Size message_size, const char *message);
 void		ReorderBufferQueueSequence(ReorderBuffer *rb, TransactionId xid,
 									   Snapshot snapshot, XLogRecPtr lsn, RepOriginId origin_id,
-									   RelFileNode rnode, bool transactional, bool created,
+									   RelFileLocator rlocator, bool transactional, bool created,
 									   ReorderBufferTupleBuf *tuplebuf);
 void		ReorderBufferCommit(ReorderBuffer *, TransactionId,
 								XLogRecPtr commit_lsn, XLogRecPtr end_lsn,
@@ -695,7 +695,7 @@ void		ReorderBufferAddSnapshot(ReorderBuffer *, TransactionId, XLogRecPtr lsn, s
 void		ReorderBufferAddNewCommandId(ReorderBuffer *, TransactionId, XLogRecPtr lsn,
 										 CommandId cid);
 void		ReorderBufferAddNewTupleCids(ReorderBuffer *, TransactionId, XLogRecPtr lsn,
-										 RelFileNode node, ItemPointerData pt,
+										 RelFileLocator locator, ItemPointerData pt,
 										 CommandId cmin, CommandId cmax, CommandId combocid);
 void		ReorderBufferAddInvalidations(ReorderBuffer *, TransactionId, XLogRecPtr lsn,
 										  Size nmsgs, SharedInvalidationMessage *msgs);
@@ -721,6 +721,6 @@ void		ReorderBufferSetRestartPoint(ReorderBuffer *, XLogRecPtr ptr);
 void		StartupReorderBuffer(void);
 
 bool		ReorderBufferSequenceIsTransactional(ReorderBuffer *rb,
-												 RelFileNode rnode, bool created);
+												 RelFileLocator rlocator, bool created);
 
 #endif

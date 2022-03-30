@@ -48,7 +48,7 @@ extern void CacheInvalidateRelcacheByTuple(HeapTuple classTuple);
 
 extern void CacheInvalidateRelcacheByRelid(Oid relid);
 
-extern void CacheInvalidateSmgr(RelFileNodeBackend rnode);
+extern void CacheInvalidateSmgr(RelFileLocatorBackend rlocator);
 
 extern void CacheInvalidateRelmap(Oid databaseId);
 

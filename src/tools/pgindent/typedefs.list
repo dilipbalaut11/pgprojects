@@ -2180,8 +2180,8 @@ ReindexObjectType
 ReindexParams
 ReindexStmt
 ReindexType
-RelFileNode
-RelFileNodeBackend
+RelFileLocator
+RelFileLocatorBackend
 RelIdCacheEnt
 RelInfo
 RelInfoArr
@@ -3771,7 +3771,7 @@ xl_xact_parsed_abort
 xl_xact_parsed_commit
 xl_xact_parsed_prepare
 xl_xact_prepare
-xl_xact_relfilenodes
+xl_xact_rellocator
 xl_xact_subxacts
 xl_xact_twophase
 xl_xact_xinfo

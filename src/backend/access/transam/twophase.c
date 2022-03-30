@@ -204,7 +204,7 @@ static void RecordTransactionCommitPrepared(TransactionId xid,
 											int nchildren,
 											TransactionId *children,
 											int nrels,
-											RelFileNode *rels,
+											RelFileLocator *rels,
 											int ninvalmsgs,
 											SharedInvalidationMessage *invalmsgs,
 											bool initfileinval,
@@ -213,7 +213,7 @@ static void RecordTransactionAbortPrepared(TransactionId xid,
 										   int nchildren,
 										   TransactionId *children,
 										   int nrels,
-										   RelFileNode *rels,
+										   RelFileLocator *rels,
 										   const char *gid);
 static void ProcessRecords(char *bufptr, TransactionId xid,
 						   const TwoPhaseCallback callbacks[]);
@@ -948,8 +948,8 @@ TwoPhaseGetDummyProc(TransactionId xid, bool lock_held)
  *
  *	1. TwoPhaseFileHeader
  *	2. TransactionId[] (subtransactions)
- *	3. RelFileNode[] (files to be deleted at commit)
- *	4. RelFileNode[] (files to be deleted at abort)
+ *	3. RelFileLocator[] (files to be deleted at commit)
+ *	4. RelFileLocator[] (files to be deleted at abort)
  *	5. SharedInvalidationMessage[] (inval messages to be sent at commit)
  *	6. TwoPhaseRecordOnDisk
  *	7. ...
@@ -1044,8 +1044,8 @@ StartPrepare(GlobalTransaction gxact)
 	TransactionId xid = gxact->xid;
 	TwoPhaseFileHeader hdr;
 	TransactionId *children;
-	RelFileNode *commitrels;
-	RelFileNode *abortrels;
+	RelFileLocator *commitrels;
+	RelFileLocator *abortrels;
 	SharedInvalidationMessage *invalmsgs;
 
 	/* Initialize linked list */
@@ -1093,12 +1093,12 @@ StartPrepare(GlobalTransaction gxact)
 	}
 	if (hdr.ncommitrels > 0)
 	{
-		save_state_data(commitrels, hdr.ncommitrels * sizeof(RelFileNode));
+		save_state_data(commitrels, hdr.ncommitrels * sizeof(RelFileLocator));
 		pfree(commitrels);
 	}
 	if (hdr.nabortrels > 0)
 	{
-		save_state_data(abortrels, hdr.nabortrels * sizeof(RelFileNode));
+		save_state_data(abortrels, hdr.nabortrels * sizeof(RelFileLocator));
 		pfree(abortrels);
 	}
 	if (hdr.ninvalmsgs > 0)
@@ -1468,9 +1468,9 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	TwoPhaseFileHeader *hdr;
 	TransactionId latestXid;
 	TransactionId *children;
-	RelFileNode *commitrels;
-	RelFileNode *abortrels;
-	RelFileNode *delrels;
+	RelFileLocator *commitrels;
+	RelFileLocator *abortrels;
+	RelFileLocator *delrels;
 	int			ndelrels;
 	SharedInvalidationMessage *invalmsgs;
 
@@ -1502,10 +1502,10 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	bufptr += MAXALIGN(hdr->gidlen);
 	children = (TransactionId *) bufptr;
 	bufptr += MAXALIGN(hdr->nsubxacts * sizeof(TransactionId));
-	commitrels = (RelFileNode *) bufptr;
-	bufptr += MAXALIGN(hdr->ncommitrels * sizeof(RelFileNode));
-	abortrels = (RelFileNode *) bufptr;
-	bufptr += MAXALIGN(hdr->nabortrels * sizeof(RelFileNode));
+	commitrels = (RelFileLocator *) bufptr;
+	bufptr += MAXALIGN(hdr->ncommitrels * sizeof(RelFileLocator));
+	abortrels = (RelFileLocator *) bufptr;
+	bufptr += MAXALIGN(hdr->nabortrels * sizeof(RelFileLocator));
 	invalmsgs = (SharedInvalidationMessage *) bufptr;
 	bufptr += MAXALIGN(hdr->ninvalmsgs * sizeof(SharedInvalidationMessage));
 
@@ -2064,8 +2064,8 @@ RecoverPreparedTransactions(void)
 		bufptr += MAXALIGN(hdr->gidlen);
 		subxids = (TransactionId *) bufptr;
 		bufptr += MAXALIGN(hdr->nsubxacts * sizeof(TransactionId));
-		bufptr += MAXALIGN(hdr->ncommitrels * sizeof(RelFileNode));
-		bufptr += MAXALIGN(hdr->nabortrels * sizeof(RelFileNode));
+		bufptr += MAXALIGN(hdr->ncommitrels * sizeof(RelFileLocator));
+		bufptr += MAXALIGN(hdr->nabortrels * sizeof(RelFileLocator));
 		bufptr += MAXALIGN(hdr->ninvalmsgs * sizeof(SharedInvalidationMessage));
 
 		/*
@@ -2247,7 +2247,7 @@ RecordTransactionCommitPrepared(TransactionId xid,
 								int nchildren,
 								TransactionId *children,
 								int nrels,
-								RelFileNode *rels,
+								RelFileLocator *rels,
 								int ninvalmsgs,
 								SharedInvalidationMessage *invalmsgs,
 								bool initfileinval,
@@ -2342,7 +2342,7 @@ RecordTransactionAbortPrepared(TransactionId xid,
 							   int nchildren,
 							   TransactionId *children,
 							   int nrels,
-							   RelFileNode *rels,
+							   RelFileLocator *rels,
 							   const char *gid)
 {
 	XLogRecPtr	recptr;

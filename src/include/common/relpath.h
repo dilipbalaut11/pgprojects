@@ -71,20 +71,20 @@ extern char *GetRelationPath(Oid dbNode, Oid spcNode, Oid relNode,
 
 /*
  * Wrapper macros for GetRelationPath.  Beware of multiple
- * evaluation of the RelFileNode or RelFileNodeBackend argument!
+ * evaluation of the RelFileLocator or RelFileLocatorBackend argument!
  */
 
-/* First argument is a RelFileNode */
-#define relpathbackend(rnode, backend, forknum) \
-	GetRelationPath((rnode).dbNode, (rnode).spcNode, (rnode).relNode, \
+/* First argument is a RelFileLocator */
+#define relpathbackend(rlocator, backend, forknum) \
+	GetRelationPath((rlocator).dbNode, (rlocator).spcNode, (rlocator).relNode, \
 					backend, forknum)
 
-/* First argument is a RelFileNode */
-#define relpathperm(rnode, forknum) \
-	relpathbackend(rnode, InvalidBackendId, forknum)
+/* First argument is a RelFileLocator */
+#define relpathperm(rlocator, forknum) \
+	relpathbackend(rlocator, InvalidBackendId, forknum)
 
-/* First argument is a RelFileNodeBackend */
-#define relpath(rnode, forknum) \
-	relpathbackend((rnode).node, (rnode).backend, forknum)
+/* First argument is a RelFileLocatorBackend */
+#define relpath(rlocator, forknum) \
+	relpathbackend((rlocator).locator, (rlocator).backend, forknum)
 
 #endif							/* RELPATH_H */

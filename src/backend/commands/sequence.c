@@ -347,9 +347,9 @@ fill_seq_with_data(Relation rel, HeapTuple tuple)
 	{
 		SMgrRelation srel;
 
-		srel = smgropen(rel->rd_node, InvalidBackendId);
+		srel = smgropen(rel->rd_locator, InvalidBackendId);
 		smgrcreate(srel, INIT_FORKNUM, false);
-		log_smgrcreate(&rel->rd_node, INIT_FORKNUM);
+		log_smgrcreate(&rel->rd_locator, INIT_FORKNUM);
 		fill_seq_fork_with_data(rel, tuple, INIT_FORKNUM);
 		FlushRelationBuffers(rel);
 		smgrclose(srel);
@@ -418,7 +418,7 @@ fill_seq_fork_with_data(Relation rel, HeapTuple tuple, ForkNumber forkNum)
 		XLogBeginInsert();
 		XLogRegisterBuffer(0, buf, REGBUF_WILL_INIT);
 
-		xlrec.node = rel->rd_node;
+		xlrec.locator = rel->rd_locator;
 
 		XLogRegisterData((char *) &xlrec, sizeof(xl_seq_rec));
 		XLogRegisterData((char *) tuple->t_data, tuple->t_len);
@@ -836,7 +836,7 @@ nextval_internal(Oid relid, bool check_permissions)
 		seq->is_called = true;
 		seq->log_cnt = 0;
 
-		xlrec.node = seqrel->rd_node;
+		xlrec.locator = seqrel->rd_locator;
 
 		XLogRegisterData((char *) &xlrec, sizeof(xl_seq_rec));
 		XLogRegisterData((char *) seqdatatuple.t_data, seqdatatuple.t_len);
@@ -1023,7 +1023,7 @@ do_setval(Oid relid, int64 next, bool iscalled)
 		XLogBeginInsert();
 		XLogRegisterBuffer(0, buf, REGBUF_WILL_INIT);
 
-		xlrec.node = seqrel->rd_node;
+		xlrec.locator = seqrel->rd_locator;
 		XLogRegisterData((char *) &xlrec, sizeof(xl_seq_rec));
 		XLogRegisterData((char *) seqdatatuple.t_data, seqdatatuple.t_len);
 

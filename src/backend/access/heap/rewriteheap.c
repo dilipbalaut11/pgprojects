@@ -318,7 +318,7 @@ end_heap_rewrite(RewriteState state)
 	if (state->rs_buffer_valid)
 	{
 		if (RelationNeedsWAL(state->rs_new_rel))
-			log_newpage(&state->rs_new_rel->rd_node,
+			log_newpage(&state->rs_new_rel->rd_locator,
 						MAIN_FORKNUM,
 						state->rs_blockno,
 						state->rs_buffer,
@@ -679,7 +679,7 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 
 			/* XLOG stuff */
 			if (RelationNeedsWAL(state->rs_new_rel))
-				log_newpage(&state->rs_new_rel->rd_node,
+				log_newpage(&state->rs_new_rel->rd_locator,
 							MAIN_FORKNUM,
 							state->rs_blockno,
 							page,
@@ -1080,9 +1080,9 @@ logical_rewrite_heap_tuple(RewriteState state, ItemPointerData old_tid,
 		return;
 
 	/* fill out mapping information */
-	map.old_node = state->rs_old_rel->rd_node;
+	map.old_locator = state->rs_old_rel->rd_locator;
 	map.old_tid = old_tid;
-	map.new_node = state->rs_new_rel->rd_node;
+	map.new_locator = state->rs_new_rel->rd_locator;
 	map.new_tid = new_tid;
 
 	/* ---

@@ -385,11 +385,11 @@ heap_create(const char *relname,
 	if (create_storage)
 	{
 		if (RELKIND_HAS_TABLE_AM(rel->rd_rel->relkind))
-			table_relation_set_new_filenode(rel, &rel->rd_node,
+			table_relation_set_new_filenode(rel, &rel->rd_locator,
 											relpersistence,
 											relfrozenxid, relminmxid);
 		else if (RELKIND_HAS_STORAGE(rel->rd_rel->relkind))
-			RelationCreateStorage(rel->rd_node, relpersistence, true);
+			RelationCreateStorage(rel->rd_locator, relpersistence, true);
 		else
 			Assert(false);
 	}

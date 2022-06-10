@@ -576,7 +576,7 @@ typedef struct TableAmRoutine
 	 * See also table_relation_set_new_filenode().
 	 */
 	void		(*relation_set_new_filenode) (Relation rel,
-											  const RelFileNode *newrnode,
+											  const RelFileLocator *newrlocator,
 											  char persistence,
 											  TransactionId *freezeXid,
 											  MultiXactId *minmulti);
@@ -598,7 +598,7 @@ typedef struct TableAmRoutine
 	 * storage, unless it contains references to the tablespace internally.
 	 */
 	void		(*relation_copy_data) (Relation rel,
-									   const RelFileNode *newrnode);
+									   const RelFileLocator *newrlocator);
 
 	/* See table_relation_copy_for_cluster() */
 	void		(*relation_copy_for_cluster) (Relation NewTable,
@@ -1577,7 +1577,7 @@ table_finish_bulk_insert(Relation rel, int options)
  */
 
 /*
- * Create storage for `rel` in `newrnode`, with persistence set to
+ * Create storage for `rel` in `newrlocator`, with persistence set to
  * `persistence`.
  *
  * This is used both during relation creation and various DDL operations to
@@ -1590,12 +1590,12 @@ table_finish_bulk_insert(Relation rel, int options)
  */
 static inline void
 table_relation_set_new_filenode(Relation rel,
-								const RelFileNode *newrnode,
+								const RelFileLocator *newrlocator,
 								char persistence,
 								TransactionId *freezeXid,
 								MultiXactId *minmulti)
 {
-	rel->rd_tableam->relation_set_new_filenode(rel, newrnode, persistence,
+	rel->rd_tableam->relation_set_new_filenode(rel, newrlocator, persistence,
 											   freezeXid, minmulti);
 }
 
@@ -1612,15 +1612,15 @@ table_relation_nontransactional_truncate(Relation rel)
 }
 
 /*
- * Copy data from `rel` into the new relfilenode `newrnode`. The new
+ * Copy data from `rel` into the new relfilenode `newrlocator`. The new
  * relfilenode may not have storage associated before this function is
  * called. This is only supposed to be used for low level operations like
  * changing a relation's tablespace.
  */
 static inline void
-table_relation_copy_data(Relation rel, const RelFileNode *newrnode)
+table_relation_copy_data(Relation rel, const RelFileLocator *newrlocator)
 {
-	rel->rd_tableam->relation_copy_data(rel, newrnode);
+	rel->rd_tableam->relation_copy_data(rel, newrlocator);
 }
 
 /*

@@ -119,7 +119,7 @@ typedef struct ReorderBufferTXNByIdEnt
 /* data structures for (relfilenode, ctid) => (cmin, cmax) mapping */
 typedef struct ReorderBufferTupleCidKey
 {
-	RelFileNode relnode;
+	RelFileLocator rlocator;
 	ItemPointerData tid;
 } ReorderBufferTupleCidKey;
 
@@ -1711,7 +1711,7 @@ ReorderBufferBuildTupleCidHash(ReorderBuffer *rb, ReorderBufferTXN *txn)
 		/* be careful about padding */
 		memset(&key, 0, sizeof(ReorderBufferTupleCidKey));
 
-		key.relnode = change->data.tuplecid.node;
+		key.rlocator = change->data.tuplecid.locator;
 
 		ItemPointerCopy(&change->data.tuplecid.tid,
 						&key.tid);
@@ -2140,8 +2140,8 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 				case REORDER_BUFFER_CHANGE_DELETE:
 					Assert(snapshot_now);
 
-					reloid = RelidByRelfilenode(change->data.tp.relnode.spcNode,
-												change->data.tp.relnode.relNode);
+					reloid = RelidByRelfilenode(change->data.tp.rlocator.spcNode,
+												change->data.tp.rlocator.relNode);
 
 					/*
 					 * Mapped catalog tuple without data, emitted while
@@ -2161,7 +2161,7 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 						goto change_done;
 					else if (reloid == InvalidOid)
 						elog(ERROR, "could not map filenode \"%s\" to relation OID",
-							 relpathperm(change->data.tp.relnode,
+							 relpathperm(change->data.tp.rlocator,
 										 MAIN_FORKNUM));
 
 					relation = RelationIdGetRelation(reloid);
@@ -2169,7 +2169,7 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 					if (!RelationIsValid(relation))
 						elog(ERROR, "could not open relation with OID %u (for filenode \"%s\")",
 							 reloid,
-							 relpathperm(change->data.tp.relnode,
+							 relpathperm(change->data.tp.rlocator,
 										 MAIN_FORKNUM));
 
 					if (!RelationIsLogicallyLogged(relation))
@@ -3165,7 +3165,7 @@ ReorderBufferChangeMemoryUpdate(ReorderBuffer *rb,
  */
 void
 ReorderBufferAddNewTupleCids(ReorderBuffer *rb, TransactionId xid,
-							 XLogRecPtr lsn, RelFileNode node,
+							 XLogRecPtr lsn, RelFileLocator locator,
 							 ItemPointerData tid, CommandId cmin,
 							 CommandId cmax, CommandId combocid)
 {
@@ -3174,7 +3174,7 @@ ReorderBufferAddNewTupleCids(ReorderBuffer *rb, TransactionId xid,
 
 	txn = ReorderBufferTXNByXid(rb, xid, true, NULL, lsn, true);
 
-	change->data.tuplecid.node = node;
+	change->data.tuplecid.locator = locator;
 	change->data.tuplecid.tid = tid;
 	change->data.tuplecid.cmin = cmin;
 	change->data.tuplecid.cmax = cmax;
@@ -4870,9 +4870,9 @@ DisplayMapping(HTAB *tuplecid_data)
 	while ((ent = (ReorderBufferTupleCidEnt *) hash_seq_search(&hstat)) != NULL)
 	{
 		elog(DEBUG3, "mapping: node: %u/%u/%u tid: %u/%u cmin: %u, cmax: %u",
-			 ent->key.relnode.dbNode,
-			 ent->key.relnode.spcNode,
-			 ent->key.relnode.relNode,
+			 ent->key.rlocator.dbNode,
+			 ent->key.rlocator.spcNode,
+			 ent->key.rlocator.relNode,
 			 ItemPointerGetBlockNumber(&ent->key.tid),
 			 ItemPointerGetOffsetNumber(&ent->key.tid),
 			 ent->cmin,
@@ -4932,7 +4932,7 @@ ApplyLogicalMappingFile(HTAB *tuplecid_data, Oid relid, const char *fname)
 							path, readBytes,
 							(int32) sizeof(LogicalRewriteMappingData))));
 
-		key.relnode = map.old_node;
+		key.rlocator = map.old_locator;
 		ItemPointerCopy(&map.old_tid,
 						&key.tid);
 
@@ -4947,7 +4947,7 @@ ApplyLogicalMappingFile(HTAB *tuplecid_data, Oid relid, const char *fname)
 		if (!ent)
 			continue;
 
-		key.relnode = map.new_node;
+		key.rlocator = map.new_locator;
 		ItemPointerCopy(&map.new_tid,
 						&key.tid);
 
@@ -5123,7 +5123,7 @@ ResolveCminCmaxDuringDecoding(HTAB *tuplecid_data,
 	 * get relfilenode from the buffer, no convenient way to access it other
 	 * than that.
 	 */
-	BufferGetTag(buffer, &key.relnode, &forkno, &blockno);
+	BufferGetTag(buffer, &key.rlocator, &forkno, &blockno);
 
 	/* tuples can only be in the main fork */
 	Assert(forkno == MAIN_FORKNUM);

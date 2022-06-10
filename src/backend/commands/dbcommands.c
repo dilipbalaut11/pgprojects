@@ -101,7 +101,7 @@ typedef struct
  */
 typedef struct CreateDBRelInfo
 {
-	RelFileNode rnode;			/* physical relation identifier */
+	RelFileLocator rlocator;			/* physical relation identifier */
 	Oid			reloid;			/* relation oid */
 	bool		permanent;		/* relation is permanent or unlogged */
 } CreateDBRelInfo;
@@ -127,7 +127,7 @@ static void CreateDatabaseUsingWalLog(Oid src_dboid, Oid dboid, Oid src_tsid,
 static List *ScanSourceDatabasePgClass(Oid srctbid, Oid srcdbid, char *srcpath);
 static List *ScanSourceDatabasePgClassPage(Page page, Buffer buf, Oid tbid,
 										   Oid dbid, char *srcpath,
-										   List *rnodelist, Snapshot snapshot);
+										   List *rlocatorlist, Snapshot snapshot);
 static CreateDBRelInfo *ScanSourceDatabasePgClassTuple(HeapTupleData *tuple,
 													   Oid tbid, Oid dbid,
 													   char *srcpath);
@@ -147,12 +147,12 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 {
 	char	   *srcpath;
 	char	   *dstpath;
-	List	   *rnodelist = NULL;
+	List	   *rlocatorlist = NULL;
 	ListCell   *cell;
 	LockRelId	srcrelid;
 	LockRelId	dstrelid;
-	RelFileNode srcrnode;
-	RelFileNode dstrnode;
+	RelFileLocator srcrlocator;
+	RelFileLocator dstrlocator;
 	CreateDBRelInfo *relinfo;
 
 	/* Get source and destination database paths. */
@@ -165,9 +165,9 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 	/* Copy relmap file from source database to the destination database. */
 	RelationMapCopy(dst_dboid, dst_tsid, srcpath, dstpath);
 
-	/* Get list of relfilenodes to copy from the source database. */
-	rnodelist = ScanSourceDatabasePgClass(src_tsid, src_dboid, srcpath);
-	Assert(rnodelist != NIL);
+	/* Get list of relfilelocators to copy from the source database. */
+	rlocatorlist = ScanSourceDatabasePgClass(src_tsid, src_dboid, srcpath);
+	Assert(rlocatorlist != NIL);
 
 	/*
 	 * Database IDs will be the same for all relations so set them before
@@ -176,11 +176,11 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 	srcrelid.dbId = src_dboid;
 	dstrelid.dbId = dst_dboid;
 
-	/* Loop over our list of relfilenodes and copy each one. */
-	foreach(cell, rnodelist)
+	/* Loop over our list of relfilelocators and copy each one. */
+	foreach(cell, rlocatorlist)
 	{
 		relinfo = lfirst(cell);
-		srcrnode = relinfo->rnode;
+		srcrlocator = relinfo->rlocator;
 
 		/*
 		 * If the relation is from the source db's default tablespace then we
@@ -188,13 +188,13 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 		 * Otherwise, we need to create in the same tablespace as it is in the
 		 * source database.
 		 */
-		if (srcrnode.spcNode == src_tsid)
-			dstrnode.spcNode = dst_tsid;
+		if (srcrlocator.spcNode == src_tsid)
+			dstrlocator.spcNode = dst_tsid;
 		else
-			dstrnode.spcNode = srcrnode.spcNode;
+			dstrlocator.spcNode = srcrlocator.spcNode;
 
-		dstrnode.dbNode = dst_dboid;
-		dstrnode.relNode = srcrnode.relNode;
+		dstrlocator.dbNode = dst_dboid;
+		dstrlocator.relNode = srcrlocator.relNode;
 
 		/*
 		 * Acquire locks on source and target relations before copying.
@@ -210,7 +210,7 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 		LockRelationId(&dstrelid, AccessShareLock);
 
 		/* Copy relation storage from source to the destination. */
-		CreateAndCopyRelationData(srcrnode, dstrnode, relinfo->permanent);
+		CreateAndCopyRelationData(srcrlocator, dstrlocator, relinfo->permanent);
 
 		/* Release the relation locks. */
 		UnlockRelationId(&srcrelid, AccessShareLock);
@@ -219,7 +219,7 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 
 	pfree(srcpath);
 	pfree(dstpath);
-	list_free_deep(rnodelist);
+	list_free_deep(rlocatorlist);
 }
 
 /*
@@ -246,13 +246,13 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 static List *
 ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 {
-	RelFileNode rnode;
+	RelFileLocator rlocator;
 	BlockNumber nblocks;
 	BlockNumber blkno;
 	Buffer		buf;
 	Oid			relfilenode;
 	Page		page;
-	List	   *rnodelist = NIL;
+	List	   *rlocatorlist = NIL;
 	LockRelId	relid;
 	Relation	rel;
 	Snapshot	snapshot;
@@ -267,10 +267,10 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	relid.relId = RelationRelationId;
 	LockRelationId(&relid, AccessShareLock);
 
-	/* Prepare a RelFileNode for the pg_class relation. */
-	rnode.spcNode = tbid;
-	rnode.dbNode = dbid;
-	rnode.relNode = relfilenode;
+	/* Prepare a RelFileLocator for the pg_class relation. */
+	rlocator.spcNode = tbid;
+	rlocator.dbNode = dbid;
+	rlocator.relNode = relfilenode;
 
 	/*
 	 * We can't use a real relcache entry for a relation in some other
@@ -279,7 +279,7 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	 * used the smgr layer directly, we would have to worry about
 	 * invalidations.
 	 */
-	rel = CreateFakeRelcacheEntry(rnode);
+	rel = CreateFakeRelcacheEntry(rlocator);
 	nblocks = smgrnblocks(RelationGetSmgr(rel), MAIN_FORKNUM);
 	FreeFakeRelcacheEntry(rel);
 
@@ -299,7 +299,7 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	{
 		CHECK_FOR_INTERRUPTS();
 
-		buf = ReadBufferWithoutRelcache(rnode, MAIN_FORKNUM, blkno,
+		buf = ReadBufferWithoutRelcache(rlocator, MAIN_FORKNUM, blkno,
 										RBM_NORMAL, bstrategy, false);
 
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
@@ -310,9 +310,9 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 			continue;
 		}
 
-		/* Append relevant pg_class tuples for current page to rnodelist. */
-		rnodelist = ScanSourceDatabasePgClassPage(page, buf, tbid, dbid,
-												  srcpath, rnodelist,
+		/* Append relevant pg_class tuples for current page to rlocatorlist. */
+		rlocatorlist = ScanSourceDatabasePgClassPage(page, buf, tbid, dbid,
+												  srcpath, rlocatorlist,
 												  snapshot);
 
 		UnlockReleaseBuffer(buf);
@@ -321,16 +321,16 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	/* Release relation lock. */
 	UnlockRelationId(&relid, AccessShareLock);
 
-	return rnodelist;
+	return rlocatorlist;
 }
 
 /*
  * Scan one page of the source database's pg_class relation and add relevant
- * entries to rnodelist. The return value is the updated list.
+ * entries to rlocatorlist. The return value is the updated list.
  */
 static List *
 ScanSourceDatabasePgClassPage(Page page, Buffer buf, Oid tbid, Oid dbid,
-							  char *srcpath, List *rnodelist,
+							  char *srcpath, List *rlocatorlist,
 							  Snapshot snapshot)
 {
 	BlockNumber blkno = BufferGetBlockNumber(buf);
@@ -376,11 +376,11 @@ ScanSourceDatabasePgClassPage(Page page, Buffer buf, Oid tbid, Oid dbid,
 			relinfo = ScanSourceDatabasePgClassTuple(&tuple, tbid, dbid,
 													 srcpath);
 			if (relinfo != NULL)
-				rnodelist = lappend(rnodelist, relinfo);
+				rlocatorlist = lappend(rlocatorlist, relinfo);
 		}
 	}
 
-	return rnodelist;
+	return rlocatorlist;
 }
 
 /*
@@ -435,12 +435,12 @@ ScanSourceDatabasePgClassTuple(HeapTupleData *tuple, Oid tbid, Oid dbid,
 	/* Prepare a rel info element and add it to the list. */
 	relinfo = (CreateDBRelInfo *) palloc(sizeof(CreateDBRelInfo));
 	if (OidIsValid(classForm->reltablespace))
-		relinfo->rnode.spcNode = classForm->reltablespace;
+		relinfo->rlocator.spcNode = classForm->reltablespace;
 	else
-		relinfo->rnode.spcNode = tbid;
+		relinfo->rlocator.spcNode = tbid;
 
-	relinfo->rnode.dbNode = dbid;
-	relinfo->rnode.relNode = relfilenode;
+	relinfo->rlocator.dbNode = dbid;
+	relinfo->rlocator.relNode = relfilenode;
 	relinfo->reloid = classForm->oid;
 
 	/* Temporary relations were rejected above. */

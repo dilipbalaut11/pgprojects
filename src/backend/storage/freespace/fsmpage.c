@@ -268,13 +268,13 @@ restart:
 			 *
 			 * Fix the corruption and restart.
 			 */
-			RelFileNode rnode;
+			RelFileLocator rlocator;
 			ForkNumber	forknum;
 			BlockNumber blknum;
 
-			BufferGetTag(buf, &rnode, &forknum, &blknum);
+			BufferGetTag(buf, &rlocator, &forknum, &blknum);
 			elog(DEBUG1, "fixing corrupt FSM block %u, relation %u/%u/%u",
-				 blknum, rnode.spcNode, rnode.dbNode, rnode.relNode);
+				 blknum, rlocator.spcNode, rlocator.dbNode, rlocator.relNode);
 
 			/* make sure we hold an exclusive lock */
 			if (!exclusive_lock_held)

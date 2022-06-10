@@ -2255,8 +2255,8 @@ ReindexObjectType
 ReindexParams
 ReindexStmt
 ReindexType
-RelFileNode
-RelFileNodeBackend
+RelFileLocator
+RelFileLocatorBackend
 RelIdCacheEnt
 RelInfo
 RelInfoArr

@@ -219,7 +219,7 @@ XLogRecGetBlockRefInfo(XLogReaderState *record, bool pretty,
 
 	for (block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
 	{
-		RelFileNode rnode;
+		RelFileLocator rnode;
 		ForkNumber	forknum;
 		BlockNumber blk;
 

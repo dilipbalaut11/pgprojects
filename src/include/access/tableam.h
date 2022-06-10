@@ -566,7 +566,7 @@ typedef struct TableAmRoutine
 	 * Note that only the subset of the relcache filled by
 	 * RelationBuildLocalRelation() can be relied upon and that the relation's
 	 * catalog entries will either not yet exist (new relation), or will still
-	 * reference the old relfilenode.
+	 * reference the old relfilelocator.
 	 *
 	 * As output *freezeXid, *minmulti must be set to the values appropriate
 	 * for pg_class.{relfrozenxid, relminmxid}. For AMs that don't need those
@@ -576,16 +576,16 @@ typedef struct TableAmRoutine
 	 * See also table_relation_set_new_filenode().
 	 */
 	void		(*relation_set_new_filenode) (Relation rel,
-											  const RelFileNode *newrnode,
+											  const RelFileLocator *newrlocator,
 											  char persistence,
 											  TransactionId *freezeXid,
 											  MultiXactId *minmulti);
 
 	/*
 	 * This callback needs to remove all contents from `rel`'s current
-	 * relfilenode. No provisions for transactional behaviour need to be made.
-	 * Often this can be implemented by truncating the underlying storage to
-	 * its minimal size.
+	 * relfilelocator. No provisions for transactional behaviour need to be
+	 * made.  Often this can be implemented by truncating the underlying
+	 * storage to its minimal size.
 	 *
 	 * See also table_relation_nontransactional_truncate().
 	 */
@@ -598,7 +598,7 @@ typedef struct TableAmRoutine
 	 * storage, unless it contains references to the tablespace internally.
 	 */
 	void		(*relation_copy_data) (Relation rel,
-									   const RelFileNode *newrnode);
+									   const RelFileLocator *newrlocator);
 
 	/* See table_relation_copy_for_cluster() */
 	void		(*relation_copy_for_cluster) (Relation NewTable,
@@ -1577,12 +1577,12 @@ table_finish_bulk_insert(Relation rel, int options)
  */
 
 /*
- * Create storage for `rel` in `newrnode`, with persistence set to
+ * Create storage for `rel` in `newrlocator`, with persistence set to
  * `persistence`.
  *
  * This is used both during relation creation and various DDL operations to
- * create a new relfilenode that can be filled from scratch.  When creating
- * new storage for an existing relfilenode, this should be called before the
+ * create a new relfilelocator that can be filled from scratch.  When creating
+ * new storage for an existing relfilelocator, this should be called before the
  * relcache entry has been updated.
  *
  * *freezeXid, *minmulti are set to the xid / multixact horizon for the table
@@ -1590,20 +1590,20 @@ table_finish_bulk_insert(Relation rel, int options)
  */
 static inline void
 table_relation_set_new_filenode(Relation rel,
-								const RelFileNode *newrnode,
+								const RelFileLocator *newrlocator,
 								char persistence,
 								TransactionId *freezeXid,
 								MultiXactId *minmulti)
 {
-	rel->rd_tableam->relation_set_new_filenode(rel, newrnode, persistence,
+	rel->rd_tableam->relation_set_new_filenode(rel, newrlocator, persistence,
 											   freezeXid, minmulti);
 }
 
 /*
  * Remove all table contents from `rel`, in a non-transactional manner.
  * Non-transactional meaning that there's no need to support rollbacks. This
- * commonly only is used to perform truncations for relfilenodes created in the
- * current transaction.
+ * commonly only is used to perform truncations for relfilelocators created in
+ * the current transaction.
  */
 static inline void
 table_relation_nontransactional_truncate(Relation rel)
@@ -1612,15 +1612,15 @@ table_relation_nontransactional_truncate(Relation rel)
 }
 
 /*
- * Copy data from `rel` into the new relfilenode `newrnode`. The new
- * relfilenode may not have storage associated before this function is
+ * Copy data from `rel` into the new relfilelocator `newrlocator`. The new
+ * relfilelocator may not have storage associated before this function is
  * called. This is only supposed to be used for low level operations like
  * changing a relation's tablespace.
  */
 static inline void
-table_relation_copy_data(Relation rel, const RelFileNode *newrnode)
+table_relation_copy_data(Relation rel, const RelFileLocator *newrlocator)
 {
-	rel->rd_tableam->relation_copy_data(rel, newrnode);
+	rel->rd_tableam->relation_copy_data(rel, newrlocator);
 }
 
 /*

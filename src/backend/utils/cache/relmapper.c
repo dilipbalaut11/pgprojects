@@ -983,12 +983,12 @@ write_relmap_file(RelMapFile *newmap, bool write_wal, bool send_sinval,
 
 		for (i = 0; i < newmap->num_mappings; i++)
 		{
-			RelFileNode rnode;
+			RelFileLocator rlocator;
 
-			rnode.spcNode = tsid;
-			rnode.dbNode = dbid;
-			rnode.relNode = newmap->mappings[i].mapfilenode;
-			RelationPreserveStorage(rnode, false);
+			rlocator.spcNode = tsid;
+			rlocator.dbNode = dbid;
+			rlocator.relNode = newmap->mappings[i].mapfilenode;
+			RelationPreserveStorage(rlocator, false);
 		}
 	}
 

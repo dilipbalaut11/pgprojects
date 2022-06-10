@@ -1300,7 +1300,7 @@ retry:
 }
 
 /*
- * Initialize the physical addressing info (RelFileNode) for a relcache entry
+ * Initialize the physical addressing info (RelFileLocator) for a relcache entry
  *
  * Note: at the physical level, relations in the pg_global tablespace must
  * be treated as shared, even if relisshared isn't set.  Hence we do not
@@ -1309,20 +1309,20 @@ retry:
 static void
 RelationInitPhysicalAddr(Relation relation)
 {
-	Oid			oldnode = relation->rd_node.relNode;
+	Oid			oldnode = relation->rd_locator.relNode;
 
 	/* these relations kinds never have storage */
 	if (!RELKIND_HAS_STORAGE(relation->rd_rel->relkind))
 		return;
 
 	if (relation->rd_rel->reltablespace)
-		relation->rd_node.spcNode = relation->rd_rel->reltablespace;
+		relation->rd_locator.spcNode = relation->rd_rel->reltablespace;
 	else
-		relation->rd_node.spcNode = MyDatabaseTableSpace;
-	if (relation->rd_node.spcNode == GLOBALTABLESPACE_OID)
-		relation->rd_node.dbNode = InvalidOid;
+		relation->rd_locator.spcNode = MyDatabaseTableSpace;
+	if (relation->rd_locator.spcNode == GLOBALTABLESPACE_OID)
+		relation->rd_locator.dbNode = InvalidOid;
 	else
-		relation->rd_node.dbNode = MyDatabaseId;
+		relation->rd_locator.dbNode = MyDatabaseId;
 
 	if (relation->rd_rel->relfilenode)
 	{
@@ -1356,15 +1356,15 @@ RelationInitPhysicalAddr(Relation relation)
 			heap_freetuple(phys_tuple);
 		}
 
-		relation->rd_node.relNode = relation->rd_rel->relfilenode;
+		relation->rd_locator.relNode = relation->rd_rel->relfilenode;
 	}
 	else
 	{
 		/* Consult the relation mapper */
-		relation->rd_node.relNode =
+		relation->rd_locator.relNode =
 			RelationMapOidToFilenode(relation->rd_id,
 									 relation->rd_rel->relisshared);
-		if (!OidIsValid(relation->rd_node.relNode))
+		if (!OidIsValid(relation->rd_locator.relNode))
 			elog(ERROR, "could not find relation mapping for relation \"%s\", OID %u",
 				 RelationGetRelationName(relation), relation->rd_id);
 	}
@@ -1374,9 +1374,9 @@ RelationInitPhysicalAddr(Relation relation)
 	 * rd_firstRelfilenodeSubid.  No subtransactions start or end while in
 	 * parallel mode, so the specific SubTransactionId does not matter.
 	 */
-	if (IsParallelWorker() && oldnode != relation->rd_node.relNode)
+	if (IsParallelWorker() && oldnode != relation->rd_locator.relNode)
 	{
-		if (RelFileNodeSkippingWAL(relation->rd_node))
+		if (RelFileLocatorSkippingWAL(relation->rd_locator))
 			relation->rd_firstRelfilenodeSubid = TopSubTransactionId;
 		else
 			relation->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
@@ -2967,7 +2967,7 @@ RelationCacheInvalidate(bool debug_discard)
 		else
 		{
 			/*
-			 * If it's a mapped relation, immediately update its rd_node in
+			 * If it's a mapped relation, immediately update its rd_locator in
 			 * case its relfilenode changed.  We must do this during phase 1
 			 * in case the relation is consulted during rebuild of other
 			 * relcache entries in phase 2.  It's safe since consulting the
@@ -3080,7 +3080,7 @@ AssertPendingSyncConsistency(Relation relation)
 	  RELKIND_HAS_STORAGE(relation->rd_rel->relkind)) ||
 	 relation->rd_firstRelfilenodeSubid != InvalidSubTransactionId);
 
-	Assert(relcache_verdict == RelFileNodeSkippingWAL(relation->rd_node));
+	Assert(relcache_verdict == RelFileLocatorSkippingWAL(relation->rd_locator));
 
 	if (relation->rd_droppedSubid != InvalidSubTransactionId)
 		Assert(!relation->rd_isvalid &&
@@ -3705,11 +3705,11 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 	Form_pg_class classform;
 	MultiXactId minmulti = InvalidMultiXactId;
 	TransactionId freezeXid = InvalidTransactionId;
-	RelFileNode newrnode;
+	RelFileLocator newrlocator;
 
 	/* Allocate a new relfilenode */
-	newrelfilenode = GetNewRelFileNode(relation->rd_rel->reltablespace, NULL,
-									   persistence);
+	newrelfilenode = GetNewRelFileNode(relation->rd_rel->reltablespace,
+										  NULL, persistence);
 
 	/*
 	 * Get a writable copy of the pg_class tuple for the given relation.
@@ -3736,12 +3736,12 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 	 * NOTE: If relevant for the AM, any conflict in relfilenode value will be
 	 * caught here, if GetNewRelFileNode messes up for any reason.
 	 */
-	newrnode = relation->rd_node;
-	newrnode.relNode = newrelfilenode;
+	newrlocator = relation->rd_locator;
+	newrlocator.relNode = newrelfilenode;
 
 	if (RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind))
 	{
-		table_relation_set_new_filenode(relation, &newrnode,
+		table_relation_set_new_filenode(relation, &newrlocator,
 										persistence,
 										&freezeXid, &minmulti);
 	}
@@ -3750,7 +3750,7 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 		/* handle these directly, at least for now */
 		SMgrRelation srel;
 
-		srel = RelationCreateStorage(newrnode, persistence, true);
+		srel = RelationCreateStorage(newrlocator, persistence, true);
 		smgrclose(srel);
 	}
 	else
@@ -3833,8 +3833,8 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
  *
  * Code that modifies pg_class.reltablespace or pg_class.relfilenode must call
  * this.  The call shall precede any code that might insert WAL records whose
- * replay would modify bytes in the new RelFileNode, and the call shall follow
- * any WAL modifying bytes in the prior RelFileNode.  See struct RelationData.
+ * replay would modify bytes in the new RelFileLocator, and the call shall follow
+ * any WAL modifying bytes in the prior RelFileLocator.  See struct RelationData.
  * Ideally, call this as near as possible to the CommandCounterIncrement()
  * that makes the pg_class change visible (before it or after it); that
  * minimizes the chance of future development adding a forbidden WAL insertion

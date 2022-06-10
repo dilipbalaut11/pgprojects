@@ -138,7 +138,7 @@ struct XLogPrefetcher
 	dlist_head	filter_queue;
 
 	/* Book-keeping to avoid repeat prefetches. */
-	RelFileNode recent_rnode[XLOGPREFETCHER_SEQ_WINDOW_SIZE];
+	RelFileLocator recent_rnode[XLOGPREFETCHER_SEQ_WINDOW_SIZE];
 	BlockNumber recent_block[XLOGPREFETCHER_SEQ_WINDOW_SIZE];
 	int			recent_idx;
 
@@ -161,7 +161,7 @@ struct XLogPrefetcher
  */
 typedef struct XLogPrefetcherFilter
 {
-	RelFileNode rnode;
+	RelFileLocator rnode;
 	XLogRecPtr	filter_until_replayed;
 	BlockNumber filter_from_block;
 	dlist_node	link;
@@ -187,11 +187,11 @@ typedef struct XLogPrefetchStats
 } XLogPrefetchStats;
 
 static inline void XLogPrefetcherAddFilter(XLogPrefetcher *prefetcher,
-										   RelFileNode rnode,
+										   RelFileLocator rnode,
 										   BlockNumber blockno,
 										   XLogRecPtr lsn);
 static inline bool XLogPrefetcherIsFiltered(XLogPrefetcher *prefetcher,
-											RelFileNode rnode,
+											RelFileLocator rnode,
 											BlockNumber blockno);
 static inline void XLogPrefetcherCompleteFilters(XLogPrefetcher *prefetcher,
 												 XLogRecPtr replaying_lsn);
@@ -365,7 +365,7 @@ XLogPrefetcherAllocate(XLogReaderState *reader)
 {
 	XLogPrefetcher *prefetcher;
 	static HASHCTL hash_table_ctl = {
-		.keysize = sizeof(RelFileNode),
+		.keysize = sizeof(RelFileLocator),
 		.entrysize = sizeof(XLogPrefetcherFilter)
 	};
 
@@ -568,7 +568,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 				{
 					xl_dbase_create_file_copy_rec *xlrec =
 					(xl_dbase_create_file_copy_rec *) record->main_data;
-					RelFileNode rnode = {InvalidOid, xlrec->db_id, InvalidOid};
+					RelFileLocator rnode = {InvalidOid, xlrec->db_id, InvalidOid};
 
 					/*
 					 * Don't try to prefetch anything in this database until
@@ -605,7 +605,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 						 * to discover the problem via extra syscalls that
 						 * report ENOENT.
 						 */
-						XLogPrefetcherAddFilter(prefetcher, xlrec->rnode, 0,
+						XLogPrefetcherAddFilter(prefetcher, xlrec->rlocator, 0,
 												record->lsn);
 
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
@@ -627,7 +627,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 					 * Don't consider prefetching anything in the truncated
 					 * range until the truncation has been performed.
 					 */
-					XLogPrefetcherAddFilter(prefetcher, xlrec->rnode,
+					XLogPrefetcherAddFilter(prefetcher, xlrec->rlocator,
 											xlrec->blkno,
 											record->lsn);
 
@@ -688,7 +688,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 			}
 
 			/* Should we skip prefetching this block due to a filter? */
-			if (XLogPrefetcherIsFiltered(prefetcher, block->rnode, block->blkno))
+			if (XLogPrefetcherIsFiltered(prefetcher, block->rlocator, block->blkno))
 			{
 				XLogPrefetchIncrement(&SharedStats->skip_new);
 				return LRQ_NEXT_NO_IO;
@@ -698,7 +698,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 			for (int i = 0; i < XLOGPREFETCHER_SEQ_WINDOW_SIZE; ++i)
 			{
 				if (block->blkno == prefetcher->recent_block[i] &&
-					RelFileNodeEquals(block->rnode, prefetcher->recent_rnode[i]))
+					RelFileLocatorEquals(block->rlocator, prefetcher->recent_rnode[i]))
 				{
 					/*
 					 * XXX If we also remembered where it was, we could set
@@ -709,7 +709,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 					return LRQ_NEXT_NO_IO;
 				}
 			}
-			prefetcher->recent_rnode[prefetcher->recent_idx] = block->rnode;
+			prefetcher->recent_rnode[prefetcher->recent_idx] = block->rlocator;
 			prefetcher->recent_block[prefetcher->recent_idx] = block->blkno;
 			prefetcher->recent_idx =
 				(prefetcher->recent_idx + 1) % XLOGPREFETCHER_SEQ_WINDOW_SIZE;
@@ -719,7 +719,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 			 * same relation (with some scheme to handle invalidations
 			 * safely), but for now we'll call smgropen() every time.
 			 */
-			reln = smgropen(block->rnode, InvalidBackendId);
+			reln = smgropen(block->rlocator, InvalidBackendId);
 
 			/*
 			 * If the relation file doesn't exist on disk, for example because
@@ -738,7 +738,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 					 reln->smgr_rnode.node.relNode,
 					 LSN_FORMAT_ARGS(record->lsn));
 #endif
-				XLogPrefetcherAddFilter(prefetcher, block->rnode, 0,
+				XLogPrefetcherAddFilter(prefetcher, block->rlocator, 0,
 										record->lsn);
 				XLogPrefetchIncrement(&SharedStats->skip_new);
 				return LRQ_NEXT_NO_IO;
@@ -760,7 +760,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 					 block->blkno,
 					 LSN_FORMAT_ARGS(record->lsn));
 #endif
-				XLogPrefetcherAddFilter(prefetcher, block->rnode, block->blkno,
+				XLogPrefetcherAddFilter(prefetcher, block->rlocator, block->blkno,
 										record->lsn);
 				XLogPrefetchIncrement(&SharedStats->skip_new);
 				return LRQ_NEXT_NO_IO;
@@ -793,9 +793,9 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 				 */
 				elog(ERROR,
 					 "could not prefetch relation %u/%u/%u block %u",
-					 reln->smgr_rnode.node.spcNode,
-					 reln->smgr_rnode.node.dbNode,
-					 reln->smgr_rnode.node.relNode,
+					 reln->smgr_rlocator.locator.spcNode,
+					 reln->smgr_rlocator.locator.dbNode,
+					 reln->smgr_rlocator.locator.relNode,
 					 block->blkno);
 			}
 		}
@@ -856,7 +856,7 @@ pg_stat_get_recovery_prefetch(PG_FUNCTION_ARGS)
  * has been replayed.
  */
 static inline void
-XLogPrefetcherAddFilter(XLogPrefetcher *prefetcher, RelFileNode rnode,
+XLogPrefetcherAddFilter(XLogPrefetcher *prefetcher, RelFileLocator rnode,
 						BlockNumber blockno, XLogRecPtr lsn)
 {
 	XLogPrefetcherFilter *filter;
@@ -913,7 +913,7 @@ XLogPrefetcherCompleteFilters(XLogPrefetcher *prefetcher, XLogRecPtr replaying_l
  * Check if a given block should be skipped due to a filter.
  */
 static inline bool
-XLogPrefetcherIsFiltered(XLogPrefetcher *prefetcher, RelFileNode rnode,
+XLogPrefetcherIsFiltered(XLogPrefetcher *prefetcher, RelFileLocator rnode,
 						 BlockNumber blockno)
 {
 	/*

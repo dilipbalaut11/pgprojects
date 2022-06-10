@@ -725,7 +725,7 @@ then restart recovery.  This is part of the reason for not writing a WAL
 entry until we've successfully done the original action.
 
 
-Skipping WAL for New RelFileNode
+Skipping WAL for New RelFileLocator
 --------------------------------
 
 Under wal_level=minimal, if a change modifies a relfilenode that ROLLBACK

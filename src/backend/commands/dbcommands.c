@@ -127,7 +127,7 @@ static void CreateDatabaseUsingWalLog(Oid src_dboid, Oid dboid, Oid src_tsid,
 static List *ScanSourceDatabasePgClass(Oid srctbid, Oid srcdbid, char *srcpath);
 static List *ScanSourceDatabasePgClassPage(Page page, Buffer buf, Oid tbid,
 										   Oid dbid, char *srcpath,
-										   List *rnodelist, Snapshot snapshot);
+										   List *rlocatorlist, Snapshot snapshot);
 static CreateDBRelInfo *ScanSourceDatabasePgClassTuple(HeapTupleData *tuple,
 													   Oid tbid, Oid dbid,
 													   char *srcpath);
@@ -147,7 +147,7 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 {
 	char	   *srcpath;
 	char	   *dstpath;
-	List	   *rnodelist = NULL;
+	List	   *rlocatorlist = NULL;
 	ListCell   *cell;
 	LockRelId	srcrelid;
 	LockRelId	dstrelid;
@@ -165,9 +165,9 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 	/* Copy relmap file from source database to the destination database. */
 	RelationMapCopy(dst_dboid, dst_tsid, srcpath, dstpath);
 
-	/* Get list of relfilenodes to copy from the source database. */
-	rnodelist = ScanSourceDatabasePgClass(src_tsid, src_dboid, srcpath);
-	Assert(rnodelist != NIL);
+	/* Get list of relfilelocators to copy from the source database. */
+	rlocatorlist = ScanSourceDatabasePgClass(src_tsid, src_dboid, srcpath);
+	Assert(rlocatorlist != NIL);
 
 	/*
 	 * Database IDs will be the same for all relations so set them before
@@ -176,8 +176,8 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 	srcrelid.dbId = src_dboid;
 	dstrelid.dbId = dst_dboid;
 
-	/* Loop over our list of relfilenodes and copy each one. */
-	foreach(cell, rnodelist)
+	/* Loop over our list of relfilelocators and copy each one. */
+	foreach(cell, rlocatorlist)
 	{
 		relinfo = lfirst(cell);
 		srcrlocator = relinfo->rlocator;
@@ -219,7 +219,7 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 
 	pfree(srcpath);
 	pfree(dstpath);
-	list_free_deep(rnodelist);
+	list_free_deep(rlocatorlist);
 }
 
 /*
@@ -252,7 +252,7 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	Buffer		buf;
 	Oid			relfilenode;
 	Page		page;
-	List	   *rnodelist = NIL;
+	List	   *rlocatorlist = NIL;
 	LockRelId	relid;
 	Relation	rel;
 	Snapshot	snapshot;
@@ -310,9 +310,9 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 			continue;
 		}
 
-		/* Append relevant pg_class tuples for current page to rnodelist. */
-		rnodelist = ScanSourceDatabasePgClassPage(page, buf, tbid, dbid,
-												  srcpath, rnodelist,
+		/* Append relevant pg_class tuples for current page to rlocatorlist. */
+		rlocatorlist = ScanSourceDatabasePgClassPage(page, buf, tbid, dbid,
+												  srcpath, rlocatorlist,
 												  snapshot);
 
 		UnlockReleaseBuffer(buf);
@@ -321,16 +321,16 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	/* Release relation lock. */
 	UnlockRelationId(&relid, AccessShareLock);
 
-	return rnodelist;
+	return rlocatorlist;
 }
 
 /*
  * Scan one page of the source database's pg_class relation and add relevant
- * entries to rnodelist. The return value is the updated list.
+ * entries to rlocatorlist. The return value is the updated list.
  */
 static List *
 ScanSourceDatabasePgClassPage(Page page, Buffer buf, Oid tbid, Oid dbid,
-							  char *srcpath, List *rnodelist,
+							  char *srcpath, List *rlocatorlist,
 							  Snapshot snapshot)
 {
 	BlockNumber blkno = BufferGetBlockNumber(buf);
@@ -376,11 +376,11 @@ ScanSourceDatabasePgClassPage(Page page, Buffer buf, Oid tbid, Oid dbid,
 			relinfo = ScanSourceDatabasePgClassTuple(&tuple, tbid, dbid,
 													 srcpath);
 			if (relinfo != NULL)
-				rnodelist = lappend(rnodelist, relinfo);
+				rlocatorlist = lappend(rlocatorlist, relinfo);
 		}
 	}
 
-	return rnodelist;
+	return rlocatorlist;
 }
 
 /*

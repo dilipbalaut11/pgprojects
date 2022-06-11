@@ -11,8 +11,8 @@
  *
  *-------------------------------------------------------------------------
  */
-#ifndef RELFILENODE_H
-#define RELFILENODE_H
+#ifndef RELFILELOCATOR_H
+#define RELFILELOCATOR_H
 
 #include "common/relpath.h"
 #include "storage/backendid.h"
@@ -62,7 +62,7 @@ typedef struct RelFileLocator
 } RelFileLocator;
 
 /*
- * Augmenting a relfilenode with the backend ID provides all the information
+ * Augmenting a relfilelocator with the backend ID provides all the information
  * we need to locate the physical storage.  The backend ID is InvalidBackendId
  * for regular relations (those accessible to more than one backend), or the
  * owning backend's ID for backend-local relations.  Backend-local relations
@@ -96,4 +96,4 @@ typedef struct RelFileLocatorBackend
 	 (node1).backend == (node2).backend && \
 	 (node1).node.spcNode == (node2).node.spcNode)
 
-#endif							/* RELFILENODE_H */
+#endif							/* RELFILELOCATOR_H */

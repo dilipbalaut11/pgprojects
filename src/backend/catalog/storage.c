@@ -472,7 +472,7 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 	 * We need to log the copied data in WAL iff WAL archiving/streaming is
 	 * enabled AND it's a permanent relation.  This gives the same answer as
 	 * "RelationNeedsWAL(rel) || copying_initfork", because we know the
-	 * current operation created a new relfilenode.
+	 * current operation created a new relfilelocator.
 	 */
 	use_wal = XLogIsNeeded() &&
 		(relpersistence == RELPERSISTENCE_PERMANENT || copying_initfork);
@@ -539,12 +539,12 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 
 /*
  * RelFileLocatorSkippingWAL
- *		Check if a BM_PERMANENT relfilenode is using WAL.
+ *		Check if a BM_PERMANENT relfilelocator is using WAL.
  *
- * Changes of certain relfilenodes must not write WAL; see "Skipping WAL for
- * New RelFileLocator" in src/backend/access/transam/README.  Though it is known
- * from Relation efficiently, this function is intended for the code paths not
- * having access to Relation.
+ * Changes of certain relfilelocator must not write WAL; see "Skipping WAL for
+ * New RelFileLocator" in src/backend/access/transam/README.  Though it is
+ * known from Relation efficiently, this function is intended for the code
+ * paths not having access to Relation.
  */
 bool
 RelFileLocatorSkippingWAL(RelFileLocator rlocator)
@@ -587,11 +587,11 @@ SerializePendingSyncs(Size maxSize, char *startAddress)
 	if (!pendingSyncHash)
 		goto terminate;
 
-	/* Create temporary hash to collect active relfilenodes */
+	/* Create temporary hash to collect active relfilelocators */
 	ctl.keysize = sizeof(RelFileLocator);
 	ctl.entrysize = sizeof(RelFileLocator);
 	ctl.hcxt = CurrentMemoryContext;
-	tmphash = hash_create("tmp relfilenodes",
+	tmphash = hash_create("tmp relfilelocators",
 						  hash_get_num_entries(pendingSyncHash), &ctl,
 						  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 

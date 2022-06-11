@@ -116,7 +116,7 @@ typedef struct ReorderBufferTXNByIdEnt
 	ReorderBufferTXN *txn;
 } ReorderBufferTXNByIdEnt;
 
-/* data structures for (relfilenode, ctid) => (cmin, cmax) mapping */
+/* data structures for (relfilelocator, ctid) => (cmin, cmax) mapping */
 typedef struct ReorderBufferTupleCidKey
 {
 	RelFileLocator rlocator;
@@ -1643,7 +1643,7 @@ ReorderBufferTruncateTXN(ReorderBuffer *rb, ReorderBufferTXN *txn, bool txn_prep
 	}
 
 	/*
-	 * Destroy the (relfilenode, ctid) hashtable, so that we don't leak any
+	 * Destroy the (relfilelocator, ctid) hashtable, so that we don't leak any
 	 * memory. We could also keep the hash table and update it with new ctid
 	 * values, but this seems simpler and good enough for now.
 	 */
@@ -1673,7 +1673,7 @@ ReorderBufferTruncateTXN(ReorderBuffer *rb, ReorderBufferTXN *txn, bool txn_prep
 }
 
 /*
- * Build a hash with a (relfilenode, ctid) -> (cmin, cmax) mapping for use by
+ * Build a hash with a (relfilelocator, ctid) -> (cmin, cmax) mapping for use by
  * HeapTupleSatisfiesHistoricMVCC.
  */
 static void
@@ -3157,7 +3157,7 @@ ReorderBufferChangeMemoryUpdate(ReorderBuffer *rb,
 }
 
 /*
- * Add new (relfilenode, tid) -> (cmin, cmax) mappings.
+ * Add new (relfilelocator, tid) -> (cmin, cmax) mappings.
  *
  * We do not include this change type in memory accounting, because we
  * keep CIDs in a separate list and do not evict them when reaching
@@ -4839,7 +4839,7 @@ ReorderBufferToastReset(ReorderBuffer *rb, ReorderBufferTXN *txn)
  *	 need anymore.
  *
  * To resolve those problems we have a per-transaction hash of (cmin,
- * cmax) tuples keyed by (relfilenode, ctid) which contains the actual
+ * cmax) tuples keyed by (relfilelocator, ctid) which contains the actual
  * (cmin, cmax) values. That also takes care of combo CIDs by simply
  * not caring about them at all. As we have the real cmin/cmax values
  * combo CIDs aren't interesting.
@@ -5120,7 +5120,7 @@ ResolveCminCmaxDuringDecoding(HTAB *tuplecid_data,
 	Assert(!BufferIsLocal(buffer));
 
 	/*
-	 * get relfilenode from the buffer, no convenient way to access it other
+	 * get relfilelocator from the buffer, no convenient way to access it other
 	 * than that.
 	 */
 	BufferGetTag(buffer, &key.rlocator, &forkno, &blockno);

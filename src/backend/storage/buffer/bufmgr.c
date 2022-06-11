@@ -2769,7 +2769,7 @@ BufferGetBlockNumber(Buffer buffer)
 
 /*
  * BufferGetTag
- *		Returns the relfilenode, fork number and block number associated with
+ *		Returns the relfilelocator, fork number and block number associated with
  *		a buffer.
  */
 void
@@ -3315,7 +3315,7 @@ DropRelFileLocatorsAllBuffers(SMgrRelation *smgr_reln, int nnodes)
 							rnode_comparator);
 		}
 
-		/* buffer doesn't belong to any of the given relfilenodes; skip it */
+		/* buffer doesn't belong to any of the given relfilelocators; skip it */
 		if (rlocator == NULL)
 			continue;
 
@@ -3658,7 +3658,7 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 							  rnode_comparator);
 		}
 
-		/* buffer doesn't belong to any of the given relfilenodes; skip it */
+		/* buffer doesn't belong to any of the given relfilelocators; skip it */
 		if (srelent == NULL)
 			continue;
 
@@ -4034,7 +4034,7 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 			(pg_atomic_read_u32(&bufHdr->state) & BM_PERMANENT))
 		{
 			/*
-			 * If we must not write WAL, due to a relfilenode-specific
+			 * If we must not write WAL, due to a relfilelocator-specific
 			 * condition or being in recovery, don't dirty the page.  We can
 			 * set the hint, just not dirty the page as a result so the hint
 			 * is lost when we evict the page or shutdown.

@@ -742,7 +742,7 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
  * When doing logical decoding - which relies on using cmin/cmax of catalog
  * tuples, via xl_heap_new_cid records - heap rewrites have to log enough
  * information to allow the decoding backend to update its internal mapping
- * of (relfilenode,ctid) => (cmin, cmax) to be correct for the rewritten heap.
+ * of (relfilelocator,ctid) => (cmin, cmax) to be correct for the rewritten heap.
  *
  * For that, every time we find a tuple that's been modified in a catalog
  * relation within the xmin horizon of any decoding slot, we log a mapping

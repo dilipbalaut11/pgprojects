@@ -3318,7 +3318,7 @@ CheckRelationTableSpaceMove(Relation rel, Oid newTableSpaceId)
  *		Set new reltablespace and relfilenode in pg_class entry.
  *
  * newTableSpaceId is the new tablespace for the relation, and
- * newRelFileLocator its new filenode.  If newRelFileLocator is InvalidOid,
+ * newRelFileNode its new filenode.  If newRelFileNode is InvalidOid,
  * this field is not updated.
  *
  * NOTE: The caller must hold AccessExclusiveLock on the relation.
@@ -3331,7 +3331,7 @@ CheckRelationTableSpaceMove(Relation rel, Oid newTableSpaceId)
 void
 SetRelationTableSpace(Relation rel,
 					  Oid newTableSpaceId,
-					  Oid newRelFileLocator)
+					  Oid newRelFileNode)
 {
 	Relation	pg_class;
 	HeapTuple	tuple;
@@ -3351,8 +3351,8 @@ SetRelationTableSpace(Relation rel,
 	/* Update the pg_class row. */
 	rd_rel->reltablespace = (newTableSpaceId == MyDatabaseTableSpace) ?
 		InvalidOid : newTableSpaceId;
-	if (OidIsValid(newRelFileLocator))
-		rd_rel->relfilenode = newRelFileLocator;
+	if (OidIsValid(newRelFileNode))
+		rd_rel->relfilenode = newRelFileNode;
 	CatalogTupleUpdate(pg_class, &tuple->t_self, tuple);
 
 	/*
@@ -14340,7 +14340,7 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 {
 	Relation	rel;
 	Oid			reltoastrelid;
-	Oid			newrellocator;
+	Oid			newrelnode;
 	RelFileLocator newrlocator;
 	List	   *reltoastidxids = NIL;
 	ListCell   *lc;
@@ -14373,12 +14373,12 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	 * Relfilenodes are not unique in databases across tablespaces, so we need
 	 * to allocate a new one in the new tablespace.
 	 */
-	newrellocator = GetNewRelFileNode(newTableSpace, NULL,
+	newrelnode = GetNewRelFileNode(newTableSpace, NULL,
 										 rel->rd_rel->relpersistence);
 
 	/* Open old and new relation */
 	newrlocator = rel->rd_locator;
-	newrlocator.relNode = newrellocator;
+	newrlocator.relNode = newrelnode;
 	newrlocator.spcNode = newTableSpace;
 
 	/* hand off to AM to actually create the new filenode and copy the data */
@@ -14400,7 +14400,7 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	 * the updated pg_class entry), but that's forbidden with
 	 * CheckRelationTableSpaceMove().
 	 */
-	SetRelationTableSpace(rel, newTableSpace, newrellocator);
+	SetRelationTableSpace(rel, newTableSpace, newrelnode);
 
 	InvokeObjectPostAlterHook(RelationRelationId, RelationGetRelid(rel), 0);
 
@@ -14648,7 +14648,7 @@ index_copy_data(Relation rel, RelFileLocator newrlocator)
 	 * Create and copy all forks of the relation, and schedule unlinking of
 	 * old physical files.
 	 *
-	 * NOTE: any conflict in relfilenode value will be caught in
+	 * NOTE: any conflict in relfilelocator value will be caught in
 	 * RelationCreateStorage().
 	 */
 	RelationCreateStorage(newrlocator, rel->rd_rel->relpersistence, true);

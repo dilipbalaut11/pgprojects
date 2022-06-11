@@ -370,7 +370,7 @@ typedef struct xl_heap_new_cid
 	CommandId	combocid;		/* just for debugging */
 
 	/*
-	 * Store the relfilenode/ctid pair to facilitate lookups.
+	 * Store the relfilelocator/ctid pair to facilitate lookups.
 	 */
 	RelFileLocator target_locator;
 	ItemPointerData target_tid;

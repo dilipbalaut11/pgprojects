@@ -305,7 +305,7 @@ typedef struct xl_xact_commit
 	/* xl_xact_xinfo follows if XLOG_XACT_HAS_INFO */
 	/* xl_xact_dbinfo follows if XINFO_HAS_DBINFO */
 	/* xl_xact_subxacts follows if XINFO_HAS_SUBXACT */
-	/* xl_xact_relfilelocators follows if XINFO_HAS_RELFILENODES */
+	/* xl_xact_relfilelocators follows if XINFO_HAS_RELFILELOCATORS */
 	/* xl_xact_stats_items follows if XINFO_HAS_DROPPED_STATS */
 	/* xl_xact_invals follows if XINFO_HAS_INVALS */
 	/* xl_xact_twophase follows if XINFO_HAS_TWOPHASE */

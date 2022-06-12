@@ -239,7 +239,7 @@ XLogRecGetBlockRefInfo(XLogReaderState *record, bool pretty,
 			appendStringInfo(buf,
 							 "blkref #%d: rel %u/%u/%u fork %s blk %u",
 							 block_id,
-							 rnode.spcNode, rnode.dbNode, rnode.relNode,
+							 rnode.spcNode, rnode.dbNode, rnode.relNumber,
 							 forkNames[forknum],
 							 blk);
 
@@ -299,7 +299,7 @@ XLogRecGetBlockRefInfo(XLogReaderState *record, bool pretty,
 				appendStringInfo(buf,
 								 ", blkref #%d: rel %u/%u/%u fork %s blk %u",
 								 block_id,
-								 rnode.spcNode, rnode.dbNode, rnode.relNode,
+								 rnode.spcNode, rnode.dbNode, rnode.relNumber,
 								 forkNames[forknum],
 								 blk);
 			}
@@ -308,7 +308,7 @@ XLogRecGetBlockRefInfo(XLogReaderState *record, bool pretty,
 				appendStringInfo(buf,
 								 ", blkref #%d: rel %u/%u/%u blk %u",
 								 block_id,
-								 rnode.spcNode, rnode.dbNode, rnode.relNode,
+								 rnode.spcNode, rnode.dbNode, rnode.relNumber,
 								 blk);
 			}
 

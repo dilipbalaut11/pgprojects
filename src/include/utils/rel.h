@@ -67,42 +67,42 @@ typedef struct RelationData
 	/*----------
 	 * rd_createSubid is the ID of the highest subtransaction the rel has
 	 * survived into or zero if the rel or its rd_locator was created before the
-	 * current top transaction.  (IndexStmt.oldNode leads to the case of a new
-	 * rel with an old rd_locator.)  rd_firstRelfilenodeSubid is the ID of the
+	 * current top transaction.  (IndexStmt.oldNumber leads to the case of a new
+	 * rel with an old rd_locator.)  rd_firstRelfilenumberSubid is the ID of the
 	 * highest subtransaction an rd_locator change has survived into or zero if
 	 * rd_locator matches the value it had at the start of the current top
 	 * transaction.  (Rolling back the subtransaction that
-	 * rd_firstRelfilenodeSubid denotes would restore rd_locator to the value it
+	 * rd_firstRelfilenumberSubid denotes would restore rd_locator to the value it
 	 * had at the start of the current top transaction.  Rolling back any
 	 * lower subtransaction would not.)  Their accuracy is critical to
 	 * RelationNeedsWAL().
 	 *
-	 * rd_newRelfilenodeSubid is the ID of the highest subtransaction the
-	 * most-recent relfilenode change has survived into or zero if not changed
+	 * rd_newRelfilenumberSubid is the ID of the highest subtransaction the
+	 * most-recent relfilenumber change has survived into or zero if not changed
 	 * in the current transaction (or we have forgotten changing it).  This
 	 * field is accurate when non-zero, but it can be zero when a relation has
-	 * multiple new relfilenodes within a single transaction, with one of them
+	 * multiple new relfilenumbers within a single transaction, with one of them
 	 * occurring in a subsequently aborted subtransaction, e.g.
 	 *		BEGIN;
 	 *		TRUNCATE t;
 	 *		SAVEPOINT save;
 	 *		TRUNCATE t;
 	 *		ROLLBACK TO save;
-	 *		-- rd_newRelfilenodeSubid is now forgotten
+	 *		-- rd_newRelfilenumberSubid is now forgotten
 	 *
 	 * If every rd_*Subid field is zero, they are read-only outside
 	 * relcache.c.  Files that trigger rd_locator changes by updating
 	 * pg_class.reltablespace and/or pg_class.relfilenode call
-	 * RelationAssumeNewRelfilenode() to update rd_*Subid.
+	 * RelationAssumeNewRelfilenumber() to update rd_*Subid.
 	 *
 	 * rd_droppedSubid is the ID of the highest subtransaction that a drop of
 	 * the rel has survived into.  In entries visible outside relcache.c, this
 	 * is always zero.
 	 */
 	SubTransactionId rd_createSubid;	/* rel was created in current xact */
-	SubTransactionId rd_newRelfilenodeSubid;	/* highest subxact changing
+	SubTransactionId rd_newRelfilenumberSubid;	/* highest subxact changing
 												 * rd_locator to current value */
-	SubTransactionId rd_firstRelfilenodeSubid;	/* highest subxact changing
+	SubTransactionId rd_firstRelfilenumberSubid;	/* highest subxact changing
 												 * rd_locator to any value */
 	SubTransactionId rd_droppedSubid;	/* dropped with another Subid set */
 
@@ -532,7 +532,7 @@ typedef struct ViewOptions
 
 /*
  * RelationIsMapped
- *		True if the relation uses the relfilenode map.  Note multiple eval
+ *		True if the relation uses the relfilenumber map.  Note multiple eval
  *		of argument!
  */
 #define RelationIsMapped(relation) \
@@ -613,7 +613,7 @@ RelationGetSmgr(Relation rel)
 #define RelationNeedsWAL(relation)										\
 	(RelationIsPermanent(relation) && (XLogIsNeeded() ||				\
 	  (relation->rd_createSubid == InvalidSubTransactionId &&			\
-	   relation->rd_firstRelfilenodeSubid == InvalidSubTransactionId)))
+	   relation->rd_firstRelfilenumberSubid == InvalidSubTransactionId)))
 
 /*
  * RelationUsesLocalBuffers

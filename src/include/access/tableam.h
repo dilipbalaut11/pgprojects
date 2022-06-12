@@ -1348,7 +1348,7 @@ table_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
  * RelationGetBufferForTuple. See that method for more information.
  *
  * TABLE_INSERT_FROZEN should only be specified for inserts into
- * relfilenodes created during the current subtransaction and when
+ * relfilenumbers created during the current subtransaction and when
  * there are no prior snapshots or pre-existing portals open.
  * This causes rows to be frozen, which is an MVCC violation and
  * requires explicit options chosen by user.

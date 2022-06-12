@@ -31,10 +31,10 @@
  * "shared" relations (those common to all databases of a cluster).
  * Nonzero dbNode values correspond to pg_database.oid.
  *
- * relNode identifies the specific relation.  relNode corresponds to
+ * relNumber identifies the specific relation.  relNumber corresponds to
  * pg_class.relfilenode (NOT pg_class.oid, because we need to be able
  * to assign new physical files to relations in some situations).
- * Notice that relNode is only unique within a database in a particular
+ * Notice that relNumber is only unique within a database in a particular
  * tablespace.
  *
  * Note: spcNode must be GLOBALTABLESPACE_OID if and only if dbNode is
@@ -58,7 +58,7 @@ typedef struct RelFileLocator
 {
 	Oid			spcNode;		/* tablespace */
 	Oid			dbNode;			/* database */
-	Oid			relNode;		/* relation */
+	Oid			relNumber;		/* relation */
 } RelFileLocator;
 
 /*
@@ -79,19 +79,19 @@ typedef struct RelFileLocatorBackend
 	((rlocator).backend != InvalidBackendId)
 
 /*
- * Note: RelFileLocatorEquals and RelFileLocatorBackendEquals compare relNode first
+ * Note: RelFileLocatorEquals and RelFileLocatorBackendEquals compare relNumber first
  * since that is most likely to be different in two unequal RelFileLocators.  It
  * is probably redundant to compare spcNode if the other fields are found equal,
  * but do it anyway to be sure.  Likewise for checking the backend ID in
  * RelFileLocatorBackendEquals.
  */
 #define RelFileLocatorEquals(node1, node2) \
-	((node1).relNode == (node2).relNode && \
+	((node1).relNumber == (node2).relNumber && \
 	 (node1).dbNode == (node2).dbNode && \
 	 (node1).spcNode == (node2).spcNode)
 
 #define RelFileLocatorBackendEquals(node1, node2) \
-	((node1).node.relNode == (node2).node.relNode && \
+	((node1).node.relNumber == (node2).node.relNumber && \
 	 (node1).node.dbNode == (node2).node.dbNode && \
 	 (node1).backend == (node2).backend && \
 	 (node1).node.spcNode == (node2).node.spcNode)

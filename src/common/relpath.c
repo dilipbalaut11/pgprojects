@@ -138,7 +138,7 @@ GetDatabasePath(Oid dbNode, Oid spcNode)
  * the trouble considering BackendId is just int anyway.
  */
 char *
-GetRelationPath(Oid dbNode, Oid spcNode, Oid relNode,
+GetRelationPath(Oid dbNode, Oid spcNode, Oid relNumber,
 				int backendId, ForkNumber forkNumber)
 {
 	char	   *path;
@@ -150,9 +150,9 @@ GetRelationPath(Oid dbNode, Oid spcNode, Oid relNode,
 		Assert(backendId == InvalidBackendId);
 		if (forkNumber != MAIN_FORKNUM)
 			path = psprintf("global/%u_%s",
-							relNode, forkNames[forkNumber]);
+							relNumber, forkNames[forkNumber]);
 		else
-			path = psprintf("global/%u", relNode);
+			path = psprintf("global/%u", relNumber);
 	}
 	else if (spcNode == DEFAULTTABLESPACE_OID)
 	{
@@ -161,21 +161,21 @@ GetRelationPath(Oid dbNode, Oid spcNode, Oid relNode,
 		{
 			if (forkNumber != MAIN_FORKNUM)
 				path = psprintf("base/%u/%u_%s",
-								dbNode, relNode,
+								dbNode, relNumber,
 								forkNames[forkNumber]);
 			else
 				path = psprintf("base/%u/%u",
-								dbNode, relNode);
+								dbNode, relNumber);
 		}
 		else
 		{
 			if (forkNumber != MAIN_FORKNUM)
 				path = psprintf("base/%u/t%d_%u_%s",
-								dbNode, backendId, relNode,
+								dbNode, backendId, relNumber,
 								forkNames[forkNumber]);
 			else
 				path = psprintf("base/%u/t%d_%u",
-								dbNode, backendId, relNode);
+								dbNode, backendId, relNumber);
 		}
 	}
 	else
@@ -186,24 +186,24 @@ GetRelationPath(Oid dbNode, Oid spcNode, Oid relNode,
 			if (forkNumber != MAIN_FORKNUM)
 				path = psprintf("pg_tblspc/%u/%s/%u/%u_%s",
 								spcNode, TABLESPACE_VERSION_DIRECTORY,
-								dbNode, relNode,
+								dbNode, relNumber,
 								forkNames[forkNumber]);
 			else
 				path = psprintf("pg_tblspc/%u/%s/%u/%u",
 								spcNode, TABLESPACE_VERSION_DIRECTORY,
-								dbNode, relNode);
+								dbNode, relNumber);
 		}
 		else
 		{
 			if (forkNumber != MAIN_FORKNUM)
 				path = psprintf("pg_tblspc/%u/%s/%u/t%d_%u_%s",
 								spcNode, TABLESPACE_VERSION_DIRECTORY,
-								dbNode, backendId, relNode,
+								dbNode, backendId, relNumber,
 								forkNames[forkNumber]);
 			else
 				path = psprintf("pg_tblspc/%u/%s/%u/t%d_%u",
 								spcNode, TABLESPACE_VERSION_DIRECTORY,
-								dbNode, backendId, relNode);
+								dbNode, backendId, relNumber);
 		}
 	}
 	return path;

@@ -66,7 +66,7 @@ extern int	forkname_chars(const char *str, ForkNumber *fork);
  */
 extern char *GetDatabasePath(Oid dbNode, Oid spcNode);
 
-extern char *GetRelationPath(Oid dbNode, Oid spcNode, Oid relNode,
+extern char *GetRelationPath(Oid dbNode, Oid spcNode, Oid relNumber,
 							 int backendId, ForkNumber forkNumber);
 
 /*
@@ -76,7 +76,7 @@ extern char *GetRelationPath(Oid dbNode, Oid spcNode, Oid relNode,
 
 /* First argument is a RelFileLocator */
 #define relpathbackend(rlocator, backend, forknum) \
-	GetRelationPath((rlocator).dbNode, (rlocator).spcNode, (rlocator).relNode, \
+	GetRelationPath((rlocator).dbNode, (rlocator).spcNode, (rlocator).relNumber, \
 					backend, forknum)
 
 /* First argument is a RelFileLocator */

@@ -826,7 +826,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	TRACE_POSTGRESQL_BUFFER_READ_START(forkNum, blockNum,
 									   smgr->smgr_rlocator.locator.spcNode,
 									   smgr->smgr_rlocator.locator.dbNode,
-									   smgr->smgr_rlocator.locator.relNode,
+									   smgr->smgr_rlocator.locator.relNumber,
 									   smgr->smgr_rlocator.backend,
 									   isExtend);
 
@@ -888,7 +888,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			TRACE_POSTGRESQL_BUFFER_READ_DONE(forkNum, blockNum,
 											  smgr->smgr_rlocator.locator.spcNode,
 											  smgr->smgr_rlocator.locator.dbNode,
-											  smgr->smgr_rlocator.locator.relNode,
+											  smgr->smgr_rlocator.locator.relNumber,
 											  smgr->smgr_rlocator.backend,
 											  isExtend,
 											  found);
@@ -1078,7 +1078,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	TRACE_POSTGRESQL_BUFFER_READ_DONE(forkNum, blockNum,
 									  smgr->smgr_rlocator.locator.spcNode,
 									  smgr->smgr_rlocator.locator.dbNode,
-									  smgr->smgr_rlocator.locator.relNode,
+									  smgr->smgr_rlocator.locator.relNumber,
 									  smgr->smgr_rlocator.backend,
 									  isExtend,
 									  found);
@@ -1257,7 +1257,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				TRACE_POSTGRESQL_BUFFER_WRITE_DIRTY_START(forkNum, blockNum,
 														  smgr->smgr_rlocator.locator.spcNode,
 														  smgr->smgr_rlocator.locator.dbNode,
-														  smgr->smgr_rlocator.locator.relNode);
+														  smgr->smgr_rlocator.locator.relNumber);
 
 				FlushBuffer(buf, NULL);
 				LWLockRelease(BufferDescriptorGetContentLock(buf));
@@ -1268,7 +1268,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				TRACE_POSTGRESQL_BUFFER_WRITE_DIRTY_DONE(forkNum, blockNum,
 														 smgr->smgr_rlocator.locator.spcNode,
 														 smgr->smgr_rlocator.locator.dbNode,
-														 smgr->smgr_rlocator.locator.relNode);
+														 smgr->smgr_rlocator.locator.relNumber);
 			}
 			else
 			{
@@ -2001,7 +2001,7 @@ BufferSync(int flags)
 			item = &CkptBufferIds[num_to_scan++];
 			item->buf_id = buf_id;
 			item->tsId = bufHdr->tag.rlocator.spcNode;
-			item->relNode = bufHdr->tag.rlocator.relNode;
+			item->relNumber = bufHdr->tag.rlocator.relNumber;
 			item->forkNum = bufHdr->tag.forkNum;
 			item->blockNum = bufHdr->tag.blockNum;
 		}
@@ -2844,7 +2844,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 										buf->tag.blockNum,
 										reln->smgr_rlocator.locator.spcNode,
 										reln->smgr_rlocator.locator.dbNode,
-										reln->smgr_rlocator.locator.relNode);
+										reln->smgr_rlocator.locator.relNumber);
 
 	buf_state = LockBufHdr(buf);
 
@@ -2924,7 +2924,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 									   buf->tag.blockNum,
 									   reln->smgr_rlocator.locator.spcNode,
 									   reln->smgr_rlocator.locator.dbNode,
-									   reln->smgr_rlocator.locator.relNode);
+									   reln->smgr_rlocator.locator.relNumber);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
@@ -4711,9 +4711,9 @@ rnode_comparator(const void *p1, const void *p2)
 	RelFileLocator n1 = *(const RelFileLocator *) p1;
 	RelFileLocator n2 = *(const RelFileLocator *) p2;
 
-	if (n1.relNode < n2.relNode)
+	if (n1.relNumber < n2.relNumber)
 		return -1;
-	else if (n1.relNode > n2.relNode)
+	else if (n1.relNumber > n2.relNumber)
 		return 1;
 
 	if (n1.dbNode < n2.dbNode)
@@ -4822,9 +4822,9 @@ ckpt_buforder_comparator(const CkptSortItem *a, const CkptSortItem *b)
 	else if (a->tsId > b->tsId)
 		return 1;
 	/* compare relation */
-	if (a->relNode < b->relNode)
+	if (a->relNumber < b->relNumber)
 		return -1;
-	else if (a->relNode > b->relNode)
+	else if (a->relNumber > b->relNumber)
 		return 1;
 	/* compare fork */
 	else if (a->forkNum < b->forkNum)

@@ -243,10 +243,10 @@ mdcreate(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
  * For regular relations, we don't unlink the first segment file of the rel,
  * but just truncate it to zero length, and record a request to unlink it after
  * the next checkpoint.  Additional segments can be unlinked immediately,
- * however.  Leaving the empty file in place prevents that relfilenode
- * number from being reused.  The scenario this protects us from is:
+ * however.  Leaving the empty file in place prevents that relfilenumber
+ * from being reused.  The scenario this protects us from is:
  * 1. We delete a relation (and commit, and actually remove its file).
- * 2. We create a new relation, which by chance gets the same relfilenode as
+ * 2. We create a new relation, which by chance gets the same relfilenumber as
  *	  the just-deleted one (OIDs must've wrapped around for that to happen).
  * 3. We crash before another checkpoint occurs.
  * During replay, we would delete the file and then recreate it, which is fine
@@ -254,18 +254,18 @@ mdcreate(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
  * But if we didn't WAL-log insertions, but instead relied on fsyncing the
  * file after populating it (as we do at wal_level=minimal), the contents of
  * the file would be lost forever.  By leaving the empty file until after the
- * next checkpoint, we prevent reassignment of the relfilenode number until
- * it's safe, because relfilenode assignment skips over any existing file.
+ * next checkpoint, we prevent reassignment of the relfilenumber until it's
+ * safe, because relfilenumber assignment skips over any existing file.
  *
  * We do not need to go through this dance for temp relations, though, because
  * we never make WAL entries for temp rels, and so a temp rel poses no threat
- * to the health of a regular rel that has taken over its relfilenode number.
+ * to the health of a regular rel that has taken over its relfilenumber.
  * The fact that temp rels and regular rels have different file naming
  * patterns provides additional safety.
  *
  * All the above applies only to the relation's main fork; other forks can
  * just be removed immediately, since they are not needed to prevent the
- * relfilenode number from being recycled.  Also, we do not carefully
+ * relfilenumber from being recycled.  Also, we do not carefully
  * track whether other forks have been created or not, but just attempt to
  * unlink them unconditionally; so we should never complain about ENOENT.
  *
@@ -647,7 +647,7 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	TRACE_POSTGRESQL_SMGR_MD_READ_START(forknum, blocknum,
 										reln->smgr_rlocator.locator.spcNode,
 										reln->smgr_rlocator.locator.dbNode,
-										reln->smgr_rlocator.locator.relNode,
+										reln->smgr_rlocator.locator.relNumber,
 										reln->smgr_rlocator.backend);
 
 	v = _mdfd_getseg(reln, forknum, blocknum, false,
@@ -662,7 +662,7 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	TRACE_POSTGRESQL_SMGR_MD_READ_DONE(forknum, blocknum,
 									   reln->smgr_rlocator.locator.spcNode,
 									   reln->smgr_rlocator.locator.dbNode,
-									   reln->smgr_rlocator.locator.relNode,
+									   reln->smgr_rlocator.locator.relNumber,
 									   reln->smgr_rlocator.backend,
 									   nbytes,
 									   BLCKSZ);
@@ -717,7 +717,7 @@ mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	TRACE_POSTGRESQL_SMGR_MD_WRITE_START(forknum, blocknum,
 										 reln->smgr_rlocator.locator.spcNode,
 										 reln->smgr_rlocator.locator.dbNode,
-										 reln->smgr_rlocator.locator.relNode,
+										 reln->smgr_rlocator.locator.relNumber,
 										 reln->smgr_rlocator.backend);
 
 	v = _mdfd_getseg(reln, forknum, blocknum, skipFsync,
@@ -732,7 +732,7 @@ mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	TRACE_POSTGRESQL_SMGR_MD_WRITE_DONE(forknum, blocknum,
 										reln->smgr_rlocator.locator.spcNode,
 										reln->smgr_rlocator.locator.dbNode,
-										reln->smgr_rlocator.locator.relNode,
+										reln->smgr_rlocator.locator.relNumber,
 										reln->smgr_rlocator.backend,
 										nbytes,
 										BLCKSZ);
@@ -1043,7 +1043,7 @@ ForgetDatabaseSyncRequests(Oid dbid)
 
 	rlocator.dbNode = dbid;
 	rlocator.spcNode = 0;
-	rlocator.relNode = 0;
+	rlocator.relNumber = 0;
 
 	INIT_MD_FILETAG(tag, rlocator, InvalidForkNumber, InvalidBlockNumber);
 

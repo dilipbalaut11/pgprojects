@@ -102,7 +102,7 @@ btree_desc(StringInfo buf, XLogReaderState *record)
 
 				appendStringInfo(buf, "rel %u/%u/%u; latestRemovedXid %u:%u",
 								 xlrec->locator.spcNode, xlrec->locator.dbNode,
-								 xlrec->locator.relNode,
+								 xlrec->locator.relNumber,
 								 EpochFromFullTransactionId(xlrec->latestRemovedFullXid),
 								 XidFromFullTransactionId(xlrec->latestRemovedFullXid));
 				break;

@@ -27,7 +27,7 @@
 #include "utils/builtins.h"
 #include "utils/numeric.h"
 #include "utils/rel.h"
-#include "utils/relfilenodemap.h"
+#include "utils/relfilenumbermap.h"
 #include "utils/relmapper.h"
 #include "utils/syscache.h"
 
@@ -864,7 +864,7 @@ pg_relation_filenode(PG_FUNCTION_ARGS)
 		if (relform->relfilenode)
 			result = relform->relfilenode;
 		else					/* Consult the relation mapper */
-			result = RelationMapOidToFilenode(relid,
+			result = RelationMapOidToFilenumber(relid,
 											  relform->relisshared);
 	}
 	else
@@ -882,11 +882,11 @@ pg_relation_filenode(PG_FUNCTION_ARGS)
 }
 
 /*
- * Get the relation via (reltablespace, relfilenode)
+ * Get the relation via (reltablespace, relfilenumber)
  *
  * This is expected to be used when somebody wants to match an individual file
  * on the filesystem back to its table. That's not trivially possible via
- * pg_class, because that doesn't contain the relfilenodes of shared and nailed
+ * pg_class, because that doesn't contain the relfilenumbers of shared and nailed
  * tables.
  *
  * We don't fail but return NULL if we cannot find a mapping.
@@ -898,14 +898,14 @@ Datum
 pg_filenode_relation(PG_FUNCTION_ARGS)
 {
 	Oid			reltablespace = PG_GETARG_OID(0);
-	Oid			relfilenode = PG_GETARG_OID(1);
+	Oid			relfilenumber = PG_GETARG_OID(1);
 	Oid			heaprel;
 
-	/* test needed so RelidByRelfilenode doesn't misbehave */
-	if (!OidIsValid(relfilenode))
+	/* test needed so RelidByRelfilenumber doesn't misbehave */
+	if (!OidIsValid(relfilenumber))
 		PG_RETURN_NULL();
 
-	heaprel = RelidByRelfilenode(reltablespace, relfilenode);
+	heaprel = RelidByRelfilenumber(reltablespace, relfilenumber);
 
 	if (!OidIsValid(heaprel))
 		PG_RETURN_NULL();
@@ -945,21 +945,21 @@ pg_relation_filepath(PG_FUNCTION_ARGS)
 		else
 			rlocator.dbNode = MyDatabaseId;
 		if (relform->relfilenode)
-			rlocator.relNode = relform->relfilenode;
+			rlocator.relNumber = relform->relfilenode;
 		else					/* Consult the relation mapper */
-			rlocator.relNode = RelationMapOidToFilenode(relid,
+			rlocator.relNumber = RelationMapOidToFilenumber(relid,
 													 relform->relisshared);
 	}
 	else
 	{
 		/* no storage, return NULL */
-		rlocator.relNode = InvalidOid;
+		rlocator.relNumber = InvalidOid;
 		/* some compilers generate warnings without these next two lines */
 		rlocator.dbNode = InvalidOid;
 		rlocator.spcNode = InvalidOid;
 	}
 
-	if (!OidIsValid(rlocator.relNode))
+	if (!OidIsValid(rlocator.relNumber))
 	{
 		ReleaseSysCache(tuple);
 		PG_RETURN_NULL();

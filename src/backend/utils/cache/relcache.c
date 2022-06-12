@@ -369,7 +369,7 @@ ScanPgRelation(Oid targetRelId, bool indexOK, bool force_non_historic)
 	/*
 	 * The caller might need a tuple that's newer than the one the historic
 	 * snapshot; currently the only case requiring to do so is looking up the
-	 * relfilenode of non mapped system relations during decoding. That
+	 * relfilenumber of non mapped system relations during decoding. That
 	 * snapshot can't change in the midst of a relcache build, so there's no
 	 * need to register the snapshot.
 	 */
@@ -1133,8 +1133,8 @@ retry:
 	relation->rd_refcnt = 0;
 	relation->rd_isnailed = false;
 	relation->rd_createSubid = InvalidSubTransactionId;
-	relation->rd_newRelfilenodeSubid = InvalidSubTransactionId;
-	relation->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
+	relation->rd_newRelfilenumberSubid = InvalidSubTransactionId;
+	relation->rd_firstRelfilenumberSubid = InvalidSubTransactionId;
 	relation->rd_droppedSubid = InvalidSubTransactionId;
 	switch (relation->rd_rel->relpersistence)
 	{
@@ -1309,7 +1309,7 @@ retry:
 static void
 RelationInitPhysicalAddr(Relation relation)
 {
-	Oid			oldnode = relation->rd_locator.relNode;
+	Oid			oldnode = relation->rd_locator.relNumber;
 
 	/* these relations kinds never have storage */
 	if (!RELKIND_HAS_STORAGE(relation->rd_rel->relkind))
@@ -1356,30 +1356,30 @@ RelationInitPhysicalAddr(Relation relation)
 			heap_freetuple(phys_tuple);
 		}
 
-		relation->rd_locator.relNode = relation->rd_rel->relfilenode;
+		relation->rd_locator.relNumber = relation->rd_rel->relfilenode;
 	}
 	else
 	{
 		/* Consult the relation mapper */
-		relation->rd_locator.relNode =
-			RelationMapOidToFilenode(relation->rd_id,
+		relation->rd_locator.relNumber =
+			RelationMapOidToFilenumber(relation->rd_id,
 									 relation->rd_rel->relisshared);
-		if (!OidIsValid(relation->rd_locator.relNode))
+		if (!OidIsValid(relation->rd_locator.relNumber))
 			elog(ERROR, "could not find relation mapping for relation \"%s\", OID %u",
 				 RelationGetRelationName(relation), relation->rd_id);
 	}
 
 	/*
 	 * For RelationNeedsWAL() to answer correctly on parallel workers, restore
-	 * rd_firstRelfilenodeSubid.  No subtransactions start or end while in
+	 * rd_firstRelfilenumberSubid.  No subtransactions start or end while in
 	 * parallel mode, so the specific SubTransactionId does not matter.
 	 */
-	if (IsParallelWorker() && oldnode != relation->rd_locator.relNode)
+	if (IsParallelWorker() && oldnode != relation->rd_locator.relNumber)
 	{
 		if (RelFileLocatorSkippingWAL(relation->rd_locator))
-			relation->rd_firstRelfilenodeSubid = TopSubTransactionId;
+			relation->rd_firstRelfilenumberSubid = TopSubTransactionId;
 		else
-			relation->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
+			relation->rd_firstRelfilenumberSubid = InvalidSubTransactionId;
 	}
 }
 
@@ -1889,8 +1889,8 @@ formrdesc(const char *relationName, Oid relationReltype,
 	 */
 	relation->rd_isnailed = true;
 	relation->rd_createSubid = InvalidSubTransactionId;
-	relation->rd_newRelfilenodeSubid = InvalidSubTransactionId;
-	relation->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
+	relation->rd_newRelfilenumberSubid = InvalidSubTransactionId;
+	relation->rd_firstRelfilenumberSubid = InvalidSubTransactionId;
 	relation->rd_droppedSubid = InvalidSubTransactionId;
 	relation->rd_backend = InvalidBackendId;
 	relation->rd_islocaltemp = false;
@@ -2180,7 +2180,7 @@ RelationClose(Relation relation)
 #ifdef RELCACHE_FORCE_RELEASE
 	if (RelationHasReferenceCountZero(relation) &&
 		relation->rd_createSubid == InvalidSubTransactionId &&
-		relation->rd_firstRelfilenodeSubid == InvalidSubTransactionId)
+		relation->rd_firstRelfilenumberSubid == InvalidSubTransactionId)
 		RelationClearRelation(relation, false);
 #endif
 }
@@ -2352,7 +2352,7 @@ RelationReloadNailed(Relation relation)
 	{
 		/*
 		 * If it's a nailed-but-not-mapped index, then we need to re-read the
-		 * pg_class row to see if its relfilenode changed.
+		 * pg_class row to see if its relfilenumber changed.
 		 */
 		RelationReloadIndexInfo(relation);
 	}
@@ -2700,8 +2700,8 @@ RelationClearRelation(Relation relation, bool rebuild)
 		Assert(newrel->rd_isnailed == relation->rd_isnailed);
 		/* creation sub-XIDs must be preserved */
 		SWAPFIELD(SubTransactionId, rd_createSubid);
-		SWAPFIELD(SubTransactionId, rd_newRelfilenodeSubid);
-		SWAPFIELD(SubTransactionId, rd_firstRelfilenodeSubid);
+		SWAPFIELD(SubTransactionId, rd_newRelfilenumberSubid);
+		SWAPFIELD(SubTransactionId, rd_firstRelfilenumberSubid);
 		SWAPFIELD(SubTransactionId, rd_droppedSubid);
 		/* un-swap rd_rel pointers, swap contents instead */
 		SWAPFIELD(Form_pg_class, rd_rel);
@@ -2791,12 +2791,12 @@ static void
 RelationFlushRelation(Relation relation)
 {
 	if (relation->rd_createSubid != InvalidSubTransactionId ||
-		relation->rd_firstRelfilenodeSubid != InvalidSubTransactionId)
+		relation->rd_firstRelfilenumberSubid != InvalidSubTransactionId)
 	{
 		/*
 		 * New relcache entries are always rebuilt, not flushed; else we'd
 		 * forget the "new" status of the relation.  Ditto for the
-		 * new-relfilenode status.
+		 * new-relfilenumber status.
 		 *
 		 * The rel could have zero refcnt here, so temporarily increment the
 		 * refcnt to ensure it's safe to rebuild it.  We can assume that the
@@ -2835,7 +2835,7 @@ RelationForgetRelation(Oid rid)
 
 	Assert(relation->rd_droppedSubid == InvalidSubTransactionId);
 	if (relation->rd_createSubid != InvalidSubTransactionId ||
-		relation->rd_firstRelfilenodeSubid != InvalidSubTransactionId)
+		relation->rd_firstRelfilenumberSubid != InvalidSubTransactionId)
 	{
 		/*
 		 * In the event of subtransaction rollback, we must not forget
@@ -2894,7 +2894,7 @@ RelationCacheInvalidateEntry(Oid relationId)
  *
  *	 Apart from debug_discard_caches, this is currently used only to recover
  *	 from SI message buffer overflow, so we do not touch relations having
- *	 new-in-transaction relfilenodes; they cannot be targets of cross-backend
+ *	 new-in-transaction relfilenumbers; they cannot be targets of cross-backend
  *	 SI updates (and our own updates now go through a separate linked list
  *	 that isn't limited by the SI message buffer size).
  *
@@ -2909,7 +2909,7 @@ RelationCacheInvalidateEntry(Oid relationId)
  *	 so hash_seq_search will complete safely; (b) during the second pass we
  *	 only hold onto pointers to nondeletable entries.
  *
- *	 The two-phase approach also makes it easy to update relfilenodes for
+ *	 The two-phase approach also makes it easy to update relfilenumbers for
  *	 mapped relations before we do anything else, and to ensure that the
  *	 second pass processes nailed-in-cache items before other nondeletable
  *	 items.  This should ensure that system catalogs are up to date before
@@ -2948,12 +2948,12 @@ RelationCacheInvalidate(bool debug_discard)
 
 		/*
 		 * Ignore new relations; no other backend will manipulate them before
-		 * we commit.  Likewise, before replacing a relation's relfilenode, we
-		 * shall have acquired AccessExclusiveLock and drained any applicable
-		 * pending invalidations.
+		 * we commit.  Likewise, before replacing a relation's relfilenumber,
+		 * we shall have acquired AccessExclusiveLock and drained any
+		 * applicable pending invalidations.
 		 */
 		if (relation->rd_createSubid != InvalidSubTransactionId ||
-			relation->rd_firstRelfilenodeSubid != InvalidSubTransactionId)
+			relation->rd_firstRelfilenumberSubid != InvalidSubTransactionId)
 			continue;
 
 		relcacheInvalsReceived++;
@@ -2968,7 +2968,7 @@ RelationCacheInvalidate(bool debug_discard)
 		{
 			/*
 			 * If it's a mapped relation, immediately update its rd_locator in
-			 * case its relfilenode changed.  We must do this during phase 1
+			 * case its relfilenumber changed.  We must do this during phase 1
 			 * in case the relation is consulted during rebuild of other
 			 * relcache entries in phase 2.  It's safe since consulting the
 			 * map doesn't involve any access to relcache entries.
@@ -3078,14 +3078,14 @@ AssertPendingSyncConsistency(Relation relation)
 	RelationIsPermanent(relation) &&
 	((relation->rd_createSubid != InvalidSubTransactionId &&
 	  RELKIND_HAS_STORAGE(relation->rd_rel->relkind)) ||
-	 relation->rd_firstRelfilenodeSubid != InvalidSubTransactionId);
+	 relation->rd_firstRelfilenumberSubid != InvalidSubTransactionId);
 
 	Assert(relcache_verdict == RelFileLocatorSkippingWAL(relation->rd_locator));
 
 	if (relation->rd_droppedSubid != InvalidSubTransactionId)
 		Assert(!relation->rd_isvalid &&
 			   (relation->rd_createSubid != InvalidSubTransactionId ||
-				relation->rd_firstRelfilenodeSubid != InvalidSubTransactionId));
+				relation->rd_firstRelfilenumberSubid != InvalidSubTransactionId));
 }
 
 /*
@@ -3282,8 +3282,8 @@ AtEOXact_cleanup(Relation relation, bool isCommit)
 	 * also lets RelationClearRelation() drop the relcache entry.
 	 */
 	relation->rd_createSubid = InvalidSubTransactionId;
-	relation->rd_newRelfilenodeSubid = InvalidSubTransactionId;
-	relation->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
+	relation->rd_newRelfilenumberSubid = InvalidSubTransactionId;
+	relation->rd_firstRelfilenumberSubid = InvalidSubTransactionId;
 	relation->rd_droppedSubid = InvalidSubTransactionId;
 
 	if (clear_relcache)
@@ -3397,8 +3397,8 @@ AtEOSubXact_cleanup(Relation relation, bool isCommit,
 		{
 			/* allow the entry to be removed */
 			relation->rd_createSubid = InvalidSubTransactionId;
-			relation->rd_newRelfilenodeSubid = InvalidSubTransactionId;
-			relation->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
+			relation->rd_newRelfilenumberSubid = InvalidSubTransactionId;
+			relation->rd_firstRelfilenumberSubid = InvalidSubTransactionId;
 			relation->rd_droppedSubid = InvalidSubTransactionId;
 			RelationClearRelation(relation, false);
 			return;
@@ -3419,23 +3419,23 @@ AtEOSubXact_cleanup(Relation relation, bool isCommit,
 	}
 
 	/*
-	 * Likewise, update or drop any new-relfilenode-in-subtransaction record
+	 * Likewise, update or drop any new-relfilenumber-in-subtransaction record
 	 * or drop record.
 	 */
-	if (relation->rd_newRelfilenodeSubid == mySubid)
+	if (relation->rd_newRelfilenumberSubid == mySubid)
 	{
 		if (isCommit)
-			relation->rd_newRelfilenodeSubid = parentSubid;
+			relation->rd_newRelfilenumberSubid = parentSubid;
 		else
-			relation->rd_newRelfilenodeSubid = InvalidSubTransactionId;
+			relation->rd_newRelfilenumberSubid = InvalidSubTransactionId;
 	}
 
-	if (relation->rd_firstRelfilenodeSubid == mySubid)
+	if (relation->rd_firstRelfilenumberSubid == mySubid)
 	{
 		if (isCommit)
-			relation->rd_firstRelfilenodeSubid = parentSubid;
+			relation->rd_firstRelfilenumberSubid = parentSubid;
 		else
-			relation->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
+			relation->rd_firstRelfilenumberSubid = InvalidSubTransactionId;
 	}
 
 	if (relation->rd_droppedSubid == mySubid)
@@ -3459,7 +3459,7 @@ RelationBuildLocalRelation(const char *relname,
 						   TupleDesc tupDesc,
 						   Oid relid,
 						   Oid accessmtd,
-						   Oid relfilenode,
+						   Oid relfilenumber,
 						   Oid reltablespace,
 						   bool shared_relation,
 						   bool mapped_relation,
@@ -3533,8 +3533,8 @@ RelationBuildLocalRelation(const char *relname,
 
 	/* it's being created in this transaction */
 	rel->rd_createSubid = GetCurrentSubTransactionId();
-	rel->rd_newRelfilenodeSubid = InvalidSubTransactionId;
-	rel->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
+	rel->rd_newRelfilenumberSubid = InvalidSubTransactionId;
+	rel->rd_firstRelfilenumberSubid = InvalidSubTransactionId;
 	rel->rd_droppedSubid = InvalidSubTransactionId;
 
 	/*
@@ -3616,7 +3616,7 @@ RelationBuildLocalRelation(const char *relname,
 
 	/*
 	 * Insert relation physical and logical identifiers (OIDs) into the right
-	 * places.  For a mapped relation, we set relfilenode to zero and rely on
+	 * places.  For a mapped relation, we set relfilenumber to zero and rely on
 	 * RelationInitPhysicalAddr to consult the map.
 	 */
 	rel->rd_rel->relisshared = shared_relation;
@@ -3632,10 +3632,10 @@ RelationBuildLocalRelation(const char *relname,
 	{
 		rel->rd_rel->relfilenode = InvalidOid;
 		/* Add it to the active mapping information */
-		RelationMapUpdateMap(relid, relfilenode, shared_relation, true);
+		RelationMapUpdateMap(relid, relfilenumber, shared_relation, true);
 	}
 	else
-		rel->rd_rel->relfilenode = relfilenode;
+		rel->rd_rel->relfilenode = relfilenumber;
 
 	RelationInitLockInfo(rel);	/* see lmgr.c */
 
@@ -3683,9 +3683,9 @@ RelationBuildLocalRelation(const char *relname,
 
 
 /*
- * RelationSetNewRelfilenode
+ * RelationSetNewRelfilenumber
  *
- * Assign a new relfilenode (physical file name), and possibly a new
+ * Assign a new relfilenumber (physical file name), and possibly a new
  * persistence setting, to the relation.
  *
  * This allows a full rewrite of the relation to be done with transactional
@@ -3697,9 +3697,9 @@ RelationBuildLocalRelation(const char *relname,
  * Caller must already hold exclusive lock on the relation.
  */
 void
-RelationSetNewRelfilenode(Relation relation, char persistence)
+RelationSetNewRelfilenumber(Relation relation, char persistence)
 {
-	Oid			newrelfilenode;
+	Oid			newrelfilenumber;
 	Relation	pg_class;
 	HeapTuple	tuple;
 	Form_pg_class classform;
@@ -3707,8 +3707,8 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 	TransactionId freezeXid = InvalidTransactionId;
 	RelFileLocator newrlocator;
 
-	/* Allocate a new relfilenode */
-	newrelfilenode = GetNewRelFileNode(relation->rd_rel->reltablespace,
+	/* Allocate a new relfilenumber */
+	newrelfilenumber = GetNewRelFileNumber(relation->rd_rel->reltablespace,
 										  NULL, persistence);
 
 	/*
@@ -3729,15 +3729,15 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 	RelationDropStorage(relation);
 
 	/*
-	 * Create storage for the main fork of the new relfilenode.  If it's a
+	 * Create storage for the main fork of the new relfilenumber.  If it's a
 	 * table-like object, call into the table AM to do so, which'll also
 	 * create the table's init fork if needed.
 	 *
-	 * NOTE: If relevant for the AM, any conflict in relfilenode value will be
-	 * caught here, if GetNewRelFileNode messes up for any reason.
+	 * NOTE: If relevant for the AM, any conflict in relfilenumber value will be
+	 * caught here, if GetNewRelFileNumber messes up for any reason.
 	 */
 	newrlocator = relation->rd_locator;
-	newrlocator.relNode = newrelfilenode;
+	newrlocator.relNumber = newrelfilenumber;
 
 	if (RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind))
 	{
@@ -3789,7 +3789,7 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 
 		/* Do the deed */
 		RelationMapUpdateMap(RelationGetRelid(relation),
-							 newrelfilenode,
+							 newrelfilenumber,
 							 relation->rd_rel->relisshared,
 							 false);
 
@@ -3799,7 +3799,7 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 	else
 	{
 		/* Normal case, update the pg_class entry */
-		classform->relfilenode = newrelfilenode;
+		classform->relfilenode = newrelfilenumber;
 
 		/* relpages etc. never change for sequences */
 		if (relation->rd_rel->relkind != RELKIND_SEQUENCE)
@@ -3825,11 +3825,11 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 	 */
 	CommandCounterIncrement();
 
-	RelationAssumeNewRelfilenode(relation);
+	RelationAssumeNewRelfilenumber(relation);
 }
 
 /*
- * RelationAssumeNewRelfilenode
+ * RelationAssumeNewRelfilenumber
  *
  * Code that modifies pg_class.reltablespace or pg_class.relfilenode must call
  * this.  The call shall precede any code that might insert WAL records whose
@@ -3838,14 +3838,14 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
  * Ideally, call this as near as possible to the CommandCounterIncrement()
  * that makes the pg_class change visible (before it or after it); that
  * minimizes the chance of future development adding a forbidden WAL insertion
- * between RelationAssumeNewRelfilenode() and CommandCounterIncrement().
+ * between RelationAssumeNewRelfilenumber() and CommandCounterIncrement().
  */
 void
-RelationAssumeNewRelfilenode(Relation relation)
+RelationAssumeNewRelfilenumber(Relation relation)
 {
-	relation->rd_newRelfilenodeSubid = GetCurrentSubTransactionId();
-	if (relation->rd_firstRelfilenodeSubid == InvalidSubTransactionId)
-		relation->rd_firstRelfilenodeSubid = relation->rd_newRelfilenodeSubid;
+	relation->rd_newRelfilenumberSubid = GetCurrentSubTransactionId();
+	if (relation->rd_firstRelfilenumberSubid == InvalidSubTransactionId)
+		relation->rd_firstRelfilenumberSubid = relation->rd_newRelfilenumberSubid;
 
 	/* Flag relation as needing eoxact cleanup (to clear these fields) */
 	EOXactListAdd(relation);
@@ -6254,8 +6254,8 @@ load_relcache_init_file(bool shared)
 		rel->rd_fkeyvalid = false;
 		rel->rd_fkeylist = NIL;
 		rel->rd_createSubid = InvalidSubTransactionId;
-		rel->rd_newRelfilenodeSubid = InvalidSubTransactionId;
-		rel->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
+		rel->rd_newRelfilenumberSubid = InvalidSubTransactionId;
+		rel->rd_firstRelfilenumberSubid = InvalidSubTransactionId;
 		rel->rd_droppedSubid = InvalidSubTransactionId;
 		rel->rd_amcache = NULL;
 		MemSet(&rel->pgstat_info, 0, sizeof(rel->pgstat_info));

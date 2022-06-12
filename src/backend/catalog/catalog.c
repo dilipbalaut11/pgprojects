@@ -481,14 +481,14 @@ GetNewOidWithIndex(Relation relation, Oid indexId, AttrNumber oidcolumn)
 }
 
 /*
- * GetNewRelFileNode
- *		Generate a new relfilenode number that is unique within the
+ * GetNewRelFileNumber
+ *		Generate a new relfilenumber that is unique within the
  *		database of the given tablespace.
  *
- * If the relfilenode will also be used as the relation's OID, pass the
+ * If the relfilenumber will also be used as the relation's OID, pass the
  * opened pg_class catalog, and this routine will guarantee that the result
  * is also an unused OID within pg_class.  If the result is to be used only
- * as a relfilenode for an existing relation, pass NULL for pg_class.
+ * as a relfilenumber for an existing relation, pass NULL for pg_class.
  *
  * As with GetNewOidWithIndex(), there is some theoretical risk of a race
  * condition, but it doesn't seem worth worrying about.
@@ -497,7 +497,7 @@ GetNewOidWithIndex(Relation relation, Oid indexId, AttrNumber oidcolumn)
  * created by bootstrap have preassigned OIDs, so there's no need.
  */
 Oid
-GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
+GetNewRelFileNumber(Oid reltablespace, Relation pg_class, char relpersistence)
 {
 	RelFileLocatorBackend rlocator;
 	char	   *rpath;
@@ -506,7 +506,7 @@ GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 
 	/*
 	 * If we ever get here during pg_upgrade, there's something wrong; all
-	 * relfilenode assignments during a binary-upgrade run should be
+	 * relfilenumber assignments during a binary-upgrade run should be
 	 * determined by commands in the dump script.
 	 */
 	Assert(!IsBinaryUpgrade);
@@ -526,8 +526,8 @@ GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 	}
 
 	/* This logic should match RelationInitPhysicalAddr */
-	rlocator.locator.spcNode = reltablespace ? reltablespace : MyDatabaseTableSpace;
-	rlocator.locator.dbNode = (rlocator.locator.spcNode == GLOBALTABLESPACE_OID) ? InvalidOid : MyDatabaseId;
+	rlocator.locator.spcOid = reltablespace ? reltablespace : MyDatabaseTableSpace;
+	rlocator.locator.dbOid = (rlocator.locator.spcOid == GLOBALTABLESPACE_OID) ? InvalidOid : MyDatabaseId;
 
 	/*
 	 * The relpath will vary based on the backend ID, so we must initialize
@@ -542,10 +542,10 @@ GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 
 		/* Generate the OID */
 		if (pg_class)
-			rlocator.locator.relNode = GetNewOidWithIndex(pg_class, ClassOidIndexId,
+			rlocator.locator.relNumber = GetNewOidWithIndex(pg_class, ClassOidIndexId,
 													Anum_pg_class_oid);
 		else
-			rlocator.locator.relNode = GetNewObjectId();
+			rlocator.locator.relNumber = GetNewObjectId();
 
 		/* Check for existing file of same name */
 		rpath = relpath(rlocator, MAIN_FORKNUM);
@@ -570,7 +570,7 @@ GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 		pfree(rpath);
 	} while (collides);
 
-	return rlocator.locator.relNode;
+	return rlocator.locator.relNumber;
 }
 
 /*

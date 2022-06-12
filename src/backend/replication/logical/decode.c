@@ -858,7 +858,7 @@ DecodeInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 
 	/* only interested in our database */
 	XLogRecGetBlockTag(r, 0, &target_locator, NULL, NULL);
-	if (target_locator.dbNode != ctx->slot->data.database)
+	if (target_locator.dbOid != ctx->slot->data.database)
 		return;
 
 	/* output plugin doesn't look for this origin, no need to queue */
@@ -908,7 +908,7 @@ DecodeUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 
 	/* only interested in our database */
 	XLogRecGetBlockTag(r, 0, &target_locator, NULL, NULL);
-	if (target_locator.dbNode != ctx->slot->data.database)
+	if (target_locator.dbOid != ctx->slot->data.database)
 		return;
 
 	/* output plugin doesn't look for this origin, no need to queue */
@@ -974,7 +974,7 @@ DecodeDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 
 	/* only interested in our database */
 	XLogRecGetBlockTag(r, 0, &target_locator, NULL, NULL);
-	if (target_locator.dbNode != ctx->slot->data.database)
+	if (target_locator.dbOid != ctx->slot->data.database)
 		return;
 
 	/* output plugin doesn't look for this origin, no need to queue */
@@ -1076,7 +1076,7 @@ DecodeMultiInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 
 	/* only interested in our database */
 	XLogRecGetBlockTag(r, 0, &rlocator, NULL, NULL);
-	if (rlocator.dbNode != ctx->slot->data.database)
+	if (rlocator.dbOid != ctx->slot->data.database)
 		return;
 
 	/* output plugin doesn't look for this origin, no need to queue */
@@ -1169,7 +1169,7 @@ DecodeSpecConfirm(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 
 	/* only interested in our database */
 	XLogRecGetBlockTag(r, 0, &target_locator, NULL, NULL);
-	if (target_locator.dbNode != ctx->slot->data.database)
+	if (target_locator.dbOid != ctx->slot->data.database)
 		return;
 
 	/* output plugin doesn't look for this origin, no need to queue */

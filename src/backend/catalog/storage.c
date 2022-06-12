@@ -630,7 +630,7 @@ RestorePendingSyncs(char *startAddress)
 	RelFileLocator *rlocator;
 
 	Assert(pendingSyncHash == NULL);
-	for (rlocator = (RelFileLocator *) startAddress; rlocator->relNode != 0;
+	for (rlocator = (RelFileLocator *) startAddress; rlocator->relNumber != 0;
 		 rlocator++)
 		AddPendingSync(rlocator);
 }

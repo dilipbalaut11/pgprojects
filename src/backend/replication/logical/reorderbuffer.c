@@ -106,7 +106,7 @@
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
-#include "utils/relfilenodemap.h"
+#include "utils/relfilenumbermap.h"
 
 
 /* entry for a hash table we use to map from xid to our transaction state */
@@ -2140,34 +2140,34 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 				case REORDER_BUFFER_CHANGE_DELETE:
 					Assert(snapshot_now);
 
-					reloid = RelidByRelfilenode(change->data.tp.rlocator.spcNode,
-												change->data.tp.rlocator.relNode);
+					reloid = RelidByRelfilenumber(change->data.tp.rlocator.spcOid,
+												  change->data.tp.rlocator.relNumber);
 
 					/*
 					 * Mapped catalog tuple without data, emitted while
 					 * catalog table was in the process of being rewritten. We
-					 * can fail to look up the relfilenode, because the
+					 * can fail to look up the relfilenumber, because the
 					 * relmapper has no "historic" view, in contrast to the
 					 * normal catalog during decoding. Thus repeated rewrites
 					 * can cause a lookup failure. That's OK because we do not
 					 * decode catalog changes anyway. Normally such tuples
 					 * would be skipped over below, but we can't identify
 					 * whether the table should be logically logged without
-					 * mapping the relfilenode to the oid.
+					 * mapping the relfilenumber to the oid.
 					 */
 					if (reloid == InvalidOid &&
 						change->data.tp.newtuple == NULL &&
 						change->data.tp.oldtuple == NULL)
 						goto change_done;
 					else if (reloid == InvalidOid)
-						elog(ERROR, "could not map filenode \"%s\" to relation OID",
+						elog(ERROR, "could not map filenumber \"%s\" to relation OID",
 							 relpathperm(change->data.tp.rlocator,
 										 MAIN_FORKNUM));
 
 					relation = RelationIdGetRelation(reloid);
 
 					if (!RelationIsValid(relation))
-						elog(ERROR, "could not open relation with OID %u (for filenode \"%s\")",
+						elog(ERROR, "could not open relation with OID %u (for filenumber \"%s\")",
 							 reloid,
 							 relpathperm(change->data.tp.rlocator,
 										 MAIN_FORKNUM));
@@ -4870,9 +4870,9 @@ DisplayMapping(HTAB *tuplecid_data)
 	while ((ent = (ReorderBufferTupleCidEnt *) hash_seq_search(&hstat)) != NULL)
 	{
 		elog(DEBUG3, "mapping: node: %u/%u/%u tid: %u/%u cmin: %u, cmax: %u",
-			 ent->key.rlocator.dbNode,
-			 ent->key.rlocator.spcNode,
-			 ent->key.rlocator.relNode,
+			 ent->key.rlocator.dbOid,
+			 ent->key.rlocator.spcOid,
+			 ent->key.rlocator.relNumber,
 			 ItemPointerGetBlockNumber(&ent->key.tid),
 			 ItemPointerGetOffsetNumber(&ent->key.tid),
 			 ent->cmin,

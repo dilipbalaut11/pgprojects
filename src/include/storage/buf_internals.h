@@ -97,9 +97,9 @@ typedef struct buftag
 
 #define CLEAR_BUFFERTAG(a) \
 ( \
-	(a).rlocator.spcNode = InvalidOid, \
-	(a).rlocator.dbNode = InvalidOid, \
-	(a).rlocator.relNode = InvalidOid, \
+	(a).rlocator.spcOid = InvalidOid, \
+	(a).rlocator.dbOid = InvalidOid, \
+	(a).rlocator.relNumber = InvalidOid, \
 	(a).forkNum = InvalidForkNumber, \
 	(a).blockNum = InvalidBlockNumber \
 )
@@ -292,7 +292,7 @@ extern PGDLLIMPORT BufferDesc *LocalBufferDescriptors;
 typedef struct CkptSortItem
 {
 	Oid			tsId;
-	Oid			relNode;
+	Oid			relNumber;
 	ForkNumber	forkNum;
 	BlockNumber blockNum;
 	int			buf_id;

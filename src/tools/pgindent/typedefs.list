@@ -2274,8 +2274,8 @@ RelationPtr
 RelationSyncEntry
 RelcacheCallbackFunction
 ReleaseMatchCB
-RelfilenodeMapEntry
-RelfilenodeMapKey
+RelfilenumberMapEntry
+RelfilenumberMapKey
 Relids
 RelocationBufferInfo
 RelptrFreePageBtree

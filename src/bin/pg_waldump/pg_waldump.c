@@ -885,11 +885,11 @@ main(int argc, char **argv)
 				break;
 			case 'R':
 				if (sscanf(optarg, "%u/%u/%u",
-						   &config.filter_by_relation.spcNode,
-						   &config.filter_by_relation.dbNode,
-						   &config.filter_by_relation.relNode) != 3 ||
-					!OidIsValid(config.filter_by_relation.spcNode) ||
-					!OidIsValid(config.filter_by_relation.relNode))
+						   &config.filter_by_relation.spcOid,
+						   &config.filter_by_relation.dbOid,
+						   &config.filter_by_relation.relNumber) != 3 ||
+					!OidIsValid(config.filter_by_relation.spcOid) ||
+					!OidIsValid(config.filter_by_relation.relNumber))
 				{
 					pg_log_error("invalid relation specification: \"%s\"", optarg);
 					pg_log_error_detail("Expecting \"tablespace OID/database OID/relation filenode\".");

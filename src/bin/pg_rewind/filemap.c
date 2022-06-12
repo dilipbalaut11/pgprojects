@@ -532,32 +532,32 @@ isRelDataFile(const char *path)
 	 *
 	 *----
 	 */
-	rlocator.spcNode = InvalidOid;
-	rlocator.dbNode = InvalidOid;
-	rlocator.relNode = InvalidOid;
+	rlocator.spcOid = InvalidOid;
+	rlocator.dbOid = InvalidOid;
+	rlocator.relNumber = InvalidOid;
 	segNo = 0;
 	matched = false;
 
-	nmatch = sscanf(path, "global/%u.%u", &rlocator.relNode, &segNo);
+	nmatch = sscanf(path, "global/%u.%u", &rlocator.relNumber, &segNo);
 	if (nmatch == 1 || nmatch == 2)
 	{
-		rlocator.spcNode = GLOBALTABLESPACE_OID;
-		rlocator.dbNode = 0;
+		rlocator.spcOid = GLOBALTABLESPACE_OID;
+		rlocator.dbOid = 0;
 		matched = true;
 	}
 	else
 	{
 		nmatch = sscanf(path, "base/%u/%u.%u",
-						&rlocator.dbNode, &rlocator.relNode, &segNo);
+						&rlocator.dbOid, &rlocator.relNumber, &segNo);
 		if (nmatch == 2 || nmatch == 3)
 		{
-			rlocator.spcNode = DEFAULTTABLESPACE_OID;
+			rlocator.spcOid = DEFAULTTABLESPACE_OID;
 			matched = true;
 		}
 		else
 		{
 			nmatch = sscanf(path, "pg_tblspc/%u/" TABLESPACE_VERSION_DIRECTORY "/%u/%u.%u",
-							&rlocator.spcNode, &rlocator.dbNode, &rlocator.relNode,
+							&rlocator.spcOid, &rlocator.dbOid, &rlocator.relNumber,
 							&segNo);
 			if (nmatch == 3 || nmatch == 4)
 				matched = true;

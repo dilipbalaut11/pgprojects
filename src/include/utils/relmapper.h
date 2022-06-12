@@ -35,10 +35,10 @@ typedef struct xl_relmap_update
 #define MinSizeOfRelmapUpdate offsetof(xl_relmap_update, data)
 
 
-extern Oid	RelationMapOidToFilenode(Oid relationId, bool shared);
+extern Oid	RelationMapOidToFilenumber(Oid relationId, bool shared);
 
-extern Oid	RelationMapFilenodeToOid(Oid relationId, bool shared);
-extern Oid	RelationMapOidToFilenodeForDatabase(char *dbpath, Oid relationId);
+extern Oid	RelationMapFilenumberToOid(Oid relationId, bool shared);
+extern Oid	RelationMapOidToFilenumberForDatabase(char *dbpath, Oid relationId);
 extern void RelationMapCopy(Oid dbid, Oid tsid, char *srcdbpath,
 							char *dstdbpath);
 extern void RelationMapUpdateMap(Oid relationId, Oid fileNode, bool shared,

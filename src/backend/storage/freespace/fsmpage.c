@@ -274,7 +274,7 @@ restart:
 
 			BufferGetTag(buf, &rlocator, &forknum, &blknum);
 			elog(DEBUG1, "fixing corrupt FSM block %u, relation %u/%u/%u",
-				 blknum, rlocator.spcNode, rlocator.dbNode, rlocator.relNode);
+				 blknum, rlocator.spcOid, rlocator.dbOid, rlocator.relNumber);
 
 			/* make sure we hold an exclusive lock */
 			if (!exclusive_lock_held)

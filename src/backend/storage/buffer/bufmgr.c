@@ -824,9 +824,9 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	isExtend = (blockNum == P_NEW);
 
 	TRACE_POSTGRESQL_BUFFER_READ_START(forkNum, blockNum,
-									   smgr->smgr_rlocator.locator.spcNode,
-									   smgr->smgr_rlocator.locator.dbNode,
-									   smgr->smgr_rlocator.locator.relNode,
+									   smgr->smgr_rlocator.locator.spcOid,
+									   smgr->smgr_rlocator.locator.dbOid,
+									   smgr->smgr_rlocator.locator.relNumber,
 									   smgr->smgr_rlocator.backend,
 									   isExtend);
 
@@ -886,9 +886,9 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				VacuumCostBalance += VacuumCostPageHit;
 
 			TRACE_POSTGRESQL_BUFFER_READ_DONE(forkNum, blockNum,
-											  smgr->smgr_rlocator.locator.spcNode,
-											  smgr->smgr_rlocator.locator.dbNode,
-											  smgr->smgr_rlocator.locator.relNode,
+											  smgr->smgr_rlocator.locator.spcOid,
+											  smgr->smgr_rlocator.locator.dbOid,
+											  smgr->smgr_rlocator.locator.relNumber,
 											  smgr->smgr_rlocator.backend,
 											  isExtend,
 											  found);
@@ -1076,9 +1076,9 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		VacuumCostBalance += VacuumCostPageMiss;
 
 	TRACE_POSTGRESQL_BUFFER_READ_DONE(forkNum, blockNum,
-									  smgr->smgr_rlocator.locator.spcNode,
-									  smgr->smgr_rlocator.locator.dbNode,
-									  smgr->smgr_rlocator.locator.relNode,
+									  smgr->smgr_rlocator.locator.spcOid,
+									  smgr->smgr_rlocator.locator.dbOid,
+									  smgr->smgr_rlocator.locator.relNumber,
 									  smgr->smgr_rlocator.backend,
 									  isExtend,
 									  found);
@@ -1255,9 +1255,9 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 				/* OK, do the I/O */
 				TRACE_POSTGRESQL_BUFFER_WRITE_DIRTY_START(forkNum, blockNum,
-														  smgr->smgr_rlocator.locator.spcNode,
-														  smgr->smgr_rlocator.locator.dbNode,
-														  smgr->smgr_rlocator.locator.relNode);
+														  smgr->smgr_rlocator.locator.spcOid,
+														  smgr->smgr_rlocator.locator.dbOid,
+														  smgr->smgr_rlocator.locator.relNumber);
 
 				FlushBuffer(buf, NULL);
 				LWLockRelease(BufferDescriptorGetContentLock(buf));
@@ -1266,9 +1266,9 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 											  &buf->tag);
 
 				TRACE_POSTGRESQL_BUFFER_WRITE_DIRTY_DONE(forkNum, blockNum,
-														 smgr->smgr_rlocator.locator.spcNode,
-														 smgr->smgr_rlocator.locator.dbNode,
-														 smgr->smgr_rlocator.locator.relNode);
+														 smgr->smgr_rlocator.locator.spcOid,
+														 smgr->smgr_rlocator.locator.dbOid,
+														 smgr->smgr_rlocator.locator.relNumber);
 			}
 			else
 			{
@@ -2000,8 +2000,8 @@ BufferSync(int flags)
 
 			item = &CkptBufferIds[num_to_scan++];
 			item->buf_id = buf_id;
-			item->tsId = bufHdr->tag.rlocator.spcNode;
-			item->relNode = bufHdr->tag.rlocator.relNode;
+			item->tsId = bufHdr->tag.rlocator.spcOid;
+			item->relNumber = bufHdr->tag.rlocator.relNumber;
 			item->forkNum = bufHdr->tag.forkNum;
 			item->blockNum = bufHdr->tag.blockNum;
 		}
@@ -2842,9 +2842,9 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 
 	TRACE_POSTGRESQL_BUFFER_FLUSH_START(buf->tag.forkNum,
 										buf->tag.blockNum,
-										reln->smgr_rlocator.locator.spcNode,
-										reln->smgr_rlocator.locator.dbNode,
-										reln->smgr_rlocator.locator.relNode);
+										reln->smgr_rlocator.locator.spcOid,
+										reln->smgr_rlocator.locator.dbOid,
+										reln->smgr_rlocator.locator.relNumber);
 
 	buf_state = LockBufHdr(buf);
 
@@ -2922,9 +2922,9 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 
 	TRACE_POSTGRESQL_BUFFER_FLUSH_DONE(buf->tag.forkNum,
 									   buf->tag.blockNum,
-									   reln->smgr_rlocator.locator.spcNode,
-									   reln->smgr_rlocator.locator.dbNode,
-									   reln->smgr_rlocator.locator.relNode);
+									   reln->smgr_rlocator.locator.spcOid,
+									   reln->smgr_rlocator.locator.dbOid,
+									   reln->smgr_rlocator.locator.relNumber);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
@@ -3419,11 +3419,11 @@ DropDatabaseBuffers(Oid dbid)
 		 * As in DropRelFileLocatorBuffers, an unlocked precheck should be safe
 		 * and saves some cycles.
 		 */
-		if (bufHdr->tag.rlocator.dbNode != dbid)
+		if (bufHdr->tag.rlocator.dbOid != dbid)
 			continue;
 
 		buf_state = LockBufHdr(bufHdr);
-		if (bufHdr->tag.rlocator.dbNode == dbid)
+		if (bufHdr->tag.rlocator.dbOid == dbid)
 			InvalidateBuffer(bufHdr);	/* releases spinlock */
 		else
 			UnlockBufHdr(bufHdr, buf_state);
@@ -3867,13 +3867,13 @@ FlushDatabaseBuffers(Oid dbid)
 		 * As in DropRelFileLocatorBuffers, an unlocked precheck should be safe
 		 * and saves some cycles.
 		 */
-		if (bufHdr->tag.rlocator.dbNode != dbid)
+		if (bufHdr->tag.rlocator.dbOid != dbid)
 			continue;
 
 		ReservePrivateRefCountEntry();
 
 		buf_state = LockBufHdr(bufHdr);
-		if (bufHdr->tag.rlocator.dbNode == dbid &&
+		if (bufHdr->tag.rlocator.dbOid == dbid &&
 			(buf_state & (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
 		{
 			PinBuffer_Locked(bufHdr);
@@ -4711,19 +4711,19 @@ rnode_comparator(const void *p1, const void *p2)
 	RelFileLocator n1 = *(const RelFileLocator *) p1;
 	RelFileLocator n2 = *(const RelFileLocator *) p2;
 
-	if (n1.relNode < n2.relNode)
+	if (n1.relNumber < n2.relNumber)
 		return -1;
-	else if (n1.relNode > n2.relNode)
+	else if (n1.relNumber > n2.relNumber)
 		return 1;
 
-	if (n1.dbNode < n2.dbNode)
+	if (n1.dbOid < n2.dbOid)
 		return -1;
-	else if (n1.dbNode > n2.dbNode)
+	else if (n1.dbOid > n2.dbOid)
 		return 1;
 
-	if (n1.spcNode < n2.spcNode)
+	if (n1.spcOid < n2.spcOid)
 		return -1;
-	else if (n1.spcNode > n2.spcNode)
+	else if (n1.spcOid > n2.spcOid)
 		return 1;
 	else
 		return 0;
@@ -4822,9 +4822,9 @@ ckpt_buforder_comparator(const CkptSortItem *a, const CkptSortItem *b)
 	else if (a->tsId > b->tsId)
 		return 1;
 	/* compare relation */
-	if (a->relNode < b->relNode)
+	if (a->relNumber < b->relNumber)
 		return -1;
-	else if (a->relNode > b->relNode)
+	else if (a->relNumber > b->relNumber)
 		return 1;
 	/* compare fork */
 	else if (a->forkNum < b->forkNum)

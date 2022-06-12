@@ -188,13 +188,13 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 		 * Otherwise, we need to create in the same tablespace as it is in the
 		 * source database.
 		 */
-		if (srcrlocator.spcNode == src_tsid)
-			dstrlocator.spcNode = dst_tsid;
+		if (srcrlocator.spcOid == src_tsid)
+			dstrlocator.spcOid = dst_tsid;
 		else
-			dstrlocator.spcNode = srcrlocator.spcNode;
+			dstrlocator.spcOid = srcrlocator.spcOid;
 
-		dstrlocator.dbNode = dst_dboid;
-		dstrlocator.relNode = srcrlocator.relNode;
+		dstrlocator.dbOid = dst_dboid;
+		dstrlocator.relNumber = srcrlocator.relNumber;
 
 		/*
 		 * Acquire locks on source and target relations before copying.
@@ -250,7 +250,7 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	BlockNumber nblocks;
 	BlockNumber blkno;
 	Buffer		buf;
-	Oid			relfilenode;
+	Oid			relfilenumber;
 	Page		page;
 	List	   *rlocatorlist = NIL;
 	LockRelId	relid;
@@ -258,9 +258,9 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	Snapshot	snapshot;
 	BufferAccessStrategy bstrategy;
 
-	/* Get pg_class relfilenode. */
-	relfilenode = RelationMapOidToFilenodeForDatabase(srcpath,
-													  RelationRelationId);
+	/* Get pg_class relfilenumber. */
+	relfilenumber = RelationMapOidToFilenumberForDatabase(srcpath,
+														  RelationRelationId);
 
 	/* Don't read data into shared_buffers without holding a relation lock. */
 	relid.dbId = dbid;
@@ -268,9 +268,9 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	LockRelationId(&relid, AccessShareLock);
 
 	/* Prepare a RelFileLocator for the pg_class relation. */
-	rlocator.spcNode = tbid;
-	rlocator.dbNode = dbid;
-	rlocator.relNode = relfilenode;
+	rlocator.spcOid = tbid;
+	rlocator.dbOid = dbid;
+	rlocator.relNumber = relfilenumber;
 
 	/*
 	 * We can't use a real relcache entry for a relation in some other
@@ -397,7 +397,7 @@ ScanSourceDatabasePgClassTuple(HeapTupleData *tuple, Oid tbid, Oid dbid,
 {
 	CreateDBRelInfo *relinfo;
 	Form_pg_class classForm;
-	Oid			relfilenode = InvalidOid;
+	Oid			relfilenumber = InvalidOid;
 
 	classForm = (Form_pg_class) GETSTRUCT(tuple);
 
@@ -418,29 +418,29 @@ ScanSourceDatabasePgClassTuple(HeapTupleData *tuple, Oid tbid, Oid dbid,
 		return NULL;
 
 	/*
-	 * If relfilenode is valid then directly use it.  Otherwise, consult the
+	 * If relfilenumber is valid then directly use it.  Otherwise, consult the
 	 * relmap.
 	 */
 	if (OidIsValid(classForm->relfilenode))
-		relfilenode = classForm->relfilenode;
+		relfilenumber = classForm->relfilenode;
 	else
-		relfilenode = RelationMapOidToFilenodeForDatabase(srcpath,
-														  classForm->oid);
+		relfilenumber = RelationMapOidToFilenumberForDatabase(srcpath,
+															  classForm->oid);
 
-	/* We must have a valid relfilenode oid. */
-	if (!OidIsValid(relfilenode))
-		elog(ERROR, "relation with OID %u does not have a valid relfilenode",
+	/* We must have a valid relfilenumber oid. */
+	if (!OidIsValid(relfilenumber))
+		elog(ERROR, "relation with OID %u does not have a valid relfilenumber",
 			 classForm->oid);
 
 	/* Prepare a rel info element and add it to the list. */
 	relinfo = (CreateDBRelInfo *) palloc(sizeof(CreateDBRelInfo));
 	if (OidIsValid(classForm->reltablespace))
-		relinfo->rlocator.spcNode = classForm->reltablespace;
+		relinfo->rlocator.spcOid = classForm->reltablespace;
 	else
-		relinfo->rlocator.spcNode = tbid;
+		relinfo->rlocator.spcOid = tbid;
 
-	relinfo->rlocator.dbNode = dbid;
-	relinfo->rlocator.relNode = relfilenode;
+	relinfo->rlocator.dbOid = dbid;
+	relinfo->rlocator.relNumber = relfilenumber;
 	relinfo->reloid = classForm->oid;
 
 	/* Temporary relations were rejected above. */
@@ -2867,8 +2867,8 @@ remove_dbtablespaces(Oid db_id)
  * try to remove that already-existing subdirectory during the cleanup in
  * remove_dbtablespaces.  Nuking existing files seems like a bad idea, so
  * instead we make this extra check before settling on the OID of the new
- * database.  This exactly parallels what GetNewRelFileNode() does for table
- * relfilenode values.
+ * database.  This exactly parallels what GetNewRelFileNumber() does for table
+ * relfilenumber values.
  */
 static bool
 check_db_file_conflict(Oid db_id)

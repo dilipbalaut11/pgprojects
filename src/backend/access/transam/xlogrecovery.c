@@ -2177,15 +2177,15 @@ xlog_block_info(StringInfo buf, XLogReaderState *record)
 		if (forknum != MAIN_FORKNUM)
 			appendStringInfo(buf, "; blkref #%d: rel %u/%u/%u, fork %u, blk %u",
 							 block_id,
-							 rlocator.spcNode, rlocator.dbNode,
-							 rlocator.relNode,
+							 rlocator.spcOid, rlocator.dbOid,
+							 rlocator.relNumber,
 							 forknum,
 							 blk);
 		else
 			appendStringInfo(buf, "; blkref #%d: rel %u/%u/%u, blk %u",
 							 block_id,
-							 rlocator.spcNode, rlocator.dbNode,
-							 rlocator.relNode,
+							 rlocator.spcOid, rlocator.dbOid,
+							 rlocator.relNumber,
 							 blk);
 		if (XLogRecHasBlockImage(record, block_id))
 			appendStringInfoString(buf, " FPW");
@@ -2379,7 +2379,7 @@ verifyBackupPageConsistency(XLogReaderState *record)
 		{
 			elog(FATAL,
 				 "inconsistent page found, rel %u/%u/%u, forknum %u, blkno %u",
-				 rlocator.spcNode, rlocator.dbNode, rlocator.relNode,
+				 rlocator.spcOid, rlocator.dbOid, rlocator.relNumber,
 				 forknum, blkno);
 		}
 	}

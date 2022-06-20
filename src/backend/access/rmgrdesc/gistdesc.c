@@ -27,7 +27,7 @@ static void
 out_gistxlogPageReuse(StringInfo buf, gistxlogPageReuse *xlrec)
 {
 	appendStringInfo(buf, "rel %u/%u/%u; blk %u; latestRemovedXid %u:%u",
-					 xlrec->locator.spcNode, xlrec->locator.dbNode,
+					 xlrec->locator.spcOid, xlrec->locator.dbOid,
 					 xlrec->locator.relNumber, xlrec->block,
 					 EpochFromFullTransactionId(xlrec->latestRemovedFullXid),
 					 XidFromFullTransactionId(xlrec->latestRemovedFullXid));

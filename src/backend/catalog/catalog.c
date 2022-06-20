@@ -526,8 +526,8 @@ GetNewRelFileNumber(Oid reltablespace, Relation pg_class, char relpersistence)
 	}
 
 	/* This logic should match RelationInitPhysicalAddr */
-	rlocator.locator.spcNode = reltablespace ? reltablespace : MyDatabaseTableSpace;
-	rlocator.locator.dbNode = (rlocator.locator.spcNode == GLOBALTABLESPACE_OID) ? InvalidOid : MyDatabaseId;
+	rlocator.locator.spcOid = reltablespace ? reltablespace : MyDatabaseTableSpace;
+	rlocator.locator.dbOid = (rlocator.locator.spcOid == GLOBALTABLESPACE_OID) ? InvalidOid : MyDatabaseId;
 
 	/*
 	 * The relpath will vary based on the backend ID, so we must initialize

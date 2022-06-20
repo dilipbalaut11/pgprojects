@@ -24,12 +24,12 @@
  * multiple files on the filesystem, as each fork is stored as a separate
  * file, and each fork can be divided into multiple segments. See md.c.
  *
- * spcNode identifies the tablespace of the relation.  It corresponds to
+ * spcOid identifies the tablespace of the relation.  It corresponds to
  * pg_tablespace.oid.
  *
- * dbNode identifies the database of the relation.  It is zero for
+ * dbOid identifies the database of the relation.  It is zero for
  * "shared" relations (those common to all databases of a cluster).
- * Nonzero dbNode values correspond to pg_database.oid.
+ * Nonzero dbOid values correspond to pg_database.oid.
  *
  * relNumber identifies the specific relation.  relNumber corresponds to
  * pg_class.relfilenode (NOT pg_class.oid, because we need to be able
@@ -37,14 +37,14 @@
  * Notice that relNumber is only unique within a database in a particular
  * tablespace.
  *
- * Note: spcNode must be GLOBALTABLESPACE_OID if and only if dbNode is
+ * Note: spcOid must be GLOBALTABLESPACE_OID if and only if dbOid is
  * zero.  We support shared relations only in the "global" tablespace.
  *
  * Note: in pg_class we allow reltablespace == 0 to denote that the
  * relation is stored in its database's "default" tablespace (as
  * identified by pg_database.dattablespace).  However this shorthand
  * is NOT allowed in RelFileLocator structs --- the real tablespace ID
- * must be supplied when setting spcNode.
+ * must be supplied when setting spcOid.
  *
  * Note: in pg_class, relfilenode can be zero to denote that the relation
  * is a "mapped" relation, whose current true filenode number is available
@@ -56,8 +56,8 @@
  */
 typedef struct RelFileLocator
 {
-	Oid			spcNode;		/* tablespace */
-	Oid			dbNode;			/* database */
+	Oid			spcOid;		/* tablespace */
+	Oid			dbOid;			/* database */
 	Oid			relNumber;		/* relation */
 } RelFileLocator;
 
@@ -81,19 +81,19 @@ typedef struct RelFileLocatorBackend
 /*
  * Note: RelFileLocatorEquals and RelFileLocatorBackendEquals compare relNumber first
  * since that is most likely to be different in two unequal RelFileLocators.  It
- * is probably redundant to compare spcNode if the other fields are found equal,
+ * is probably redundant to compare spcOid if the other fields are found equal,
  * but do it anyway to be sure.  Likewise for checking the backend ID in
  * RelFileLocatorBackendEquals.
  */
 #define RelFileLocatorEquals(node1, node2) \
 	((node1).relNumber == (node2).relNumber && \
-	 (node1).dbNode == (node2).dbNode && \
-	 (node1).spcNode == (node2).spcNode)
+	 (node1).dbOid == (node2).dbOid && \
+	 (node1).spcOid == (node2).spcOid)
 
 #define RelFileLocatorBackendEquals(node1, node2) \
 	((node1).node.relNumber == (node2).node.relNumber && \
-	 (node1).node.dbNode == (node2).node.dbNode && \
+	 (node1).node.dbOid == (node2).node.dbOid && \
 	 (node1).backend == (node2).backend && \
-	 (node1).node.spcNode == (node2).node.spcNode)
+	 (node1).node.spcOid == (node2).node.spcOid)
 
 #endif							/* RELFILELOCATOR_H */

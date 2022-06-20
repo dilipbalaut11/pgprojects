@@ -90,7 +90,7 @@ typedef struct
 	int8		id;				/* type field --- must be first */
 	int8		backend_hi;		/* high bits of backend ID, if temprel */
 	uint16		backend_lo;		/* low bits of backend ID, if temprel */
-	RelFileLocator rlocator;			/* spcNode, dbNode, relNumber */
+	RelFileLocator rlocator;			/* spcOid, dbOid, relNumber */
 } SharedInvalSmgrMsg;
 
 #define SHAREDINVALRELMAP_ID	(-4)

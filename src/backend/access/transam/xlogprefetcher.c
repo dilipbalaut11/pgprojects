@@ -583,7 +583,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 					elog(XLOGPREFETCHER_DEBUG_LEVEL,
 						 "suppressing prefetch in database %u until %X/%X is replayed due to raw file copy",
-						 rnode.dbNode,
+						 rnode.dbOid,
 						 LSN_FORMAT_ARGS(record->lsn));
 #endif
 				}
@@ -611,8 +611,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 						elog(XLOGPREFETCHER_DEBUG_LEVEL,
 							 "suppressing prefetch in relation %u/%u/%u until %X/%X is replayed, which creates the relation",
-							 xlrec->rnode.spcNode,
-							 xlrec->rnode.dbNode,
+							 xlrec->rnode.spcOid,
+							 xlrec->rnode.dbOid,
 							 xlrec->rnode.relNumber,
 							 LSN_FORMAT_ARGS(record->lsn));
 #endif
@@ -634,8 +634,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 					elog(XLOGPREFETCHER_DEBUG_LEVEL,
 						 "suppressing prefetch in relation %u/%u/%u from block %u until %X/%X is replayed, which truncates the relation",
-						 xlrec->rnode.spcNode,
-						 xlrec->rnode.dbNode,
+						 xlrec->rnode.spcOid,
+						 xlrec->rnode.dbOid,
 						 xlrec->rnode.relNumber,
 						 xlrec->blkno,
 						 LSN_FORMAT_ARGS(record->lsn));
@@ -733,8 +733,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 				elog(XLOGPREFETCHER_DEBUG_LEVEL,
 					 "suppressing all prefetch in relation %u/%u/%u until %X/%X is replayed, because the relation does not exist on disk",
-					 reln->smgr_rnode.node.spcNode,
-					 reln->smgr_rnode.node.dbNode,
+					 reln->smgr_rnode.node.spcOid,
+					 reln->smgr_rnode.node.dbOid,
 					 reln->smgr_rnode.node.relNumber,
 					 LSN_FORMAT_ARGS(record->lsn));
 #endif
@@ -754,8 +754,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 				elog(XLOGPREFETCHER_DEBUG_LEVEL,
 					 "suppressing prefetch in relation %u/%u/%u from block %u until %X/%X is replayed, because the relation is too small",
-					 reln->smgr_rnode.node.spcNode,
-					 reln->smgr_rnode.node.dbNode,
+					 reln->smgr_rnode.node.spcOid,
+					 reln->smgr_rnode.node.dbOid,
 					 reln->smgr_rnode.node.relNumber,
 					 block->blkno,
 					 LSN_FORMAT_ARGS(record->lsn));
@@ -793,8 +793,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 				 */
 				elog(ERROR,
 					 "could not prefetch relation %u/%u/%u block %u",
-					 reln->smgr_rlocator.locator.spcNode,
-					 reln->smgr_rlocator.locator.dbNode,
+					 reln->smgr_rlocator.locator.spcOid,
+					 reln->smgr_rlocator.locator.dbOid,
 					 reln->smgr_rlocator.locator.relNumber,
 					 block->blkno);
 			}
@@ -931,7 +931,7 @@ XLogPrefetcherIsFiltered(XLogPrefetcher *prefetcher, RelFileLocator rnode,
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 			elog(XLOGPREFETCHER_DEBUG_LEVEL,
 				 "prefetch of %u/%u/%u block %u suppressed; filtering until LSN %X/%X is replayed (blocks >= %u filtered)",
-				 rnode.spcNode, rnode.dbNode, rnode.relNumber, blockno,
+				 rnode.spcOid, rnode.dbOid, rnode.relNumber, blockno,
 				 LSN_FORMAT_ARGS(filter->filter_until_replayed),
 				 filter->filter_from_block);
 #endif
@@ -940,14 +940,14 @@ XLogPrefetcherIsFiltered(XLogPrefetcher *prefetcher, RelFileLocator rnode,
 
 		/* See if the whole database is filtered. */
 		rnode.relNumber = InvalidOid;
-		rnode.spcNode = InvalidOid;
+		rnode.spcOid = InvalidOid;
 		filter = hash_search(prefetcher->filter_table, &rnode, HASH_FIND, NULL);
 		if (filter)
 		{
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 			elog(XLOGPREFETCHER_DEBUG_LEVEL,
 				 "prefetch of %u/%u/%u block %u suppressed; filtering until LSN %X/%X is replayed (whole database)",
-				 rnode.spcNode, rnode.dbNode, rnode.relNumber, blockno,
+				 rnode.spcOid, rnode.dbOid, rnode.relNumber, blockno,
 				 LSN_FORMAT_ARGS(filter->filter_until_replayed));
 #endif
 			return true;

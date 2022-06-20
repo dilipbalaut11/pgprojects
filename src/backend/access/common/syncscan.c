@@ -159,8 +159,8 @@ SyncScanShmemInit(void)
 			 * these invalid entries will fall off the LRU list and get
 			 * replaced with real entries.
 			 */
-			item->location.relfilelocator.spcNode = InvalidOid;
-			item->location.relfilelocator.dbNode = InvalidOid;
+			item->location.relfilelocator.spcOid = InvalidOid;
+			item->location.relfilelocator.dbOid = InvalidOid;
 			item->location.relfilelocator.relNumber = InvalidOid;
 			item->location.location = InvalidBlockNumber;
 

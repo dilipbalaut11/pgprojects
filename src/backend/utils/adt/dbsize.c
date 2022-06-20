@@ -937,13 +937,13 @@ pg_relation_filepath(PG_FUNCTION_ARGS)
 	{
 		/* This logic should match RelationInitPhysicalAddr */
 		if (relform->reltablespace)
-			rlocator.spcNode = relform->reltablespace;
+			rlocator.spcOid = relform->reltablespace;
 		else
-			rlocator.spcNode = MyDatabaseTableSpace;
-		if (rlocator.spcNode == GLOBALTABLESPACE_OID)
-			rlocator.dbNode = InvalidOid;
+			rlocator.spcOid = MyDatabaseTableSpace;
+		if (rlocator.spcOid == GLOBALTABLESPACE_OID)
+			rlocator.dbOid = InvalidOid;
 		else
-			rlocator.dbNode = MyDatabaseId;
+			rlocator.dbOid = MyDatabaseId;
 		if (relform->relfilenode)
 			rlocator.relNumber = relform->relfilenode;
 		else					/* Consult the relation mapper */
@@ -955,8 +955,8 @@ pg_relation_filepath(PG_FUNCTION_ARGS)
 		/* no storage, return NULL */
 		rlocator.relNumber = InvalidOid;
 		/* some compilers generate warnings without these next two lines */
-		rlocator.dbNode = InvalidOid;
-		rlocator.spcNode = InvalidOid;
+		rlocator.dbOid = InvalidOid;
+		rlocator.spcOid = InvalidOid;
 	}
 
 	if (!OidIsValid(rlocator.relNumber))

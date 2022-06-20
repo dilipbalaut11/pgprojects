@@ -1316,13 +1316,13 @@ RelationInitPhysicalAddr(Relation relation)
 		return;
 
 	if (relation->rd_rel->reltablespace)
-		relation->rd_locator.spcNode = relation->rd_rel->reltablespace;
+		relation->rd_locator.spcOid = relation->rd_rel->reltablespace;
 	else
-		relation->rd_locator.spcNode = MyDatabaseTableSpace;
-	if (relation->rd_locator.spcNode == GLOBALTABLESPACE_OID)
-		relation->rd_locator.dbNode = InvalidOid;
+		relation->rd_locator.spcOid = MyDatabaseTableSpace;
+	if (relation->rd_locator.spcOid == GLOBALTABLESPACE_OID)
+		relation->rd_locator.dbOid = InvalidOid;
 	else
-		relation->rd_locator.dbNode = MyDatabaseId;
+		relation->rd_locator.dbOid = MyDatabaseId;
 
 	if (relation->rd_rel->relfilenode)
 	{

@@ -2140,7 +2140,7 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 				case REORDER_BUFFER_CHANGE_DELETE:
 					Assert(snapshot_now);
 
-					reloid = RelidByRelfilenumber(change->data.tp.rlocator.spcNode,
+					reloid = RelidByRelfilenumber(change->data.tp.rlocator.spcOid,
 												  change->data.tp.rlocator.relNumber);
 
 					/*
@@ -4870,8 +4870,8 @@ DisplayMapping(HTAB *tuplecid_data)
 	while ((ent = (ReorderBufferTupleCidEnt *) hash_seq_search(&hstat)) != NULL)
 	{
 		elog(DEBUG3, "mapping: node: %u/%u/%u tid: %u/%u cmin: %u, cmax: %u",
-			 ent->key.rlocator.dbNode,
-			 ent->key.rlocator.spcNode,
+			 ent->key.rlocator.dbOid,
+			 ent->key.rlocator.spcOid,
 			 ent->key.rlocator.relNumber,
 			 ItemPointerGetBlockNumber(&ent->key.tid),
 			 ItemPointerGetOffsetNumber(&ent->key.tid),

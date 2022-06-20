@@ -14380,7 +14380,7 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	/* Open old and new relation */
 	newrlocator = rel->rd_locator;
 	newrlocator.relNumber = newrelnode;
-	newrlocator.spcNode = newTableSpace;
+	newrlocator.spcOid = newTableSpace;
 
 	/* hand off to AM to actually create the new filenode and copy the data */
 	if (rel->rd_rel->relkind == RELKIND_INDEX)

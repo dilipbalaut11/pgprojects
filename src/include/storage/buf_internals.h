@@ -97,8 +97,8 @@ typedef struct buftag
 
 #define CLEAR_BUFFERTAG(a) \
 ( \
-	(a).rlocator.spcNode = InvalidOid, \
-	(a).rlocator.dbNode = InvalidOid, \
+	(a).rlocator.spcOid = InvalidOid, \
+	(a).rlocator.dbOid = InvalidOid, \
 	(a).rlocator.relNumber = InvalidOid, \
 	(a).forkNum = InvalidForkNumber, \
 	(a).blockNum = InvalidBlockNumber \

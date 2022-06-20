@@ -199,8 +199,8 @@ mdcreate(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 	 * should be here and not in commands/tablespace.c?  But that would imply
 	 * importing a lot of stuff that smgr.c oughtn't know, either.
 	 */
-	TablespaceCreateDbspace(reln->smgr_rlocator.locator.spcNode,
-							reln->smgr_rlocator.locator.dbNode,
+	TablespaceCreateDbspace(reln->smgr_rlocator.locator.spcOid,
+							reln->smgr_rlocator.locator.dbOid,
 							isRedo);
 
 	path = relpath(reln->smgr_rlocator, forkNum);
@@ -645,8 +645,8 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	MdfdVec    *v;
 
 	TRACE_POSTGRESQL_SMGR_MD_READ_START(forknum, blocknum,
-										reln->smgr_rlocator.locator.spcNode,
-										reln->smgr_rlocator.locator.dbNode,
+										reln->smgr_rlocator.locator.spcOid,
+										reln->smgr_rlocator.locator.dbOid,
 										reln->smgr_rlocator.locator.relNumber,
 										reln->smgr_rlocator.backend);
 
@@ -660,8 +660,8 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	nbytes = FileRead(v->mdfd_vfd, buffer, BLCKSZ, seekpos, WAIT_EVENT_DATA_FILE_READ);
 
 	TRACE_POSTGRESQL_SMGR_MD_READ_DONE(forknum, blocknum,
-									   reln->smgr_rlocator.locator.spcNode,
-									   reln->smgr_rlocator.locator.dbNode,
+									   reln->smgr_rlocator.locator.spcOid,
+									   reln->smgr_rlocator.locator.dbOid,
 									   reln->smgr_rlocator.locator.relNumber,
 									   reln->smgr_rlocator.backend,
 									   nbytes,
@@ -715,8 +715,8 @@ mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 #endif
 
 	TRACE_POSTGRESQL_SMGR_MD_WRITE_START(forknum, blocknum,
-										 reln->smgr_rlocator.locator.spcNode,
-										 reln->smgr_rlocator.locator.dbNode,
+										 reln->smgr_rlocator.locator.spcOid,
+										 reln->smgr_rlocator.locator.dbOid,
 										 reln->smgr_rlocator.locator.relNumber,
 										 reln->smgr_rlocator.backend);
 
@@ -730,8 +730,8 @@ mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	nbytes = FileWrite(v->mdfd_vfd, buffer, BLCKSZ, seekpos, WAIT_EVENT_DATA_FILE_WRITE);
 
 	TRACE_POSTGRESQL_SMGR_MD_WRITE_DONE(forknum, blocknum,
-										reln->smgr_rlocator.locator.spcNode,
-										reln->smgr_rlocator.locator.dbNode,
+										reln->smgr_rlocator.locator.spcOid,
+										reln->smgr_rlocator.locator.dbOid,
 										reln->smgr_rlocator.locator.relNumber,
 										reln->smgr_rlocator.backend,
 										nbytes,
@@ -1041,8 +1041,8 @@ ForgetDatabaseSyncRequests(Oid dbid)
 	FileTag		tag;
 	RelFileLocator rlocator;
 
-	rlocator.dbNode = dbid;
-	rlocator.spcNode = 0;
+	rlocator.dbOid = dbid;
+	rlocator.spcOid = 0;
 	rlocator.relNumber = 0;
 
 	INIT_MD_FILETAG(tag, rlocator, InvalidForkNumber, InvalidBlockNumber);
@@ -1417,5 +1417,5 @@ mdfiletagmatches(const FileTag *ftag, const FileTag *candidate)
 	 * We'll return true for all candidates that have the same database OID as
 	 * the ftag from the SYNC_FILTER_REQUEST request, so they're forgotten.
 	 */
-	return ftag->rlocator.dbNode == candidate->rlocator.dbNode;
+	return ftag->rlocator.dbOid == candidate->rlocator.dbOid;
 }

@@ -985,8 +985,8 @@ write_relmap_file(RelMapFile *newmap, bool write_wal, bool send_sinval,
 		{
 			RelFileLocator rlocator;
 
-			rlocator.spcNode = tsid;
-			rlocator.dbNode = dbid;
+			rlocator.spcOid = tsid;
+			rlocator.dbOid = dbid;
 			rlocator.relNumber = newmap->mappings[i].mapfilenumber;
 			RelationPreserveStorage(rlocator, false);
 		}

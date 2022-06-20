@@ -214,7 +214,7 @@ forget_invalid_pages_db(Oid dbid)
 
 	while ((hentry = (xl_invalid_page *) hash_seq_search(&status)) != NULL)
 	{
-		if (hentry->key.locator.dbNode == dbid)
+		if (hentry->key.locator.dbOid == dbid)
 		{
 			if (message_level_is_interesting(DEBUG2))
 			{
@@ -626,7 +626,7 @@ CreateFakeRelcacheEntry(RelFileLocator rlocator)
 	 * In recovery, we are running by ourselves and can't have any lock
 	 * conflicts.  While syncing, we already hold AccessExclusiveLock.
 	 */
-	rel->rd_lockInfo.lockRelId.dbId = rlocator.dbNode;
+	rel->rd_lockInfo.lockRelId.dbId = rlocator.dbOid;
 	rel->rd_lockInfo.lockRelId.relId = rlocator.relNumber;
 
 	rel->rd_smgr = NULL;

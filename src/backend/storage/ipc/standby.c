@@ -461,7 +461,7 @@ ResolveRecoveryConflictWithSnapshot(TransactionId latestRemovedXid, RelFileLocat
 		return;
 
 	backends = GetConflictingVirtualXIDs(latestRemovedXid,
-										 locator.dbNode);
+										 locator.dbOid);
 
 	ResolveRecoveryConflictWithVirtualXIDs(backends,
 										   PROCSIG_RECOVERY_CONFLICT_SNAPSHOT,

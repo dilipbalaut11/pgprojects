@@ -188,12 +188,12 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 		 * Otherwise, we need to create in the same tablespace as it is in the
 		 * source database.
 		 */
-		if (srcrlocator.spcNode == src_tsid)
-			dstrlocator.spcNode = dst_tsid;
+		if (srcrlocator.spcOid == src_tsid)
+			dstrlocator.spcOid = dst_tsid;
 		else
-			dstrlocator.spcNode = srcrlocator.spcNode;
+			dstrlocator.spcOid = srcrlocator.spcOid;
 
-		dstrlocator.dbNode = dst_dboid;
+		dstrlocator.dbOid = dst_dboid;
 		dstrlocator.relNumber = srcrlocator.relNumber;
 
 		/*
@@ -268,8 +268,8 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	LockRelationId(&relid, AccessShareLock);
 
 	/* Prepare a RelFileLocator for the pg_class relation. */
-	rlocator.spcNode = tbid;
-	rlocator.dbNode = dbid;
+	rlocator.spcOid = tbid;
+	rlocator.dbOid = dbid;
 	rlocator.relNumber = relfilenumber;
 
 	/*
@@ -435,11 +435,11 @@ ScanSourceDatabasePgClassTuple(HeapTupleData *tuple, Oid tbid, Oid dbid,
 	/* Prepare a rel info element and add it to the list. */
 	relinfo = (CreateDBRelInfo *) palloc(sizeof(CreateDBRelInfo));
 	if (OidIsValid(classForm->reltablespace))
-		relinfo->rlocator.spcNode = classForm->reltablespace;
+		relinfo->rlocator.spcOid = classForm->reltablespace;
 	else
-		relinfo->rlocator.spcNode = tbid;
+		relinfo->rlocator.spcOid = tbid;
 
-	relinfo->rlocator.dbNode = dbid;
+	relinfo->rlocator.dbOid = dbid;
 	relinfo->rlocator.relNumber = relfilenumber;
 	relinfo->reloid = classForm->oid;
 

@@ -132,15 +132,15 @@ extern char *output_files[];
 typedef struct
 {
 	/* Can't use NAMEDATALEN; not guaranteed to be same on client */
-	char	   *nspname;		/* namespace name */
-	char	   *relname;		/* relation name */
-	Oid			reloid;			/* relation OID */
-	Oid			relfilenode;	/* relation file node */
-	Oid			indtable;		/* if index, OID of its table, else 0 */
-	Oid			toastheap;		/* if toast table, OID of base table, else 0 */
-	char	   *tablespace;		/* tablespace path; "" for cluster default */
-	bool		nsp_alloc;		/* should nspname be freed? */
-	bool		tblsp_alloc;	/* should tablespace be freed? */
+	char		   *nspname;		/* namespace name */
+	char		   *relname;		/* relation name */
+	Oid				reloid;			/* relation OID */
+	RelFileNumber	relfilenumber;	/* relation file number */
+	Oid				indtable;		/* if index, OID of its table, else 0 */
+	Oid				toastheap;		/* if toast table, OID of base table, else 0 */
+	char		   *tablespace;		/* tablespace path; "" for cluster default */
+	bool			nsp_alloc;		/* should nspname be freed? */
+	bool			tblsp_alloc;	/* should tablespace be freed? */
 } RelInfo;
 
 typedef struct
@@ -159,7 +159,7 @@ typedef struct
 	const char *old_tablespace_suffix;
 	const char *new_tablespace_suffix;
 	Oid			db_oid;
-	Oid			relfilenode;
+	RelFileNumber	relfilenumber;
 	/* the rest are used only for logging and error reporting */
 	char	   *nspname;		/* namespaces */
 	char	   *relname;
@@ -400,7 +400,7 @@ void		parseCommandLine(int argc, char *argv[]);
 void		adjust_data_dir(ClusterInfo *cluster);
 void		get_sock_dir(ClusterInfo *cluster, bool live_check);
 
-/* relfilenode.c */
+/* relfilenumber.c */
 
 void		transfer_all_new_tablespaces(DbInfoArr *old_db_arr,
 										 DbInfoArr *new_db_arr, char *old_pgdata, char *new_pgdata);

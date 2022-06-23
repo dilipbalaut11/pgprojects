@@ -87,7 +87,7 @@
 
 /* Potentially set by pg_upgrade_support functions */
 Oid			binary_upgrade_next_index_pg_class_oid = InvalidOid;
-Oid			binary_upgrade_next_index_pg_class_relfilenumber = InvalidOid;
+Oid			binary_upgrade_next_index_pg_class_relfilenode = InvalidRelFileNumber;
 
 /*
  * Pointer-free representation of variables used when reindexing system
@@ -703,7 +703,7 @@ index_create(Relation heapRelation,
 			 Oid indexRelationId,
 			 Oid parentIndexRelid,
 			 Oid parentConstraintId,
-			 Oid relFileNumber,
+			 RelFileNumber relFileNumber,
 			 IndexInfo *indexInfo,
 			 List *indexColNames,
 			 Oid accessMethodObjectId,
@@ -735,7 +735,7 @@ index_create(Relation heapRelation,
 	char		relkind;
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
-	bool		create_storage = !OidIsValid(relFileNumber);
+	bool		create_storage = !RelFileNumberIsValid(relFileNumber);
 
 	/* constraint flags can only be set when a constraint is requested */
 	Assert((constr_flags == 0) ||
@@ -920,12 +920,12 @@ index_create(Relation heapRelation,
 
 			/* Override the index relfilenumber */
 			if ((relkind == RELKIND_INDEX) &&
-				(!OidIsValid(binary_upgrade_next_index_pg_class_relfilenumber)))
+				(!OidIsValid(binary_upgrade_next_index_pg_class_relfilenode)))
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("index relfilenumber value not set when in binary upgrade mode")));
-			relFileNumber = binary_upgrade_next_index_pg_class_relfilenumber;
-			binary_upgrade_next_index_pg_class_relfilenumber = InvalidOid;
+			relFileNumber = binary_upgrade_next_index_pg_class_relfilenode;
+			binary_upgrade_next_index_pg_class_relfilenode = InvalidOid;
 
 			/*
 			 * Note that we want create_storage = true for binary upgrade. The
@@ -1408,7 +1408,7 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId,
 							  InvalidOid,	/* indexRelationId */
 							  InvalidOid,	/* parentIndexRelid */
 							  InvalidOid,	/* parentConstraintId */
-							  InvalidOid,	/* relFileNumber */
+							  InvalidRelFileNumber,	/* relFileNumber */
 							  newInfo,
 							  indexColNames,
 							  indexRelation->rd_rel->relam,

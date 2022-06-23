@@ -75,7 +75,7 @@ typedef struct sequence_magic
 typedef struct SeqTableData
 {
 	Oid			relid;			/* pg_class OID of this sequence (hash key) */
-	Oid			filenumber;		/* last seen relfilenumber of this sequence */
+	RelFileNumber filenumber;	/* last seen relfilenumber of this sequence */
 	LocalTransactionId lxid;	/* xact in which we last did a seq op */
 	bool		last_valid;		/* do we have a valid "last" value? */
 	int64		last;			/* value last returned by nextval */
@@ -1147,7 +1147,7 @@ init_sequence(Oid relid, SeqTable *p_elm, Relation *p_rel)
 	if (!found)
 	{
 		/* relid already filled in */
-		elm->filenumber = InvalidOid;
+		elm->filenumber = InvalidRelFileNumber;
 		elm->lxid = InvalidLocalTransactionId;
 		elm->last_valid = false;
 		elm->last = elm->cached = 0;

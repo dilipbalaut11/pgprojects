@@ -1578,7 +1578,7 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 	index->excludeOpNames = NIL;
 	index->idxcomment = NULL;
 	index->indexOid = InvalidOid;
-	index->oldNumber = InvalidOid;
+	index->oldNumber = InvalidRelFileNumber;
 	index->oldCreateSubid = InvalidSubTransactionId;
 	index->oldFirstRelfilenumberSubid = InvalidSubTransactionId;
 	index->unique = idxrec->indisunique;

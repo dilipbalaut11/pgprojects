@@ -1061,9 +1061,9 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 				reltup2;
 	Form_pg_class relform1,
 				relform2;
-	Oid			relfilenumber1,
-				relfilenumber2;
-	Oid			swaptemp;
+	RelFileNumber	relfilenumber1,
+					relfilenumber2;
+	RelFileNumber	swaptemp;
 	char		swptmpchr;
 
 	/* We need writable copies of both pg_class tuples. */
@@ -1082,7 +1082,8 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 	relfilenumber1 = relform1->relfilenode;
 	relfilenumber2 = relform2->relfilenode;
 
-	if (OidIsValid(relfilenumber1) && OidIsValid(relfilenumber2))
+	if (RelFileNumberIsValid(relfilenumber1) &&
+		RelFileNumberIsValid(relfilenumber2))
 	{
 		/*
 		 * Normal non-mapped relations: swap relfilenumbers, reltablespaces,
@@ -1120,7 +1121,8 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 		 * Mapped-relation case.  Here we have to swap the relation mappings
 		 * instead of modifying the pg_class columns.  Both must be mapped.
 		 */
-		if (OidIsValid(relfilenumber1) || OidIsValid(relfilenumber2))
+		if (RelFileNumberIsValid(relfilenumber1) ||
+			RelFileNumberIsValid(relfilenumber2))
 			elog(ERROR, "cannot swap mapped relation \"%s\" with non-mapped relation",
 				 NameStr(relform1->relname));
 
@@ -1149,11 +1151,11 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 		 * Fetch the mappings --- shouldn't fail, but be paranoid
 		 */
 		relfilenumber1 = RelationMapOidToFilenumber(r1, relform1->relisshared);
-		if (!OidIsValid(relfilenumber1))
+		if (!RelFileNumberIsValid(relfilenumber1))
 			elog(ERROR, "could not find relation mapping for relation \"%s\", OID %u",
 				 NameStr(relform1->relname), r1);
 		relfilenumber2 = RelationMapOidToFilenumber(r2, relform2->relisshared);
-		if (!OidIsValid(relfilenumber2))
+		if (!RelFileNumberIsValid(relfilenumber2))
 			elog(ERROR, "could not find relation mapping for relation \"%s\", OID %u",
 				 NameStr(relform2->relname), r2);
 

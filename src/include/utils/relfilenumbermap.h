@@ -13,6 +13,6 @@
 #ifndef RELFILENUMBERMAP_H
 #define RELFILENUMBERMAP_H
 
-extern Oid	RelidByRelfilenumber(Oid reltablespace, Oid relfilenumber);
+extern Oid	RelidByRelfilenumber(Oid reltablespace, RelFileNumber relfilenumber);
 
 #endif							/* RELFILENUMBERMAP_H */

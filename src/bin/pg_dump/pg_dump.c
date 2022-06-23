@@ -4862,7 +4862,7 @@ binary_upgrade_set_pg_class_oids(Archive *fout,
 		 * partitioned tables have a relfilenumber, which should not be
 		 * preserved when upgrading.
 		 */
-		if (OidIsValid(relfilenumber) && relkind != RELKIND_PARTITIONED_TABLE)
+		if (RelFileNumberIsValid(relfilenumber) && relkind != RELKIND_PARTITIONED_TABLE)
 			appendPQExpBuffer(upgrade_buffer,
 							  "SELECT pg_catalog.binary_upgrade_set_next_heap_relfilenode('%u'::pg_catalog.oid);\n",
 							  relfilenumber);

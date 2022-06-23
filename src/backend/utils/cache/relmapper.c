@@ -132,7 +132,7 @@ static RelMapFile pending_local_updates;
 
 
 /* non-export function prototypes */
-static void apply_map_update(RelMapFile *map, Oid relationId, Oid filenumber,
+static void apply_map_update(RelMapFile *map, Oid relationId, RelFileNumber filenumber,
 							 bool add_okay);
 static void merge_map_updates(RelMapFile *map, const RelMapFile *updates,
 							  bool add_okay);
@@ -211,7 +211,7 @@ RelationMapOidToFilenumber(Oid relationId, bool shared)
  * relfilenumber doesn't pertain to a mapped relation.
  */
 Oid
-RelationMapFilenumberToOid(Oid filenumber, bool shared)
+RelationMapFilenumberToOid(RelFileNumber filenumber, bool shared)
 {
 	const RelMapFile *map;
 	int32		i;
@@ -317,7 +317,7 @@ RelationMapCopy(Oid dbid, Oid tsid, char *srcdbpath, char *dstdbpath)
  * immediately.  Otherwise it is made pending until CommandCounterIncrement.
  */
 void
-RelationMapUpdateMap(Oid relationId, Oid fileNumber, bool shared,
+RelationMapUpdateMap(Oid relationId, RelFileNumber fileNumber, bool shared,
 					 bool immediate)
 {
 	RelMapFile *map;
@@ -375,7 +375,8 @@ RelationMapUpdateMap(Oid relationId, Oid fileNumber, bool shared,
  * add_okay = false to draw an error if not.
  */
 static void
-apply_map_update(RelMapFile *map, Oid relationId, Oid fileNumber, bool add_okay)
+apply_map_update(RelMapFile *map, Oid relationId, RelFileNumber fileNumber,
+				 bool add_okay)
 {
 	int32		i;
 

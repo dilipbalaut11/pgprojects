@@ -77,9 +77,9 @@
 
 /* Potentially set by pg_upgrade_support functions */
 Oid			binary_upgrade_next_heap_pg_class_oid = InvalidOid;
-Oid			binary_upgrade_next_heap_pg_class_relfilenumber = InvalidOid;
+Oid			binary_upgrade_next_heap_pg_class_relfilenode = InvalidOid;
 Oid			binary_upgrade_next_toast_pg_class_oid = InvalidOid;
-Oid			binary_upgrade_next_toast_pg_class_relfilenumber = InvalidOid;
+Oid			binary_upgrade_next_toast_pg_class_relfilenode = InvalidOid;
 
 static void AddNewRelationTuple(Relation pg_class_desc,
 								Relation new_rel_desc,
@@ -289,7 +289,7 @@ heap_create(const char *relname,
 			Oid relnamespace,
 			Oid reltablespace,
 			Oid relid,
-			Oid relfilenumber,
+			RelFileNumber relfilenumber,
 			Oid accessmtd,
 			TupleDesc tupDesc,
 			char relkind,
@@ -344,7 +344,7 @@ heap_create(const char *relname,
 		 * If relfilenumber is unspecified by the caller then create storage
 		 * with oid same as relid.
 		 */
-		if (!OidIsValid(relfilenumber))
+		if (!RelFileNumberIsValid(relfilenumber))
 			relfilenumber = relid;
 	}
 
@@ -1115,7 +1115,7 @@ heap_create_with_catalog(const char *relname,
 	Oid			new_type_oid;
 
 	/* By default set to InvalidOid unless overridden by binary-upgrade */
-	Oid			relfilenumber = InvalidOid;
+	RelFileNumber	relfilenumber = InvalidRelFileNumber;
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
 
@@ -1196,13 +1196,13 @@ heap_create_with_catalog(const char *relname,
 					relid = binary_upgrade_next_toast_pg_class_oid;
 					binary_upgrade_next_toast_pg_class_oid = InvalidOid;
 
-					if (!OidIsValid(binary_upgrade_next_toast_pg_class_relfilenumber))
+					if (!OidIsValid(binary_upgrade_next_toast_pg_class_relfilenode))
 						ereport(ERROR,
 								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 								 errmsg("toast relfilenumber value not set when in binary upgrade mode")));
 
-					relfilenumber = binary_upgrade_next_toast_pg_class_relfilenumber;
-					binary_upgrade_next_toast_pg_class_relfilenumber = InvalidOid;
+					relfilenumber = binary_upgrade_next_toast_pg_class_relfilenode;
+					binary_upgrade_next_toast_pg_class_relfilenode = InvalidOid;
 				}
 			}
 			else
@@ -1217,20 +1217,20 @@ heap_create_with_catalog(const char *relname,
 
 				if (RELKIND_HAS_STORAGE(relkind))
 				{
-					if (!OidIsValid(binary_upgrade_next_heap_pg_class_relfilenumber))
+					if (!OidIsValid(binary_upgrade_next_heap_pg_class_relfilenode))
 						ereport(ERROR,
 								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 								 errmsg("relfilenumber value not set when in binary upgrade mode")));
 
-					relfilenumber = binary_upgrade_next_heap_pg_class_relfilenumber;
-					binary_upgrade_next_heap_pg_class_relfilenumber = InvalidOid;
+					relfilenumber = binary_upgrade_next_heap_pg_class_relfilenode;
+					binary_upgrade_next_heap_pg_class_relfilenode = InvalidOid;
 				}
 			}
 		}
 
 		if (!OidIsValid(relid))
 			relid = GetNewRelFileNumber(reltablespace, pg_class_desc,
-									  relpersistence);
+										relpersistence);
 	}
 
 	/*

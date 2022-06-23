@@ -135,7 +135,7 @@ InitializeRelfilenumberMap(void)
  * Returns InvalidOid if no relation matching the criteria could be found.
  */
 Oid
-RelidByRelfilenumber(Oid reltablespace, Oid relfilenumber)
+RelidByRelfilenumber(Oid reltablespace, RelFileNumber relfilenumber)
 {
 	RelfilenumberMapKey key;
 	RelfilenumberMapEntry *entry;

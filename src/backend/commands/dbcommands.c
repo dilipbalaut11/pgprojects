@@ -397,7 +397,7 @@ ScanSourceDatabasePgClassTuple(HeapTupleData *tuple, Oid tbid, Oid dbid,
 {
 	CreateDBRelInfo *relinfo;
 	Form_pg_class classForm;
-	Oid			relfilenumber = InvalidOid;
+	Oid			relfilenumber = InvalidRelFileNumber;
 
 	classForm = (Form_pg_class) GETSTRUCT(tuple);
 
@@ -428,7 +428,7 @@ ScanSourceDatabasePgClassTuple(HeapTupleData *tuple, Oid tbid, Oid dbid,
 															  classForm->oid);
 
 	/* We must have a valid relfilenumber oid. */
-	if (!OidIsValid(relfilenumber))
+	if (!RelFileNumberIsValid(relfilenumber))
 		elog(ERROR, "relation with OID %u does not have a valid relfilenumber",
 			 classForm->oid);
 

@@ -902,7 +902,7 @@ pg_filenode_relation(PG_FUNCTION_ARGS)
 	Oid			heaprel;
 
 	/* test needed so RelidByRelfilenumber doesn't misbehave */
-	if (!OidIsValid(relfilenumber))
+	if (!RelFileNumberIsValid(relfilenumber))
 		PG_RETURN_NULL();
 
 	heaprel = RelidByRelfilenumber(reltablespace, relfilenumber);

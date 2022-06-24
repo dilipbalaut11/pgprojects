@@ -77,9 +77,11 @@
 
 /* Potentially set by pg_upgrade_support functions */
 Oid			binary_upgrade_next_heap_pg_class_oid = InvalidOid;
-Oid			binary_upgrade_next_heap_pg_class_relfilenode = InvalidOid;
 Oid			binary_upgrade_next_toast_pg_class_oid = InvalidOid;
-Oid			binary_upgrade_next_toast_pg_class_relfilenode = InvalidOid;
+RelFileNumber	binary_upgrade_next_heap_pg_class_relfilenumber =
+				InvalidRelFileNumber;
+RelFileNumber	binary_upgrade_next_toast_pg_class_relfilenumber =
+				InvalidRelFileNumber;
 
 static void AddNewRelationTuple(Relation pg_class_desc,
 								Relation new_rel_desc,
@@ -1196,13 +1198,13 @@ heap_create_with_catalog(const char *relname,
 					relid = binary_upgrade_next_toast_pg_class_oid;
 					binary_upgrade_next_toast_pg_class_oid = InvalidOid;
 
-					if (!OidIsValid(binary_upgrade_next_toast_pg_class_relfilenode))
+					if (!RelFileNumberIsValid(binary_upgrade_next_toast_pg_class_relfilenumber))
 						ereport(ERROR,
 								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 								 errmsg("toast relfilenumber value not set when in binary upgrade mode")));
 
-					relfilenumber = binary_upgrade_next_toast_pg_class_relfilenode;
-					binary_upgrade_next_toast_pg_class_relfilenode = InvalidOid;
+					relfilenumber = binary_upgrade_next_toast_pg_class_relfilenumber;
+					binary_upgrade_next_toast_pg_class_relfilenumber = InvalidRelFileNumber;
 				}
 			}
 			else
@@ -1217,13 +1219,13 @@ heap_create_with_catalog(const char *relname,
 
 				if (RELKIND_HAS_STORAGE(relkind))
 				{
-					if (!OidIsValid(binary_upgrade_next_heap_pg_class_relfilenode))
+					if (!RelFileNumberIsValid(binary_upgrade_next_heap_pg_class_relfilenumber))
 						ereport(ERROR,
 								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 								 errmsg("relfilenumber value not set when in binary upgrade mode")));
 
-					relfilenumber = binary_upgrade_next_heap_pg_class_relfilenode;
-					binary_upgrade_next_heap_pg_class_relfilenode = InvalidOid;
+					relfilenumber = binary_upgrade_next_heap_pg_class_relfilenumber;
+					binary_upgrade_next_heap_pg_class_relfilenumber = InvalidRelFileNumber;
 				}
 			}
 		}

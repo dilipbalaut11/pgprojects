@@ -87,7 +87,8 @@
 
 /* Potentially set by pg_upgrade_support functions */
 Oid			binary_upgrade_next_index_pg_class_oid = InvalidOid;
-Oid			binary_upgrade_next_index_pg_class_relfilenode = InvalidRelFileNumber;
+RelFileNumber	binary_upgrade_next_index_pg_class_relfilenumber =
+			InvalidRelFileNumber;
 
 /*
  * Pointer-free representation of variables used when reindexing system
@@ -920,12 +921,12 @@ index_create(Relation heapRelation,
 
 			/* Override the index relfilenumber */
 			if ((relkind == RELKIND_INDEX) &&
-				(!OidIsValid(binary_upgrade_next_index_pg_class_relfilenode)))
+				(!RelFileNumberIsValid(binary_upgrade_next_index_pg_class_relfilenumber)))
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("index relfilenumber value not set when in binary upgrade mode")));
-			relFileNumber = binary_upgrade_next_index_pg_class_relfilenode;
-			binary_upgrade_next_index_pg_class_relfilenode = InvalidOid;
+			relFileNumber = binary_upgrade_next_index_pg_class_relfilenumber;
+			binary_upgrade_next_index_pg_class_relfilenumber = InvalidRelFileNumber;
 
 			/*
 			 * Note that we want create_storage = true for binary upgrade. The

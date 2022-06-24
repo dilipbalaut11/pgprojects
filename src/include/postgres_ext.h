@@ -50,7 +50,6 @@ typedef PG_INT64_TYPE pg_int64;
  * RelFileNumber data type identifies the specific relation file name.
  */
 typedef	Oid	RelFileNumber;
-#define atorelfilenumber(x)         ((RelFileNumber) strtoul((x), NULL, 10))
 #define InvalidRelFileNumber		((RelFileNumber) InvalidOid)
 #define RelFileNumberIsValid(relnumber) \
 				((bool) ((relnumber) != InvalidRelFileNumber))

@@ -78,8 +78,8 @@
 
 typedef struct RelMapping
 {
-	Oid			mapoid;			/* OID of a catalog */
-	Oid			mapfilenumber;	/* its rel file number */
+	Oid				mapoid;			/* OID of a catalog */
+	RelFileNumber	mapfilenumber;	/* its rel file number */
 } RelMapping;
 
 typedef struct RelMapFile
@@ -132,8 +132,8 @@ static RelMapFile pending_local_updates;
 
 
 /* non-export function prototypes */
-static void apply_map_update(RelMapFile *map, Oid relationId, RelFileNumber filenumber,
-							 bool add_okay);
+static void apply_map_update(RelMapFile *map, Oid relationId,
+							 RelFileNumber filenumber, bool add_okay);
 static void merge_map_updates(RelMapFile *map, const RelMapFile *updates,
 							  bool add_okay);
 static void load_relmap_file(bool shared, bool lock_held);
@@ -157,7 +157,7 @@ static void perform_relmap_update(bool shared, const RelMapFile *updates);
  * Returns InvalidOid if the OID is not known (which should never happen,
  * but the caller is in a better position to report a meaningful error).
  */
-Oid
+RelFileNumber
 RelationMapOidToFilenumber(Oid relationId, bool shared)
 {
 	const RelMapFile *map;
@@ -195,7 +195,7 @@ RelationMapOidToFilenumber(Oid relationId, bool shared)
 		}
 	}
 
-	return InvalidOid;
+	return InvalidRelFileNumber;
 }
 
 /*

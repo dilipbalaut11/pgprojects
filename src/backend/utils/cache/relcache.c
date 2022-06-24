@@ -1309,7 +1309,7 @@ retry:
 static void
 RelationInitPhysicalAddr(Relation relation)
 {
-	Oid			oldnumber = relation->rd_locator.relNumber;
+	RelFileNumber	oldnumber = relation->rd_locator.relNumber;
 
 	/* these relations kinds never have storage */
 	if (!RELKIND_HAS_STORAGE(relation->rd_rel->relkind))
@@ -1364,7 +1364,7 @@ RelationInitPhysicalAddr(Relation relation)
 		relation->rd_locator.relNumber =
 			RelationMapOidToFilenumber(relation->rd_id,
 									   relation->rd_rel->relisshared);
-		if (!OidIsValid(relation->rd_locator.relNumber))
+		if (!RelFileNumberIsValid(relation->rd_locator.relNumber))
 			elog(ERROR, "could not find relation mapping for relation \"%s\", OID %u",
 				 RelationGetRelationName(relation), relation->rd_id);
 	}
@@ -3699,7 +3699,7 @@ RelationBuildLocalRelation(const char *relname,
 void
 RelationSetNewRelfilenumber(Relation relation, char persistence)
 {
-	Oid			newrelfilenumber;
+	RelFileNumber	newrelfilenumber;
 	Relation	pg_class;
 	HeapTuple	tuple;
 	Form_pg_class classform;

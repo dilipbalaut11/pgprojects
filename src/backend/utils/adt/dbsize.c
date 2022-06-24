@@ -850,7 +850,7 @@ Datum
 pg_relation_filenode(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
-	Oid			result;
+	RelFileNumber result;
 	HeapTuple	tuple;
 	Form_pg_class relform;
 
@@ -865,17 +865,17 @@ pg_relation_filenode(PG_FUNCTION_ARGS)
 			result = relform->relfilenode;
 		else					/* Consult the relation mapper */
 			result = RelationMapOidToFilenumber(relid,
-											  relform->relisshared);
+												relform->relisshared);
 	}
 	else
 	{
 		/* no storage, return NULL */
-		result = InvalidOid;
+		result = InvalidRelFileNumber;
 	}
 
 	ReleaseSysCache(tuple);
 
-	if (!OidIsValid(result))
+	if (!RelFileNumberIsValid(result))
 		PG_RETURN_NULL();
 
 	PG_RETURN_OID(result);
@@ -898,7 +898,7 @@ Datum
 pg_filenode_relation(PG_FUNCTION_ARGS)
 {
 	Oid			reltablespace = PG_GETARG_OID(0);
-	Oid			relfilenumber = PG_GETARG_OID(1);
+	RelFileNumber relfilenumber = PG_GETARG_OID(1);
 	Oid			heaprel;
 
 	/* test needed so RelidByRelfilenumber doesn't misbehave */

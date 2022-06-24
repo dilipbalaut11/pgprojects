@@ -36,8 +36,8 @@ static ScanKeyData relfilenumber_skey[2];
 
 typedef struct
 {
-	Oid			reltablespace;
-	Oid			relfilenumber;
+	Oid				reltablespace;
+	RelFileNumber	relfilenumber;
 } RelfilenumberMapKey;
 
 typedef struct

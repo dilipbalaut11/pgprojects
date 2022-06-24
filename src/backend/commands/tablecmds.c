@@ -14341,7 +14341,7 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 {
 	Relation	rel;
 	Oid			reltoastrelid;
-	RelFileNumber	newrelnumber;
+	RelFileNumber	newrelfilenumber;
 	RelFileLocator	newrlocator;
 	List	   *reltoastidxids = NIL;
 	ListCell   *lc;
@@ -14374,12 +14374,12 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	 * Relfilenumbers are not unique in databases across tablespaces, so we need
 	 * to allocate a new one in the new tablespace.
 	 */
-	newrelnumber = GetNewRelFileNumber(newTableSpace, NULL,
-										 rel->rd_rel->relpersistence);
+	newrelfilenumber = GetNewRelFileNumber(newTableSpace, NULL,
+										   rel->rd_rel->relpersistence);
 
 	/* Open old and new relation */
 	newrlocator = rel->rd_locator;
-	newrlocator.relNumber = newrelnumber;
+	newrlocator.relNumber = newrelfilenumber;
 	newrlocator.spcOid = newTableSpace;
 
 	/*
@@ -14403,7 +14403,7 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	 * the updated pg_class entry), but that's forbidden with
 	 * CheckRelationTableSpaceMove().
 	 */
-	SetRelationTableSpace(rel, newTableSpace, newrelnumber);
+	SetRelationTableSpace(rel, newTableSpace, newrelfilenumber);
 
 	InvokeObjectPostAlterHook(RelationRelationId, RelationGetRelid(rel), 0);
 

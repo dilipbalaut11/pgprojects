@@ -534,7 +534,7 @@ isRelDataFile(const char *path)
 	 */
 	rlocator.spcOid = InvalidOid;
 	rlocator.dbOid = InvalidOid;
-	rlocator.relNumber = InvalidOid;
+	rlocator.relNumber = InvalidRelFileNumber;
 	segNo = 0;
 	matched = false;
 

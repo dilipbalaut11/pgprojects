@@ -4805,13 +4805,13 @@ binary_upgrade_set_pg_class_oids(Archive *fout,
 								 bool is_index)
 {
 	PQExpBuffer upgrade_query = createPQExpBuffer();
-	PGresult   *upgrade_res;
-	Oid			relfilenumber;
-	Oid			toast_oid;
-	Oid			toast_relfilenumber;
-	char		relkind;
-	Oid			toast_index_oid;
-	Oid			toast_index_relfilenumber;
+	PGresult	   *upgrade_res;
+	RelFileNumber	relfilenumber;
+	Oid				toast_oid;
+	RelFileNumber	toast_relfilenumber;
+	char			relkind;
+	Oid				toast_index_oid;
+	RelFileNumber	toast_index_relfilenumber;
 
 	/*
 	 * Preserve the OID and relfilenumber of the table, table's index, table's

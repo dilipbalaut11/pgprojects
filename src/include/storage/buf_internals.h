@@ -291,11 +291,11 @@ extern PGDLLIMPORT BufferDesc *LocalBufferDescriptors;
  */
 typedef struct CkptSortItem
 {
-	Oid			tsId;
-	Oid			relNumber;
-	ForkNumber	forkNum;
-	BlockNumber blockNum;
-	int			buf_id;
+	Oid				tsId;
+	RelFileNumber	relNumber;
+	ForkNumber		forkNum;
+	BlockNumber 	blockNum;
+	int				buf_id;
 } CkptSortItem;
 
 extern PGDLLIMPORT CkptSortItem *CkptBufferIds;

@@ -3247,7 +3247,7 @@ typedef struct IndexStmt
 	List	   *excludeOpNames; /* exclusion operator names, or NIL if none */
 	char	   *idxcomment;		/* comment to apply to index, or NULL */
 	Oid			indexOid;		/* OID of an existing index, if any */
-	Oid			oldNumber;		/* relfilenumber of existing storage, if any */
+	RelFileNumber	 oldNumber;	/* relfilenumber of existing storage, if any */
 	SubTransactionId oldCreateSubid;	/* rd_createSubid of oldNumber */
 	SubTransactionId oldFirstRelfilenumberSubid;	/* rd_firstRelfilelocatorSubid
 													 * of oldNumber */

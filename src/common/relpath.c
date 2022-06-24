@@ -138,7 +138,7 @@ GetDatabasePath(Oid dbOid, Oid spcOid)
  * the trouble considering BackendId is just int anyway.
  */
 char *
-GetRelationPath(Oid dbOid, Oid spcOid, Oid relNumber,
+GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 				int backendId, ForkNumber forkNumber)
 {
 	char	   *path;

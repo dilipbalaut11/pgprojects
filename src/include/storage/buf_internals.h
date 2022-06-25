@@ -92,16 +92,19 @@ typedef struct buftag
 {
 	Oid				spcOid;			/* tablespace oid. */
 	Oid				dbOid;			/* database oid. */
-	RelFileNumber	relNumber;		/* relation file number. */
-	ForkNumber		forkNum;
+	uint32			relNumber_low;	/* relfilenumber 32 lower bits */
+	uint32			relNumber_hi:24;	/* relfilenumber 24 high bits */
+	uint32			forkNum:8;		/* fork number */
 	BlockNumber 	blockNum;		/* blknum relative to begin of reln */
 } BufferTag;
 
-#define	BufTagGetFileNumber(a) ((a).relNumber)
+#define	BufTagGetFileNumber(a) \
+	((((uint64) (a).relNumber_hi << 32) | ((uint32) (a).relNumber_low)))
 
 #define	BufTagSetFileNumber(a, relnumber) \
 ( \
-	(a).relNumber = (relnumber) \
+	(a).relNumber_hi = (relnumber) >> 32, \
+	(a).relNumber_low = (relnumber) & 0xffffffff \
 )
 
 #define CLEAR_BUFFERTAG(a) \
@@ -126,7 +129,8 @@ typedef struct buftag
 ( \
 	(a).spcOid == (b).spcOid && \
 	(a).dbOid == (b).dbOid && \
-	(a).relNumber == (b).relNumber && \
+	(a).relNumber_low == (b).relNumber_low && \
+	(a).relNumber_hi == (b).relNumber_hi && \
 	(a).blockNum == (b).blockNum && \
 	(a).forkNum == (b).forkNum \
 )
@@ -135,14 +139,14 @@ typedef struct buftag
 do { \
 	(locator).spcOid = (a).spcOid; \
 	(locator).dbOid = (a).dbOid; \
-	(locator).relNumber = (a).relNumber; \
+	(locator).relNumber = BufTagGetFileNumber(a); \
 } while(0)
 
 #define BufTagRelFileLocatorEquals(a, locator) \
 ( \
 	(a).spcOid == (locator).spcOid && \
 	(a).dbOid == (locator).dbOid && \
-	(a).relNumber == (locator).relNumber \
+	BufTagGetFileNumber(a) == (locator).relNumber \
 )
 
 /*

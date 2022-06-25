@@ -14371,11 +14371,13 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	}
 
 	/*
-	 * Relfilenumbers are not unique in databases across tablespaces, so we need
-	 * to allocate a new one in the new tablespace.
+	 * Generate a new relfilenumber. Although relfilenumber are unique within a
+	 * cluster, we are unable to use the old relfilenumber since unused
+	 * relfilenumber are not unlinked until commit.  So if within a
+	 * transaction, if we set the old tablespace again, we will get conflicting
+	 * relfilenumber file.
 	 */
-	newrelfilenumber = GetNewRelFileNumber(newTableSpace, NULL,
-										   rel->rd_rel->relpersistence);
+	newrelfilenumber = GetNewRelFileNumber();
 
 	/* Open old and new relation */
 	newrlocator = rel->rd_locator;

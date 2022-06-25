@@ -937,8 +937,8 @@ index_create(Relation heapRelation,
 		}
 		else
 		{
-			indexRelationId =
-				GetNewRelFileNumber(tableSpaceId, pg_class, relpersistence);
+			indexRelationId = GetNewOidWithIndex(pg_class, ClassOidIndexId,
+												 Anum_pg_class_oid);
 		}
 	}
 

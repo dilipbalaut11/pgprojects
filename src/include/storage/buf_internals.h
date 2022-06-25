@@ -90,32 +90,59 @@
  */
 typedef struct buftag
 {
-	RelFileLocator rlocator;			/* physical relation identifier */
-	ForkNumber	forkNum;
-	BlockNumber blockNum;		/* blknum relative to begin of reln */
+	BlockNumber 	blockNum;		/* blknum relative to begin of reln */
+	RelFileNumber	relNumber;		/* relation file number. */
+	ForkNumber		forkNum;
+	Oid				dbOid;			/* database oid. */
+	Oid				spcOid;			/* tablespace oid. */
 } BufferTag;
+
+#define	BufTagGetFileNumber(a) ((a).relNumber)
+
+#define	BufTagSetFileNumber(a, relnumber) \
+( \
+	(a).relNumber = (relnumber) \
+)
 
 #define CLEAR_BUFFERTAG(a) \
 ( \
-	(a).rlocator.spcOid = InvalidOid, \
-	(a).rlocator.dbOid = InvalidOid, \
-	(a).rlocator.relNumber = InvalidOid, \
+	(a).blockNum = InvalidBlockNumber, \
+	BufTagSetFileNumber(a, InvalidRelFileNumber), \
 	(a).forkNum = InvalidForkNumber, \
-	(a).blockNum = InvalidBlockNumber \
+	(a).dbOid = InvalidOid, \
+	(a).spcOid = InvalidOid \
 )
 
 #define INIT_BUFFERTAG(a,xx_rlocator,xx_forkNum,xx_blockNum) \
 ( \
-	(a).rlocator = (xx_rlocator), \
+	(a).blockNum = (xx_blockNum), \
+	BufTagSetFileNumber(a, (xx_rlocator).relNumber), \
 	(a).forkNum = (xx_forkNum), \
-	(a).blockNum = (xx_blockNum) \
+	(a).dbOid = (xx_rlocator).dbOid, \
+	(a).spcOid = (xx_rlocator).spcOid \
 )
 
 #define BUFFERTAGS_EQUAL(a,b) \
 ( \
-	RelFileLocatorEquals((a).rlocator, (b).rlocator) && \
 	(a).blockNum == (b).blockNum && \
-	(a).forkNum == (b).forkNum \
+	(a).relNumber == (b).relNumber && \
+	(a).forkNum == (b).forkNum && \
+	(a).dbOid == (b).dbOid && \
+	(a).spcOid == (b).spcOid \
+)
+
+#define BuffTagCopyRelFileLocator(a, locator) \
+do { \
+	(locator).spcOid = (a).spcOid; \
+	(locator).dbOid = (a).dbOid; \
+	(locator).relNumber = (a).relNumber; \
+} while(0)
+
+#define BuffTagRelFileLocatorEquals(a, locator) \
+( \
+	(a).spcOid == (locator).spcOid && \
+	(a).dbOid == (locator).dbOid && \
+	(a).relNumber == (locator).relNumber \
 )
 
 /*

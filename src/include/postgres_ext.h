@@ -48,9 +48,11 @@ typedef PG_INT64_TYPE pg_int64;
 
 /*
  * RelFileNumber data type identifies the specific relation file name.
+ * RelFileNumber is unique within a cluster.
  */
-typedef	Oid	RelFileNumber;
-#define InvalidRelFileNumber		((RelFileNumber) InvalidOid)
+typedef	pg_int64	RelFileNumber;
+#define InvalidRelFileNumber		((RelFileNumber) 0)
+#define FirstNormalRelFileNumber	((RelFileNumber) 1)
 #define RelFileNumberIsValid(relnumber) \
 				((bool) ((relnumber) != InvalidRelFileNumber))
 

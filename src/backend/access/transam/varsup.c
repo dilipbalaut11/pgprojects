@@ -30,6 +30,9 @@
 /* Number of OIDs to prefetch (preallocate) per XLOG write */
 #define VAR_OID_PREFETCH		8192
 
+/* Number of RelFileNumbers to prefetch (preallocate) per XLOG write */
+#define VAR_RFN_PREFETCH		8192
+
 /* pointer to "variable cache" in shared memory (set up by shmem.c) */
 VariableCache ShmemVariableCache = NULL;
 
@@ -610,6 +613,99 @@ SetNextObjectId(Oid nextOid)
 	ShmemVariableCache->oidCount = 0;
 
 	LWLockRelease(OidGenLock);
+}
+
+/*
+ * GetNewRelNumber
+ *
+ * Simmilar to GetNewObjectId but instead of new Oid it generates new
+ * relfilenumber.
+ */
+RelFileNumber
+GetNewRelNumber(void)
+{
+	RelFileNumber		result;
+
+	/* Safety check, we should never get this far in a HS standby */
+	if (RecoveryInProgress())
+		elog(ERROR, "cannot assign RelFileNumber during recovery");
+
+	LWLockAcquire(RelFileNumberGenLock, LW_EXCLUSIVE);
+
+	/*
+	 * Check for the wraparound for the relnode counter.
+	 *
+	 * XXX Actually the relnode is 56 bits wide so we don't need to worry about
+	 * the wraparound case.
+	 */
+	if (ShmemVariableCache->nextRelFileNumber > MAX_RELFILENUMBER)
+	{
+		ShmemVariableCache->nextRelFileNumber = FirstNormalRelFileNumber;
+		ShmemVariableCache->relnumbercount = 0;
+	}
+
+	/* If we run out of logged for use RelFileNumber then we must log more */
+	if (ShmemVariableCache->relnumbercount == 0)
+	{
+		XLogPutNextRelFileNumber(ShmemVariableCache->nextRelFileNumber +
+								 VAR_RFN_PREFETCH);
+
+		ShmemVariableCache->relnumbercount = VAR_RFN_PREFETCH;
+	}
+
+	result = ShmemVariableCache->nextRelFileNumber;
+	(ShmemVariableCache->nextRelFileNumber)++;
+	(ShmemVariableCache->relnumbercount)--;
+
+	LWLockRelease(RelFileNumberGenLock);
+
+	return result;
+}
+
+/*
+ * SetNextRelFileNumber
+ *
+ * This may only be called during pg_upgrade; it advances the RelFileNumber counter
+ * to the specified value.
+ */
+void
+SetNextRelFileNumber(RelFileNumber relnumber)
+{
+	int		relnumbercount;
+	
+	/* Safety check, we should never get this far in a HS standby */
+	if (RecoveryInProgress())
+		elog(ERROR, "cannot forward RelFileNumber during recovery");
+
+	LWLockAcquire(RelFileNumberGenLock, LW_EXCLUSIVE);
+
+	/*
+	 * If previous assigned value of the nextRelFileNumber is already higher than the
+	 * current value then nothing to be done.  This is possible because during
+	 * upgrade the relfilenode for the objects can be in any order.
+	 */
+	if (relnumber <= ShmemVariableCache->nextRelFileNumber)
+	{
+		LWLockRelease(RelFileNumberGenLock);
+		return;
+	}
+
+	/*
+	 * Check if we set the new relnode then do we run out of the logged relnode
+	 * if so then we need to WAL log again.  Otherwise, just adjust the
+	 * relnumbercount counter.
+	 */
+	relnumbercount = relnumber - ShmemVariableCache->nextRelFileNumber;
+	if (ShmemVariableCache->relnumbercount <= relnumbercount)
+	{
+		XLogPutNextRelFileNumber(relnumber + VAR_RFN_PREFETCH);
+		ShmemVariableCache->relnumbercount = VAR_RFN_PREFETCH;
+	}
+	else
+		ShmemVariableCache->relnumbercount -= relnumbercount;
+
+	ShmemVariableCache->nextRelFileNumber = relnumber;
+	LWLockRelease(RelFileNumberGenLock);
 }
 
 /*

@@ -213,6 +213,9 @@ typedef struct VariableCacheData
 	 */
 	Oid			nextOid;		/* next OID to assign */
 	uint32		oidCount;		/* OIDs available before must do XLOG work */
+	RelFileNumber	nextRelFileNumber;	/* next relfilenumber to assign */
+	uint32			relnumbercount;	/* relfilenumbers available before must do
+									   XLOG work */
 
 	/*
 	 * These fields are protected by XidGenLock.
@@ -294,6 +297,8 @@ extern void SetTransactionIdLimit(TransactionId oldest_datfrozenxid,
 extern void AdvanceOldestClogXid(TransactionId oldest_datfrozenxid);
 extern bool ForceTransactionIdLimitUpdate(void);
 extern Oid	GetNewObjectId(void);
+extern RelFileNumber GetNewRelNumber(void);
+extern void SetNextRelFileNumber(RelFileNumber relnumber);
 extern void StopGeneratingPinnedObjectIds(void);
 
 #ifdef USE_ASSERT_CHECKING

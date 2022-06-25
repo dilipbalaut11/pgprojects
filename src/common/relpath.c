@@ -149,10 +149,10 @@ GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 		Assert(dbOid == 0);
 		Assert(backendId == InvalidBackendId);
 		if (forkNumber != MAIN_FORKNUM)
-			path = psprintf("global/%u_%s",
+			path = psprintf("global/" INT64_FORMAT "_%s",
 							relNumber, forkNames[forkNumber]);
 		else
-			path = psprintf("global/%u", relNumber);
+			path = psprintf("global/" INT64_FORMAT, relNumber);
 	}
 	else if (spcOid == DEFAULTTABLESPACE_OID)
 	{

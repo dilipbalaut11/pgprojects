@@ -399,11 +399,11 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 				i_reloid,
 				i_indtable,
 				i_toastheap,
-				i_relfilenumber,
 				i_reltablespace;
-	char		query[QUERY_ALLOC];
-	char	   *last_namespace = NULL,
-			   *last_tablespace = NULL;
+	RelFileNumber	i_relfilenumber;
+	char			query[QUERY_ALLOC];
+	char		   *last_namespace = NULL,
+				   *last_tablespace = NULL;
 
 	query[0] = '\0';			/* initialize query string to empty */
 

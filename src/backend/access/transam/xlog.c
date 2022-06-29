@@ -6644,11 +6644,6 @@ CreateCheckPoint(int flags)
 	END_CRIT_SECTION();
 
 	/*
-	 * Let smgr do post-checkpoint cleanup (eg, deleting old files).
-	 */
-	SyncPostCheckpoint();
-
-	/*
 	 * Update the average distance between checkpoints if the prior checkpoint
 	 * exists.
 	 */

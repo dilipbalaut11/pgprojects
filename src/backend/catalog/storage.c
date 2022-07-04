@@ -968,6 +968,9 @@ smgr_redo(XLogReaderState *record)
 		xl_smgr_create *xlrec = (xl_smgr_create *) XLogRecGetData(record);
 		SMgrRelation reln;
 
+		Assert(xlrec->rlocator.relNumber <=
+			   ShmemVariableCache->nextRelFileNumber);
+
 		reln = smgropen(xlrec->rlocator, InvalidBackendId);
 		smgrcreate(reln, xlrec->forkNum, true);
 	}
@@ -980,6 +983,9 @@ smgr_redo(XLogReaderState *record)
 		BlockNumber blocks[MAX_FORKNUM];
 		int			nforks = 0;
 		bool		need_fsm_vacuum = false;
+
+		Assert(xlrec->rlocator.relNumber <=
+			   ShmemVariableCache->nextRelFileNumber);
 
 		reln = smgropen(xlrec->rlocator, InvalidBackendId);
 

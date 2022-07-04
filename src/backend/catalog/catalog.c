@@ -583,3 +583,57 @@ pg_stop_making_pinned_objects(PG_FUNCTION_ARGS)
 
 	PG_RETURN_VOID();
 }
+
+#ifdef USE_ASSERT_CHECKING
+
+/*
+ * Assert that there is no existing diskfile for input relnumber.
+ */
+void
+AssertRelfileNumberFileNotExists(Oid spcoid, RelFileNumber relnumber,
+								 char relpersistence)
+{
+	RelFileLocatorBackend rlocator;
+	char	   *rpath;
+	BackendId	backend;
+
+	/*
+	 * If we ever get here during pg_upgrade, there's something wrong; all
+	 * relfilenode assignments during a binary-upgrade run should be
+	 * determined by commands in the dump script.
+	 */
+	Assert(!IsBinaryUpgrade);
+
+	switch (relpersistence)
+	{
+		case RELPERSISTENCE_TEMP:
+			backend = BackendIdForTempRelations();
+			break;
+		case RELPERSISTENCE_UNLOGGED:
+		case RELPERSISTENCE_PERMANENT:
+			backend = InvalidBackendId;
+			break;
+		default:
+			elog(ERROR, "invalid relpersistence: %c", relpersistence);
+			return;	/* placate compiler */
+	}
+
+	/* this logic should match RelationInitPhysicalAddr */
+	rlocator.locator.spcOid = spcoid ? spcoid : MyDatabaseTableSpace;
+	rlocator.locator.dbOid =
+			(rlocator.locator.spcOid == GLOBALTABLESPACE_OID) ? InvalidOid :
+																MyDatabaseId;
+
+	/*
+	 * The relpath will vary based on the backend ID, so we must initialize
+	 * that properly here to make sure that any collisions based on filename
+	 * are properly detected.
+	 */
+	rlocator.backend = backend;
+
+	/* check for existing file of same name. */
+	rpath = relpath(rlocator, MAIN_FORKNUM);
+
+	Assert(access(rpath, F_OK) != 0);
+}
+#endif

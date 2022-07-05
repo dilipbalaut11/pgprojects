@@ -82,3 +82,45 @@ option_parse_int(const char *optarg, const char *optname,
 		*result = val;
 	return true;
 }
+
+/*
+ * option_parse_int64
+ *
+ * Same as option_parse_int but parse int64.
+ */
+bool
+option_parse_int64(const char *optarg, const char *optname,
+				   int64 min_range, int64 max_range,
+				   int64 *result)
+{
+	char	   *endptr;
+	int64			val;
+
+	errno = 0;
+	val = strtoi64(optarg, &endptr, 10);
+
+	/*
+	 * Skip any trailing whitespace; if anything but whitespace remains before
+	 * the terminating character, fail.
+	 */
+	while (*endptr != '\0' && isspace((unsigned char) *endptr))
+		endptr++;
+
+	if (*endptr != '\0')
+	{
+		pg_log_error("invalid value \"%s\" for option %s",
+					 optarg, optname);
+		return false;
+	}
+
+	if (errno == ERANGE || val < min_range || val > max_range)
+	{
+		pg_log_error("%s must be in range " INT64_FORMAT ".." INT64_FORMAT,
+					 optname, min_range, max_range);
+		return false;
+	}
+
+	if (result)
+		*result = val;
+	return true;
+}

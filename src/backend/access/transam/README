@@ -692,8 +692,8 @@ by having database restart search for files that don't have any committed
 entry in pg_class, but that currently isn't done because of the possibility
 of deleting data that is useful for forensic analysis of the crash.
 Orphan files are harmless --- at worst they waste a bit of disk space ---
-because we check for on-disk collisions when allocating new relfilenumber
-OIDs.  So cleaning up isn't really necessary.
+because relfilenumber is 56 bit wide so logically there should not be any
+collisions.  So cleaning up isn't really necessary.
 
 3. Deleting a table, which requires an unlink() that could fail.
 

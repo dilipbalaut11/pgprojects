@@ -14372,9 +14372,9 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 
 	/*
 	 * Generate a new relfilenumber.  We can not reuse the old relfilenumber
-	 * because the unused relfilenumber files are not unlinked until the next
-	 * checkpoint.  So if move the relation to the old tablespace again, we
-	 * will get the conflicting relfilenumber file.
+	 * because the unused relfilenumber files are not unlinked until commit.
+	 * So if move the relation to the old tablespace again within a same
+	 * transaction, we will get the conflicting relfilenumber file.
 	 */
 	newrelfilenumber = GetNewRelFileNumber();
 	AssertRelfileNumberFileNotExists(newTableSpace,

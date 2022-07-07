@@ -257,6 +257,13 @@ mdcreate(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
  * next checkpoint, we prevent reassignment of the relfilenumber until it's
  * safe, because relfilenumber assignment skips over any existing file.
  *
+ * XXX although this all was true when the relfilenumbers were 32 bits wide but
+ * now the relfilenumbers are 56 bits wide so we don't have risk of
+ * relfilenumber being reused so in future we can immediately unlink the first
+ * segment as well.  Although we can reuse the relfilenumber during createdb()
+ * using file copy method or during movedb() but the above scenario is only
+ * applicable when we create a new relation.
+ *
  * We do not need to go through this dance for temp relations, though, because
  * we never make WAL entries for temp rels, and so a temp rel poses no threat
  * to the health of a regular rel that has taken over its relfilenumber.

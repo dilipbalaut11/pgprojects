@@ -14371,11 +14371,12 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	}
 
 	/*
-	 * Relfilenumbers are not unique in databases across tablespaces, so we
-	 * need to allocate a new one in the new tablespace.
+	 * Generate a new relfilenumber.  We can not reuse the old relfilenumber
+	 * because the unused relfilenumber files are not unlinked until the next
+	 * checkpoint.  So if move the relation to the old tablespace again, we
+	 * will get the conflicting relfilenumber file.
 	 */
-	newrelfilenumber = GetNewRelFileNumber(newTableSpace, NULL,
-										   rel->rd_rel->relpersistence);
+	newrelfilenumber = GetNewRelFileNumber();
 
 	/* Open old and new relation */
 	newrlocator = rel->rd_locator;

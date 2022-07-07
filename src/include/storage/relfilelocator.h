@@ -34,8 +34,7 @@
  * relNumber identifies the specific relation.  relNumber corresponds to
  * pg_class.relfilenode (NOT pg_class.oid, because we need to be able
  * to assign new physical files to relations in some situations).
- * Notice that relNumber is only unique within a database in a particular
- * tablespace.
+ * Notice that relNumber is unique within a cluster.
  *
  * Note: spcOid must be GLOBALTABLESPACE_OID if and only if dbOid is
  * zero.  We support shared relations only in the "global" tablespace.
@@ -74,6 +73,12 @@ typedef struct RelFileLocatorBackend
 	RelFileLocator locator;
 	BackendId	backend;
 } RelFileLocatorBackend;
+
+#define SizeOfRelFileLocatorBackend \
+	(offsetof(RelFileLocatorBackend, backend) + sizeof(BackendId))
+
+/* Max value of the relfilnumber, relfilnumber is 56 bits wide. */
+#define MAX_RELFILENUMBER		INT64CONST(0x00FFFFFFFFFFFFFF)
 
 #define RelFileLocatorBackendIsTemp(rlocator) \
 	((rlocator).backend != InvalidBackendId)

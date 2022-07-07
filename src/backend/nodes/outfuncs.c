@@ -55,6 +55,11 @@ static void outChar(StringInfo str, char c);
 #define WRITE_INT_FIELD(fldname) \
 	appendStringInfo(str, " :" CppAsString(fldname) " %d", node->fldname)
 
+/* Write an unsigned integer field (anything written with INT64_FORMAT) */
+#define WRITE_INT64_FIELD(fldname) \
+	appendStringInfo(str, " :" CppAsString(fldname) " " INT64_FORMAT, \
+					 node->fldname)
+
 /* Write an unsigned integer field (anything written as ":fldname %u") */
 #define WRITE_UINT_FIELD(fldname) \
 	appendStringInfo(str, " :" CppAsString(fldname) " %u", node->fldname)
@@ -2932,7 +2937,7 @@ _outIndexStmt(StringInfo str, const IndexStmt *node)
 	WRITE_NODE_FIELD(excludeOpNames);
 	WRITE_STRING_FIELD(idxcomment);
 	WRITE_OID_FIELD(indexOid);
-	WRITE_OID_FIELD(oldNumber);
+	WRITE_INT64_FIELD(oldNumber);
 	WRITE_UINT_FIELD(oldCreateSubid);
 	WRITE_UINT_FIELD(oldFirstRelfilelocatorSubid);
 	WRITE_BOOL_FIELD(unique);

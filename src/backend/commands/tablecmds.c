@@ -14377,6 +14377,9 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	 * will get the conflicting relfilenumber file.
 	 */
 	newrelfilenumber = GetNewRelFileNumber();
+	AssertRelfileNumberFileNotExists(newTableSpace,
+									 newrelfilenumber,
+									 rel->rd_rel->relpersistence);
 
 	/* Open old and new relation */
 	newrlocator = rel->rd_locator;

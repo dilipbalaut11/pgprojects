@@ -345,7 +345,12 @@ heap_create(const char *relname,
 		 * with oid same as relid.
 		 */
 		if (!RelFileNumberIsValid(relfilenumber))
+		{
 			relfilenumber = GetNewRelFileNumber();
+			AssertRelfileNumberFileNotExists(reltablespace,
+											 relfilenumber,
+											 relpersistence);
+		}
 	}
 
 	/*

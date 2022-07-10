@@ -4560,6 +4560,7 @@ BootStrapXLOG(void)
 	ShmemVariableCache->nextRelFileNumber = checkPoint.nextRelFileNumber;
 	ShmemVariableCache->oidCount = 0;
 	ShmemVariableCache->relnumbercount = 0;
+	ShmemVariableCache->lastRelFileNumberRecPtr = InvalidXLogRecPtr;
 	MultiXactSetNextMXact(checkPoint.nextMulti, checkPoint.nextMultiOffset);
 	AdvanceOldestClogXid(checkPoint.oldestXid);
 	SetTransactionIdLimit(checkPoint.oldestXid, checkPoint.oldestXidDB);
@@ -7373,10 +7374,12 @@ XLogPutNextOid(Oid nextOid)
 
 /*
  * Similar to the XLogPutNextOid but instead of writing NEXTOID log record it
- * writes a NEXT_RELFILENUMBER log record.
+ * writes a NEXT_RELFILENUMBER log record.  '*prevrecptr' is valid then flush
+ * the wal upto this record pointer otherwise flush upto currently logged
+ * record.  Also store the currenly log record in the '*prevrecptr'.
  */
 void
-LogNextRelFileNumber(RelFileNumber nextrelnumber)
+LogNextRelFileNumber(RelFileNumber nextrelnumber, XLogRecPtr *prevrecptr)
 {
 	XLogRecPtr	recptr;
 
@@ -7385,13 +7388,16 @@ LogNextRelFileNumber(RelFileNumber nextrelnumber)
 	recptr = XLogInsert(RM_XLOG_ID, XLOG_NEXT_RELFILENUMBER);
 
 	/*
-	 * Flush xlog record to disk before returning.  We want to be sure that
-	 * the in-memory nextRelFileNumber value is always larger than any
-	 * relfilenumber that is already in use on disk.  To maintain that
-	 * invariant, we must make sure that the record we just logged reaches the
-	 * disk before any new files are created.
+	 * If a valid prevrecptr is passed then flush that xlog record to disk
+	 * otherwise flush the newly logged record.
 	 */
-	XLogFlush(recptr);
+	if ((prevrecptr !=  NULL) && !XLogRecPtrIsInvalid(*prevrecptr))
+		XLogFlush(*prevrecptr);
+	else
+		XLogFlush(recptr);
+
+	if (prevrecptr !=  NULL)
+		*prevrecptr = recptr;
 }
 
 /*

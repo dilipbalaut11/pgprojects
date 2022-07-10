@@ -20,6 +20,7 @@
 #include "access/xact.h"
 #include "access/xlogutils.h"
 #include "commands/dbcommands.h"
+#include "catalog/pg_control.h"
 #include "miscadmin.h"
 #include "postmaster/autovacuum.h"
 #include "storage/pmsignal.h"
@@ -629,6 +630,9 @@ GetNewRelFileNumber(void)
 	if (RecoveryInProgress())
 		elog(ERROR, "cannot assign RelFileNumber during recovery");
 
+	if (IsBinaryUpgrade)
+		elog(ERROR, "cannot assign RelFileNumber during binary upgrade");
+
 	LWLockAcquire(RelFileNumberGenLock, LW_EXCLUSIVE);
 
 	/* check for the wraparound for the relfilenumber counter */
@@ -636,15 +640,37 @@ GetNewRelFileNumber(void)
 		elog(ERROR, "relfilenumber is out of bound");
 
 	/*
-	 * If we run out of logged RelFileNumbers, then we must log more, and also
-	 * wait for the xlog record to be flushed to disk. This is somewhat
-	 * expensive, but hopefully VAR_RELNUMBER_PREFETCH is large enough that
-	 * this doesn't slow things down too much.
+	 * If we have consumed over half the total logged RelFileNumbers, log more.
+	 * Ideally, we can wait until all relfilenumbers have been consumed before
+	 * logging more.  Nevertheless, if we do that, we must immediately flush
+	 * the logged wal record because we want to ensure that the
+	 * nextRelFileNumber is always larger than any relfilenumber already in use
+	 * on disk.  And, to maintain that invariant, we must make sure that the
+	 * record we log reaches the disk before any new files are created with the
+	 * newly logged range.  So in order to avoid flushing the wal immediately,
+	 * we always log before consuming all the relfilenumber, and now we only
+	 * have to flush the newly logged relfilenumber wal before consuming the
+	 * relfilenumber from this new range.  By the time we need to flush this
+	 * wal, hopefully those have already been flushed with some other
+	 * XLogFlush operation.  Although VAR_RELNUMBER_PREFETCH is large enough
+	 * that it might not slow things down but it is always better if we can
+	 * avoid some extra XLogFlush.
 	 */
-	if (ShmemVariableCache->relnumbercount == 0)
+	if (ShmemVariableCache->relnumbercount <= VAR_RELNUMBER_PREFETCH / 2)
 	{
+		/*
+		 * First time, this will immediately flush the newly logged wal record
+		 * as we don't have anything logged in advance.  From next time onwards
+		 * we will remember the previosly logged record pointer and we will
+		 * flush upto that point.
+		 *
+		 * XXX second time, it might try to flush the same thing what is
+		 * already done in the first time but it will logically do nothing so
+		 * it is not worth to add any extra complexity to avoid that.
+		 */
 		LogNextRelFileNumber(ShmemVariableCache->nextRelFileNumber +
-							 VAR_RELNUMBER_PREFETCH);
+							 VAR_RELNUMBER_PREFETCH,
+							 &ShmemVariableCache->lastRelFileNumberRecPtr);
 
 		ShmemVariableCache->relnumbercount = VAR_RELNUMBER_PREFETCH;
 	}
@@ -695,11 +721,15 @@ SetNextRelFileNumber(RelFileNumber relnumber)
 	 * Check that if we set this new relfilenumber then do we run out of the
 	 * logged values, if so then we need to WAL log again.  Otherwise, just
 	 * adjust the relnumbercount counter.
+	 *
+	 * XXX. this is only done during binary upgrade so we don't need to do any
+	 * special logic for reducing extra XlogFlush like we do in
+	 * GetNewRelFileNumber().
 	 */
 	relnumbercount = relnumber - ShmemVariableCache->nextRelFileNumber;
 	if (ShmemVariableCache->relnumbercount <= relnumbercount)
 	{
-		LogNextRelFileNumber(relnumber + VAR_RELNUMBER_PREFETCH);
+		LogNextRelFileNumber(relnumber + VAR_RELNUMBER_PREFETCH, NULL);
 		ShmemVariableCache->relnumbercount = VAR_RELNUMBER_PREFETCH;
 	}
 	else

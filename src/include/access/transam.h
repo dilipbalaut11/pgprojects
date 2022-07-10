@@ -216,6 +216,8 @@ typedef struct VariableCacheData
 	RelFileNumber nextRelFileNumber;	/* next relfilenumber to assign */
 	uint32		relnumbercount; /* relfilenumbers available before must do
 								 * XLOG work */
+	XLogRecPtr	lastRelFileNumberRecPtr; /* record pointer w.r.t. the last
+	                                	  * last logged relfilenumber */
 
 	/*
 	 * These fields are protected by XidGenLock.

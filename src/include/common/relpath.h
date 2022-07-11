@@ -39,17 +39,17 @@
  */
 typedef enum ForkNumber
 {
-	InvalidForkNumber = -1,
 	MAIN_FORKNUM = 0,
 	FSM_FORKNUM,
 	VISIBILITYMAP_FORKNUM,
-	INIT_FORKNUM
+	INIT_FORKNUM,
 
 	/*
 	 * NOTE: if you add a new fork, change MAX_FORKNUM and possibly
 	 * FORKNAMECHARS below, and update the forkNames array in
 	 * src/common/relpath.c
 	 */
+	InvalidForkNumber = 255
 } ForkNumber;
 
 #define MAX_FORKNUM		INIT_FORKNUM

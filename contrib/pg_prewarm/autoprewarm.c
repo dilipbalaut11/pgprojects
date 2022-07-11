@@ -534,7 +534,7 @@ autoprewarm_database_main(Datum main_arg)
 			 * smgrexists is not safe for illegal forknum, hence check whether
 			 * the passed forknum is valid before using it in smgrexists.
 			 */
-			if (blk->forknum > InvalidForkNumber &&
+			if (blk->forknum != InvalidForkNumber &&
 				blk->forknum <= MAX_FORKNUM &&
 				smgrexists(RelationGetSmgr(rel), blk->forknum))
 				nblocks = RelationGetNumberOfBlocksInFork(rel, blk->forknum);

@@ -61,7 +61,7 @@
  * The map file is critical data: we have no automatic method for recovering
  * from loss or corruption of it.  We use a CRC so that we can detect
  * corruption.  To minimize the risk of failed updates, the map file should
- * be kept to no more than one standard-size disk sector (ie 512 bytes),
+ * be kept to no more than one standard-size disk sector (ie 1024 bytes),
  * and we use overwrite-in-place rather than playing renaming games.
  * The struct layout below is designed to occupy exactly 512 bytes, which
  * might make filesystem updates a bit more efficient.
@@ -74,7 +74,7 @@
 
 #define RELMAPPER_FILEMAGIC		0x592717	/* version ID value */
 
-#define MAX_MAPPINGS			62	/* 62 * 8 + 16 = 512 */
+#define MAX_MAPPINGS			62	/* 62 * 16 + 16 < 1024 */
 
 typedef struct RelMapping
 {

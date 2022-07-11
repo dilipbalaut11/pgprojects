@@ -30,6 +30,9 @@
 /* Number of OIDs to prefetch (preallocate) per XLOG write */
 #define VAR_OID_PREFETCH		8192
 
+/* Number of RelFileNumbers to prefetch (preallocate) per XLOG write */
+#define VAR_RELNUMBER_PREFETCH	512
+
 /* pointer to "variable cache" in shared memory (set up by shmem.c) */
 VariableCache ShmemVariableCache = NULL;
 
@@ -521,8 +524,7 @@ ForceTransactionIdLimitUpdate(void)
  * wide, counter wraparound will occur eventually, and therefore it is unwise
  * to assume they are unique unless precautions are taken to make them so.
  * Hence, this routine should generally not be used directly.  The only direct
- * callers should be GetNewOidWithIndex() and GetNewRelFileNumber() in
- * catalog/catalog.c.
+ * caller should be GetNewOidWithIndex() in catalog/catalog.c.
  */
 Oid
 GetNewObjectId(void)
@@ -610,6 +612,131 @@ SetNextObjectId(Oid nextOid)
 	ShmemVariableCache->oidCount = 0;
 
 	LWLockRelease(OidGenLock);
+}
+
+/*
+ * GetNewRelFileNumber
+ *
+ * Similar to GetNewObjectId but instead of new Oid it generates new
+ * relfilenumber.
+ */
+RelFileNumber
+GetNewRelFileNumber(void)
+{
+	RelFileNumber result;
+
+	/* safety check, we should never get this far in a HS standby */
+	if (RecoveryInProgress())
+		elog(ERROR, "cannot assign RelFileNumber during recovery");
+
+	if (IsBinaryUpgrade)
+		elog(ERROR, "cannot assign RelFileNumber during binary upgrade");
+
+	LWLockAcquire(RelFileNumberGenLock, LW_EXCLUSIVE);
+
+	/* check for the wraparound for the relfilenumber counter */
+	if (unlikely(ShmemVariableCache->nextRelFileNumber > MAX_RELFILENUMBER))
+		elog(ERROR, "relfilenumber is out of bound");
+
+	/*
+	 * If we have consumed over half the total logged RelFileNumbers, log
+	 * more. Ideally, we can wait until all relfilenumbers have been consumed
+	 * before logging more.  Nevertheless, if we do that, we must immediately
+	 * flush the logged wal record because we want to ensure that the
+	 * nextRelFileNumber is always larger than any relfilenumber already in
+	 * use on disk.  And, to maintain that invariant, we must make sure that
+	 * the record we log reaches the disk before any new files are created
+	 * with the newly logged range.  So in order to avoid flushing the wal
+	 * immediately, we always log before consuming all the relfilenumber, and
+	 * now we only have to flush the newly logged relfilenumber wal before
+	 * consuming the relfilenumber from this new range.  By the time we need
+	 * to flush this wal, hopefully those have already been flushed with some
+	 * other XLogFlush operation.  Although VAR_RELNUMBER_PREFETCH is large
+	 * enough that it might not slow things down but it is always better if we
+	 * can avoid some extra XLogFlush.
+	 */
+	if (ShmemVariableCache->relnumbercount <= VAR_RELNUMBER_PREFETCH / 2)
+	{
+		/*
+		 * First time, this will immediately flush the newly logged wal record
+		 * as we don't have anything logged in advance.  From next time
+		 * onwards we will remember the previosly logged record pointer and we
+		 * will flush upto that point.
+		 *
+		 * XXX second time, it might try to flush the same thing what is
+		 * already done in the first time but it will logically do nothing so
+		 * it is not worth to add any extra complexity to avoid that.
+		 */
+		LogNextRelFileNumber(ShmemVariableCache->nextRelFileNumber +
+							 VAR_RELNUMBER_PREFETCH,
+							 &ShmemVariableCache->lastRelFileNumberRecPtr);
+
+		ShmemVariableCache->relnumbercount = VAR_RELNUMBER_PREFETCH;
+	}
+
+	result = ShmemVariableCache->nextRelFileNumber;
+	(ShmemVariableCache->nextRelFileNumber)++;
+	(ShmemVariableCache->relnumbercount)--;
+
+	LWLockRelease(RelFileNumberGenLock);
+
+	return result;
+}
+
+/*
+ * SetNextRelFileNumber
+ *
+ * This may only be called during pg_upgrade; it advances the RelFileNumber
+ * counter to the specified value if the current value is smaller than the
+ * input value.
+ */
+void
+SetNextRelFileNumber(RelFileNumber relnumber)
+{
+	int			relnumbercount;
+
+	/* safety check, we should never get this far in a HS standby */
+	if (RecoveryInProgress())
+		elog(ERROR, "cannot forward RelFileNumber during recovery");
+
+	if (!IsBinaryUpgrade)
+		elog(ERROR, "RelFileNumber can be set only during binary upgrade");
+
+	LWLockAcquire(RelFileNumberGenLock, LW_EXCLUSIVE);
+
+	/*
+	 * If previous assigned value of the nextRelFileNumber is already higher
+	 * than the current value then nothing to be done.  This is possible
+	 * because during upgrade the objects are not created in the relfilenumber
+	 * order.
+	 */
+	if (relnumber <= ShmemVariableCache->nextRelFileNumber)
+	{
+		LWLockRelease(RelFileNumberGenLock);
+		return;
+	}
+
+	/*
+	 * Check that if we set this new relfilenumber then do we run out of the
+	 * logged values, if so then we need to WAL log again.  Otherwise, just
+	 * adjust the relnumbercount counter.
+	 *
+	 * XXX. this is only done during binary upgrade so we don't need to do any
+	 * special logic for reducing extra XlogFlush like we do in
+	 * GetNewRelFileNumber().
+	 */
+	relnumbercount = relnumber - ShmemVariableCache->nextRelFileNumber;
+	if (ShmemVariableCache->relnumbercount <= relnumbercount)
+	{
+		LogNextRelFileNumber(relnumber + VAR_RELNUMBER_PREFETCH, NULL);
+		ShmemVariableCache->relnumbercount = VAR_RELNUMBER_PREFETCH;
+	}
+	else
+		ShmemVariableCache->relnumbercount -= relnumbercount;
+
+	ShmemVariableCache->nextRelFileNumber = relnumber;
+
+	LWLockRelease(RelFileNumberGenLock);
 }
 
 /*

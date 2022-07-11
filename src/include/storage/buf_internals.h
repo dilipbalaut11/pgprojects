@@ -92,33 +92,53 @@ typedef struct buftag
 {
 	Oid			spcOid;			/* tablespace oid */
 	Oid			dbOid;			/* database oid */
-	RelFileNumber relNumber;	/* relation file number */
-	ForkNumber	forkNum;		/* fork number */
+
+	/*
+	 * Represents relfilenumber and the fork number.  The 8 high bits of the
+	 * first 32 bit integer represents the fork number and remaining 24 bits
+	 * of the first interger and the 32 bits of the second integer represents
+	 * relfilenumber that makes relfilenumber 56 bits wide.  The reason behind
+	 * making it 56 bits wide instead of directly making 64 bits wide is that
+	 * if we make it 64 bits wide then the size of the BufferTag will be
+	 * increased.  And also instead of using single 64 bits integer we are
+	 * using 2 32 bits integer in order to avoid the 8 byte alignment padding
+	 * for BufferTag structure.
+	 */
+	uint32		relForkDetails[2];
 	BlockNumber blockNum;		/* blknum relative to begin of reln */
 } BufferTag;
 
-#define	BufTagGetRelNumber(a) ((a).relNumber)
+/* Number of bits to represent relNumber in relForkDetails[0] */
+#define	BUFFERTAG_RELNUMBER_BITS	24
 
-#define	BufTagSetRelNumber(a, relnumber) \
+/* Mask to fetch high bits of relNumber from relForkDetails[0] */
+#define	BUFFERTAG_RELNUMBER_MASK	((1U << BUFFERTAG_RELNUMBER_BITS) - 1)
+
+#define	BufTagGetRelNumber(a) \
+	(((((uint64) (a).relForkDetails[0] << 32) & BUFFERTAG_RELNUMBER_MASK) | \
+						((uint32) (a).relForkDetails[1])))
+
+#define	BufTagSetRelForkDetails(a, relnumber, forknum) \
 ( \
-	(a).relNumber = (relnumber) \
+	(a).relForkDetails[0] = (((relnumber) >> 32) & BUFFERTAG_RELNUMBER_MASK) | \
+								((forknum) << BUFFERTAG_RELNUMBER_BITS), \
+	(a).relForkDetails[1] = (relnumber) & 0xffffffff \
 )
 
-#define	BufTagGetForkNum(a) ((a).forkNum)
+#define	BufTagGetForkNum(a) ((a).relForkDetails[0] >> BUFFERTAG_RELNUMBER_BITS)
 
 #define BufTagGetRelFileLocator(a, locator) \
 do { \
 	(locator).spcOid = (a).spcOid; \
 	(locator).dbOid = (a).dbOid; \
-	(locator).relNumber = (a).relNumber; \
+	(locator).relNumber = BufTagGetRelNumber((a)); \
 } while(0)
 
 #define CLEAR_BUFFERTAG(a) \
 ( \
 	(a).spcOid = InvalidOid, \
 	(a).dbOid = InvalidOid, \
-	BufTagSetRelNumber(a, InvalidRelFileNumber), \
-	(a).forkNum = InvalidForkNumber, \
+	BufTagSetRelForkDetails(a, InvalidRelFileNumber, InvalidForkNumber), \
 	(a).blockNum = InvalidBlockNumber \
 )
 
@@ -126,8 +146,7 @@ do { \
 ( \
 	(a).spcOid = (xx_rlocator).spcOid, \
 	(a).dbOid = (xx_rlocator).dbOid, \
-	BufTagSetRelNumber(a, (xx_rlocator).relNumber), \
-	(a).forkNum = (xx_forkNum), \
+	BufTagSetRelForkDetails(a, (xx_rlocator).relNumber, (xx_forkNum)), \
 	(a).blockNum = (xx_blockNum) \
 )
 
@@ -135,16 +154,16 @@ do { \
 ( \
 	(a).spcOid == (b).spcOid && \
 	(a).dbOid == (b).dbOid && \
-	(a).relNumber == (b).relNumber && \
-	(a).blockNum == (b).blockNum && \
-	(a).forkNum == (b).forkNum \
+	(a).relForkDetails[0] == (b).relForkDetails[0] && \
+	(a).relForkDetails[1] == (b).relForkDetails[1] && \
+	(a).blockNum == (b).blockNum \
 )
 
 #define BufTagMatchesRelFileLocator(a, locator) \
 ( \
 	(a).spcOid == (locator).spcOid && \
 	(a).dbOid == (locator).dbOid && \
-	(a).relNumber == (locator).relNumber \
+	BufTagGetRelNumber(a) == (locator).relNumber \
 )
 
 /*

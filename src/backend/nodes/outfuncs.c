@@ -41,6 +41,11 @@ static void outChar(StringInfo str, char c);
 #define WRITE_INT_FIELD(fldname) \
 	appendStringInfo(str, " :" CppAsString(fldname) " %d", node->fldname)
 
+/* Write an unsigned integer field (anything written with INT64_FORMAT) */
+#define WRITE_INT64_FIELD(fldname) \
+	appendStringInfo(str, " :" CppAsString(fldname) " " INT64_FORMAT, \
+					 node->fldname)
+
 /* Write an unsigned integer field (anything written as ":fldname %u") */
 #define WRITE_UINT_FIELD(fldname) \
 	appendStringInfo(str, " :" CppAsString(fldname) " %u", node->fldname)

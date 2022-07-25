@@ -7382,8 +7382,8 @@ XLogPutNextOid(Oid nextOid)
  * Similar to the XLogPutNextOid but instead of writing NEXTOID log record it
  * writes a NEXT_RELFILENUMBER log record.  If '*prevrecptr' is a valid
  * XLogRecPtrthen flush the wal upto this record pointer otherwise flush upto
- * currently logged record.  Also store the currenly log record in the
- * '*prevrecptr' if prevrecptr is not NULL.
+ * currently logged record.  Also store the currently logged record pointer in
+ * the '*prevrecptr' if prevrecptr is not NULL.
  */
 void
 LogNextRelFileNumber(RelFileNumber nextrelnumber, XLogRecPtr *prevrecptr)

@@ -3708,10 +3708,8 @@ RelationSetNewRelfilenumber(Relation relation, char persistence)
 	RelFileLocator newrlocator;
 
 	/* Allocate a new relfilenumber */
-	newrelfilenumber = GetNewRelFileNumber();
-	AssertRelfileNumberFileNotExists(relation->rd_rel->reltablespace,
-									 newrelfilenumber,
-									 persistence);
+	newrelfilenumber = GetNewRelFileNumber(relation->rd_rel->reltablespace,
+										   persistence);
 
 	/*
 	 * Get a writable copy of the pg_class tuple for the given relation.

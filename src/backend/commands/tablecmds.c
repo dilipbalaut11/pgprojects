@@ -14338,10 +14338,8 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	 * attempt to create new relation storage with that same relfilenumber
 	 * will fail.
 	 */
-	newrelfilenumber = GetNewRelFileNumber();
-	AssertRelfileNumberFileNotExists(newTableSpace,
-									 newrelfilenumber,
-									 rel->rd_rel->relpersistence);
+	newrelfilenumber = GetNewRelFileNumber(newTableSpace,
+										   rel->rd_rel->relpersistence);
 
 	/* Open old and new relation */
 	newrlocator = rel->rd_locator;

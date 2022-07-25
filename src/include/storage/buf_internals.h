@@ -96,7 +96,7 @@ typedef struct buftag
 	/*
 	 * Represents relfilenumber and the fork number.  The 8 high bits of the
 	 * first 32 bit integer represents the fork number and remaining 24 bits
-	 * of the first interger and the 32 bits of the second integer represents
+	 * of the first integer and the 32 bits of the second integer represents
 	 * relfilenumber that makes relfilenumber 56 bits wide.  The reason behind
 	 * making it 56 bits wide instead of directly making 64 bits wide is that
 	 * if we make it 64 bits wide then the size of the BufferTag will be

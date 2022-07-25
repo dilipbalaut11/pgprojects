@@ -312,7 +312,8 @@ extern void SetTransactionIdLimit(TransactionId oldest_datfrozenxid,
 extern void AdvanceOldestClogXid(TransactionId oldest_datfrozenxid);
 extern bool ForceTransactionIdLimitUpdate(void);
 extern Oid	GetNewObjectId(void);
-extern RelFileNumber GetNewRelFileNumber(void);
+extern RelFileNumber GetNewRelFileNumber(Oid reltablespace,
+										 char relpersistence);
 extern void SetNextRelFileNumber(RelFileNumber relnumber);
 extern void StopGeneratingPinnedObjectIds(void);
 

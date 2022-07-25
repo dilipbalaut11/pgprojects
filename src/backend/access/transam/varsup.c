@@ -13,12 +13,16 @@
 
 #include "postgres.h"
 
+#include <unistd.h>
+
 #include "access/clog.h"
 #include "access/commit_ts.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
 #include "access/xact.h"
 #include "access/xlogutils.h"
+#include "catalog/pg_class.h"
+#include "catalog/pg_tablespace.h"
 #include "commands/dbcommands.h"
 #include "miscadmin.h"
 #include "postmaster/autovacuum.h"
@@ -627,7 +631,7 @@ SetNextObjectId(Oid nextOid)
  * relfilenumber.
  */
 RelFileNumber
-GetNewRelFileNumber(void)
+GetNewRelFileNumber(Oid reltablespace, char relpersistence)
 {
 	RelFileNumber result;
 
@@ -670,7 +674,7 @@ GetNewRelFileNumber(void)
 		/*
 		 * First time, this will immediately flush the newly logged wal record
 		 * as we don't have anything logged in advance.  From next time
-		 * onwards we will remember the previosly logged record pointer and we
+		 * onwards we will remember the previously logged record pointer and we
 		 * will flush upto that point.
 		 *
 		 * XXX second time, it might try to flush the same thing what is
@@ -689,6 +693,47 @@ GetNewRelFileNumber(void)
 	(ShmemVariableCache->nextRelFileNumber)++;
 
 	LWLockRelease(RelFileNumberGenLock);
+
+#ifdef USE_ASSERT_CHECKING
+
+	{
+		RelFileLocatorBackend rlocator;
+		char	   *rpath;
+		BackendId	backend;
+
+		switch (relpersistence)
+		{
+			case RELPERSISTENCE_TEMP:
+				backend = BackendIdForTempRelations();
+				break;
+			case RELPERSISTENCE_UNLOGGED:
+			case RELPERSISTENCE_PERMANENT:
+				backend = InvalidBackendId;
+				break;
+			default:
+				elog(ERROR, "invalid relpersistence: %c", relpersistence);
+				return InvalidRelFileNumber;			/* placate compiler */
+		}
+
+		/* this logic should match RelationInitPhysicalAddr */
+		rlocator.locator.spcOid =
+						reltablespace ? reltablespace : MyDatabaseTableSpace;
+		rlocator.locator.dbOid = (reltablespace == GLOBALTABLESPACE_OID) ?
+									InvalidOid : MyDatabaseId;
+		rlocator.locator.relNumber = result;
+
+		/*
+		* The relpath will vary based on the backend ID, so we must initialize
+		* that properly here to make sure that any collisions based on filename
+		* are properly detected.
+		*/
+		rlocator.backend = backend;
+
+		/* check for existing file of same name. */
+		rpath = relpath(rlocator, MAIN_FORKNUM);
+		Assert(access(rpath, F_OK) != 0);
+	}
+#endif
 
 	return result;
 }

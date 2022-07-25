@@ -348,11 +348,11 @@ heap_create(const char *relname,
 		 */
 		if (!RelFileNumberIsValid(relfilenumber))
 		{
-			relfilenumber = relid < FirstNormalObjectId ?
-				relid : GetNewRelFileNumber();
-			AssertRelfileNumberFileNotExists(reltablespace,
-											 relfilenumber,
-											 relpersistence);
+			if (relid < FirstNormalObjectId)
+				relfilenumber = relid;
+			else
+				relfilenumber = GetNewRelFileNumber(reltablespace,
+													relpersistence);
 		}
 	}
 

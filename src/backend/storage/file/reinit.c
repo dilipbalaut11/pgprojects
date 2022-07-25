@@ -372,7 +372,7 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
  * for a non-temporary relation and false otherwise.
  *
  * NB: If this function returns true, the caller is entitled to assume that
- * *relnumchars has been set to the a value no more than RELNUMBERCHARS, and thus
+ * *relnumchars has been set to a value no more than RELNUMBERCHARS, and thus
  * that a buffer of RELNUMBERCHARS+1 characters is sufficient to hold the
  * RelFileNumber portion of the filename.  This is critical to protect against
  * a possible buffer overrun.

@@ -29,12 +29,13 @@ extern bool BlockRefTableLookupRelationFork(BlockRefTable *brtab,
 											RelFileLocator *rlocator,
 											ForkNumber forknum,
 											bool *is_new,
-											List **modified_blocks);
+											void **modified_blocks);
 extern BlockRefCombiner *CreateBlockRefCombiner(MemoryContext mcxt);
 extern void BlockRefCombinerAddInputFile(BlockRefCombiner *bref, File file);
 extern void BlockRefCombinerHashPartition(BlockRefCombiner *bref,
 										  size_t size_limit,
 										  unsigned *num_partitions,
 										  File *partition);
+extern void PrintBlockRefTable(BlockRefTable *brtab);
 
 #endif							/* BLKREF_TABLE_H */

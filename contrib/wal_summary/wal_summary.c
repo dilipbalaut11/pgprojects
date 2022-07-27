@@ -116,7 +116,9 @@ Design:
 PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(generate_wal_summary_file);
-PG_FUNCTION_INFO_V1(read_wal_summary_file);
+PG_FUNCTION_INFO_V1(print_wal_summary_file);
+PG_FUNCTION_INFO_V1(read_wal_summary_relinfo);
+
 
 static void walsummary_process_wal(XLogRecPtr start_lsn, XLogRecPtr end_lsn);
 static void walsummary_process_one_record(BlockRefTable *brtab,
@@ -140,11 +142,13 @@ generate_wal_summary_file(PG_FUNCTION_ARGS)
 static inline void
 WalSummaryFilePath(char *path, XLogRecPtr start_lsn, XLogRecPtr end_lsn)
 {
-	snprintf(path, MAXPGPATH, XLOGDIR "/summary_file");
+	snprintf(path, MAXPGPATH, XLOGDIR "/%X_%X.%X_%X.walsummary",
+			 LSN_FORMAT_ARGS(start_lsn),
+			 LSN_FORMAT_ARGS(end_lsn));
 }
 
 Datum
-read_wal_summary_file(PG_FUNCTION_ARGS)
+print_wal_summary_file(PG_FUNCTION_ARGS)
 {
 	XLogRecPtr	start_lsn = PG_GETARG_LSN(0);
 	XLogRecPtr	end_lsn = PG_GETARG_LSN(1);
@@ -159,6 +163,41 @@ read_wal_summary_file(PG_FUNCTION_ARGS)
 		elog(ERROR, "could not open block reference file ");
 
 	brtab = ReadBlockRefTable(CurrentMemoryContext, file);
+	PrintBlockRefTable(brtab);
+	CloseTransientFile(file);
+	PG_RETURN_LSN(start_lsn);
+}
+
+Datum
+read_wal_summary_relinfo(PG_FUNCTION_ARGS)
+{
+	XLogRecPtr	start_lsn = PG_GETARG_LSN(0);
+	XLogRecPtr	end_lsn = PG_GETARG_LSN(1);
+	Oid			tsid = PG_GETARG_OID(2);
+	Oid			dbid = PG_GETARG_OID(3);
+	RelFileNumber	relnumber = PG_GETARG_OID(4);
+	ForkNumber	fork = PG_GETARG_INT32(5);
+	RelFileLocator	rlocator;
+	BlockRefTable *brtab;
+	File		file;
+	bool		isnew;
+	char		path[MAXPGPATH];
+	void	   *modified_blocks;
+
+	WalSummaryFilePath(path, start_lsn, end_lsn);
+
+	file = OpenTransientFile(path, O_RDONLY | PG_BINARY);
+	if (file < 0)
+		elog(ERROR, "could not open block reference file ");
+
+	brtab = ReadBlockRefTable(CurrentMemoryContext, file);
+
+	rlocator.spcOid = tsid;
+	rlocator.dbOid = dbid;
+	rlocator.relNumber = relnumber;
+
+	BlockRefTableLookupRelationFork(brtab, &rlocator, fork, &isnew,
+									&modified_blocks);
 	CloseTransientFile(file);
 	PG_RETURN_LSN(start_lsn);
 }
@@ -180,8 +219,6 @@ walsummary_process_wal(XLogRecPtr start_lsn, XLogRecPtr end_lsn)
 											   .segment_open = &wal_segment_open,
 											   .segment_close = &wal_segment_close),
 									NULL);
-//	if (xlogreader == NULL)
-//		pg_fatal("out of memory while allocating a WAL reading processor");
 
 	XLogBeginRead(xlogreader, start_lsn);
 	while(true)

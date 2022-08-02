@@ -88,7 +88,9 @@ typedef struct BlockRefFileHandle
 
 struct BlockRefCombiner
 {
-	int	nfiles;
+	int			nfiles;		/* current number of files */
+	int			maxfiles;
+	File	   *files;		/* palloc'd array with nfiles entries */
 };
 
 
@@ -431,12 +433,29 @@ BlockRefTableLookupRelationFork(BlockRefTable *brtab,
 BlockRefCombiner*
 CreateBlockRefCombiner(MemoryContext mcxt)
 {
-	return NULL;
+	BlockRefCombiner  *bref;
+	HASHCTL			ctl;
+
+	bref = MemoryContextAlloc(mcxt, sizeof(BlockRefCombiner));
+	bref->nfiles = 0;
+	bref->maxfiles = 10;
+	bref->files = (File *) palloc(bref->maxfiles * sizeof(File));
+
+	return bref;
 }
 
 void
 BlockRefCombinerAddInputFile(BlockRefCombiner *bref, File file)
 {
+	if (bref->nfiles >= bref->maxfiles)
+	{
+		bref->maxfiles = bref->maxfiles * 2;
+		bref->files = (File *) repalloc(bref->files,
+										bref->maxfiles * sizeof(File));
+	}
+
+	bref->files[bref->nfiles++] = file;
+
 	return;
 }
 

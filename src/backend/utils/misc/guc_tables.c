@@ -57,6 +57,7 @@
 #include "postmaster/postmaster.h"
 #include "postmaster/startup.h"
 #include "postmaster/syslogger.h"
+#include "postmaster/walsummarizer.h"
 #include "postmaster/walwriter.h"
 #include "replication/logicallauncher.h"
 #include "replication/slot.h"
@@ -659,6 +660,8 @@ const char *const config_group_names[] =
 	gettext_noop("Write-Ahead Log / Archive Recovery"),
 	/* WAL_RECOVERY_TARGET */
 	gettext_noop("Write-Ahead Log / Recovery Target"),
+	/* WAL_SUMMARIZATION */
+	gettext_noop("Write-Ahead Log / Summarization"),
 	/* REPLICATION_SENDING */
 	gettext_noop("Replication / Sending Servers"),
 	/* REPLICATION_PRIMARY */
@@ -3075,6 +3078,32 @@ struct config_int ConfigureNamesInt[] =
 		DEFAULT_XLOG_SEG_SIZE,
 		WalSegMinSize,
 		WalSegMaxSize,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"wal_summarize_mb", PGC_SIGHUP, WAL_SUMMARIZATION,
+			gettext_noop("Number of bytes of WAL per summary file."),
+			gettext_noop("Smaller values minimize extra work performed by incremental backup, but increase the number of files on disk."),
+			GUC_UNIT_MB,
+		},
+		&wal_summarize_mb,
+		256,
+		0,
+		INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"wal_summarize_keep_time", PGC_SIGHUP, WAL_SUMMARIZATION,
+			gettext_noop("Time for which WAL summary files should be kept."),
+			NULL,
+			GUC_UNIT_MIN,
+		},
+		&wal_summarize_keep_time,
+		7 * 24 * 60,			/* 1 week */
+		0,
+		INT_MAX,
 		NULL, NULL, NULL
 	},
 

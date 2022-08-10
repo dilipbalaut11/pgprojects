@@ -296,6 +296,11 @@
 #recovery_target_action = 'pause'	# 'pause', 'promote', 'shutdown'
 				# (change requires restart)
 
+# - WAL Summarization -
+
+#wal_summarize_mb = 256			# MB of WAL per summary file, 0 disables
+#wal_summarize_keep_time = '7d'	# when to remove old summary files, 0 = never
+
 
 #------------------------------------------------------------------------------
 # REPLICATION

@@ -326,6 +326,7 @@ typedef enum BackendType
 	B_WAL_RECEIVER,
 	B_WAL_SENDER,
 	B_WAL_WRITER,
+	B_WAL_SUMMARIZER,
 	B_ARCHIVER,
 	B_LOGGER,
 } BackendType;
@@ -427,6 +428,7 @@ typedef enum
 	CheckpointerProcess,
 	WalWriterProcess,
 	WalReceiverProcess,
+	WalSummarizerProcess,
 
 	NUM_AUXPROCTYPES			/* Must be last! */
 } AuxProcType;
@@ -439,6 +441,7 @@ extern PGDLLIMPORT AuxProcType MyAuxProcType;
 #define AmCheckpointerProcess()		(MyAuxProcType == CheckpointerProcess)
 #define AmWalWriterProcess()		(MyAuxProcType == WalWriterProcess)
 #define AmWalReceiverProcess()		(MyAuxProcType == WalReceiverProcess)
+#define AmWalSummarizerProcess()	(MyAuxProcType == WalSummarizerProcess)
 
 
 /*****************************************************************************

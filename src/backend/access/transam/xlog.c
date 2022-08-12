@@ -77,6 +77,7 @@
 #include "port/pg_iovec.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/startup.h"
+#include "postmaster/walsummarizer.h"
 #include "postmaster/walwriter.h"
 #include "replication/logical.h"
 #include "replication/origin.h"
@@ -6687,6 +6688,7 @@ CreateCheckPoint(int flags)
 	 * Delete old log files, those no longer needed for last checkpoint to
 	 * prevent the disk holding the xlog from growing full.
 	 */
+	CheckpointerRemovingOldWALFiles(true);
 	XLByteToSeg(RedoRecPtr, _logSegNo, wal_segment_size);
 	KeepLogSeg(recptr, &_logSegNo);
 	if (InvalidateObsoleteReplicationSlots(_logSegNo))
@@ -6701,6 +6703,7 @@ CreateCheckPoint(int flags)
 	_logSegNo--;
 	RemoveOldXlogFiles(_logSegNo, RedoRecPtr, recptr,
 					   checkPoint.ThisTimeLineID);
+	CheckpointerRemovingOldWALFiles(false);
 
 	/*
 	 * Make more log segments if needed.  (Do this after recycling old log
@@ -7129,6 +7132,7 @@ CreateRestartPoint(int flags)
 	 * Retreat _logSegNo using the current end of xlog replayed or received,
 	 * whichever is later.
 	 */
+	CheckpointerRemovingOldWALFiles(true);
 	receivePtr = GetWalRcvFlushRecPtr(NULL, NULL);
 	replayPtr = GetXLogReplayRecPtr(&replayTLI);
 	endptr = (receivePtr < replayPtr) ? replayPtr : receivePtr;
@@ -7143,6 +7147,7 @@ CreateRestartPoint(int flags)
 		KeepLogSeg(endptr, &_logSegNo);
 	}
 	_logSegNo--;
+	CheckpointerRemovingOldWALFiles(false);
 
 	/*
 	 * Try to recycle segments on a useful timeline. If we've been promoted
@@ -7338,6 +7343,20 @@ KeepLogSeg(XLogRecPtr recptr, XLogSegNo *logSegNo)
 			if (currSegNo - segno > slot_keep_segs)
 				segno = currSegNo - slot_keep_segs;
 		}
+	}
+
+	/*
+	 * If WAL summarization is in use, don't remove WAL that has yet to be
+	 * summarized.
+	 */
+	keep = GetOldestUnsummarizedLSN();
+	if (keep != InvalidXLogRecPtr)
+	{
+		XLogSegNo	unsummarized_segno;
+
+		XLByteToSeg(keep, unsummarized_segno, wal_segment_size);
+		if (unsummarized_segno < segno)
+			segno = unsummarized_segno;
 	}
 
 	/* but, keep at least wal_keep_size if that's set */

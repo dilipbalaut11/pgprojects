@@ -125,6 +125,8 @@ typedef struct
 	ConditionVariable start_cv; /* signaled when ckpt_started advances */
 	ConditionVariable done_cv;	/* signaled when ckpt_done advances */
 
+	pg_atomic_flag removing_old_wal_files;
+
 	uint32		num_backend_writes; /* counts user backend buffer writes */
 	uint32		num_backend_fsync;	/* counts user backend fsync calls */
 
@@ -160,6 +162,7 @@ static pg_time_t last_xlog_switch_time;
 
 /* Prototypes for private functions */
 
+static void CheckpointerShutdown(int code, Datum arg);
 static void HandleCheckpointerInterrupts(void);
 static void CheckArchiveTimeout(void);
 static bool IsCheckpointOnSchedule(double progress);
@@ -221,6 +224,9 @@ CheckpointerMain(void)
 	 * report stats. If that changes, we need a more complicated solution.
 	 */
 	before_shmem_exit(pgstat_before_server_shutdown, 0);
+
+	/* Low-level cleanup at process exit. */
+	on_shmem_exit(CheckpointerShutdown, 0);
 
 	/*
 	 * Create a memory context that we will do all our work in.  We do this so
@@ -535,6 +541,47 @@ CheckpointerMain(void)
 						 cur_timeout * 1000L /* convert to ms */ ,
 						 WAIT_EVENT_CHECKPOINTER_MAIN);
 	}
+}
+
+/*
+ * Low-level cleanup at process exit.
+ */
+static void
+CheckpointerShutdown(int code, Datum arg)
+{
+	CheckpointerRemovingOldWALFiles(false);
+}
+
+/*
+ * Report whether the checkpointer is currently removing old WAL files.
+ *
+ * This should be set to "true" before deciding which files to remove, and
+ * to "false" after all files that will be removed have been removed.
+ */
+void
+CheckpointerRemovingOldWALFiles(bool removing)
+{
+	elog(LOG, "CheckpointerRemovingOldWALFiles = %d", (int) removing);
+
+	if (removing)
+	{
+		bool		result PG_USED_FOR_ASSERTS_ONLY;
+
+		result = pg_atomic_test_set_flag(&CheckpointerShmem->removing_old_wal_files);
+		Assert(result);
+	}
+	else
+		pg_atomic_clear_flag(&CheckpointerShmem->removing_old_wal_files);
+}
+
+/*
+ * Report whether the checkpointer is currently removing old WAL files.
+ */
+bool
+IsCheckpointerRemovingOldWALFiles(void)
+{
+	return
+		!pg_atomic_unlocked_test_flag(&CheckpointerShmem->removing_old_wal_files);
 }
 
 /*
@@ -907,6 +954,7 @@ CheckpointerShmemInit(void)
 		CheckpointerShmem->max_requests = NBuffers;
 		ConditionVariableInit(&CheckpointerShmem->start_cv);
 		ConditionVariableInit(&CheckpointerShmem->done_cv);
+		pg_atomic_init_flag(&CheckpointerShmem->removing_old_wal_files);
 	}
 }
 

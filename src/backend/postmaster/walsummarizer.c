@@ -18,6 +18,7 @@
 #include "access/xlogutils.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
+#include "postmaster/bgwriter.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/walsummarizer.h"
 #include "replication/walreceiver.h"
@@ -138,6 +139,18 @@ WalSummarizerMain(void)
 	}
 }
 
+XLogRecPtr
+GetOldestUnsummarizedLSN(void)
+{
+	XLogRecPtr	unsummarized_lsn;
+
+	SpinLockAcquire(&WalSummarizerCtl->mutex);
+	unsummarized_lsn = WalSummarizerCtl->summarizer_lsn;
+	SpinLockRelease(&WalSummarizerCtl->mutex);
+
+	return unsummarized_lsn;
+}
+
 static void
 ConsiderSummarizingWAL(void)
 {
@@ -148,6 +161,7 @@ ConsiderSummarizingWAL(void)
 	TimeLineID	previous_tli;
 	XLogRecPtr	end_of_summary_lsn;
 	uint64		bytes_per_summary = wal_summarize_mb * 1024 * 1024;
+	bool		exact;
 
 	/*
 	 * WAL should only be summarized once it's been flushed to disk, so for
@@ -164,23 +178,73 @@ ConsiderSummarizingWAL(void)
 	previous_lsn = WalSummarizerCtl->summarizer_lsn;
 	previous_tli = WalSummarizerCtl->summarizer_tli;
 	SpinLockRelease(&WalSummarizerCtl->mutex);
+	exact = !XLogRecPtrIsInvalid(previous_lsn);
 
 	/*
-	 * XXX. If we have no information about what happened previously, make
-	 * something up.
-	 *
-	 * XXX. This doesn't interlock properly - the WAL could be removed after
-	 * we do this and before we read it. And this would be true even if the
-	 * checkpointer knew that we wanted it, because the data might not be
-	 * advertised until the checkpointer had already decided to nuke it.
+	 * If we have no information about what happened previously, examine
+	 * pg_wal to figure it out.
 	 */
-	if (XLogRecPtrIsInvalid(previous_lsn))
+	if (!exact)
 	{
-		XLogSegNo	oldest_segno = XLogGetOldestSegno(latest_tli);
+		XLogSegNo	oldest_segno;
 
+		/*
+		 * Make a tentative determination of what WAL we'd like to keep around
+		 * so that we can summarize it, and advertise that in shared memory.
+		 *
+		 * XXX. This doesn't consider previous timelines.
+		 */
+		oldest_segno = XLogGetOldestSegno(latest_tli);
 		previous_tli = latest_tli;
 		XLogSegNoOffsetToRecPtr(oldest_segno, 0, wal_segment_size,
 								previous_lsn);
+		SpinLockAcquire(&WalSummarizerCtl->mutex);
+		WalSummarizerCtl->summarizer_lsn = previous_lsn;
+		WalSummarizerCtl->summarizer_tli = previous_tli;
+		SpinLockRelease(&WalSummarizerCtl->mutex);
+
+		/*
+		 * If the checkpointer is in the middle of removing old WAL files,
+		 * wait until that's no longer the case.
+		 */
+		while (IsCheckpointerRemovingOldWALFiles())
+		{
+			/* Process any signals received recently */
+			HandleWalSummarizerInterrupts();
+
+			/* Log a message for debugging purposes. */
+			elog(LOG,	/* XXX reduce log level */
+				 "waiting for checkpointer to finish removing old WAL files");
+
+			/* Sleep for just 1 quantum before rechecking. */
+			(void) WaitLatch(MyLatch,
+							 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+							 SLEEP_QUANTUM_DURATION,
+							 WAIT_EVENT_WAL_SUMMARIZER_MAIN);
+			ResetLatch(MyLatch);
+		}
+
+		/*
+		 * It's possible that the checkpointer decided to remove the file
+		 * we identified as our tentative candidate above before it realized
+		 * that we wanted to keep it around, so we need to recheck.
+		 *
+		 * Any value we derive now will certainly be at least as new as the
+		 * previous_lsn value we advertised in shard memory above, and we know
+		 * that the checkpointer is aware of the value already or will be the
+		 * next time it goes to remove files, so the value we derive this time
+		 * is safe: the files should definitely be there when we go to read
+		 * them.
+		 *
+		 * XXX. The TLI we identified previously could now be empty, and then
+		 * we'd need to start with something newer.
+		 */
+		oldest_segno = XLogGetOldestSegno(latest_tli);
+		XLogSegNoOffsetToRecPtr(oldest_segno, 0, wal_segment_size,
+								previous_lsn);
+		SpinLockAcquire(&WalSummarizerCtl->mutex);
+		WalSummarizerCtl->summarizer_lsn = previous_lsn;
+		SpinLockRelease(&WalSummarizerCtl->mutex);
 	}
 
 	/* Sanity check. */

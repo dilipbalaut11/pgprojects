@@ -31,6 +31,7 @@
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/postmaster.h"
+#include "postmaster/walsummarizer.h"
 #include "replication/logicallauncher.h"
 #include "replication/origin.h"
 #include "replication/slot.h"
@@ -135,6 +136,7 @@ CalculateShmemSize(int *num_semaphores)
 	size = add_size(size, ReplicationOriginShmemSize());
 	size = add_size(size, WalSndShmemSize());
 	size = add_size(size, WalRcvShmemSize());
+	size = add_size(size, WalSummarizerShmemSize());
 	size = add_size(size, PgArchShmemSize());
 	size = add_size(size, ApplyLauncherShmemSize());
 	size = add_size(size, SnapMgrShmemSize());
@@ -283,6 +285,7 @@ CreateSharedMemoryAndSemaphores(void)
 	ReplicationOriginShmemInit();
 	WalSndShmemInit();
 	WalRcvShmemInit();
+	WalSummarizerShmemInit();
 	PgArchShmemInit();
 	ApplyLauncherShmemInit();
 

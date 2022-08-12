@@ -124,13 +124,13 @@ WalSummarizerMain(void)
 	 */
 	for (;;)
 	{
-		/* Process any signals received recently */
+		/* Process any signals received recently. */
 		HandleWalSummarizerInterrupts();
 
-		/* Perhaps do some real work */
+		/* Perhaps do some real work. */
 		ConsiderSummarizingWAL();
 
-		/* Wait for something to happen */
+		/* Wait for something to happen. */
 		(void) WaitLatch(MyLatch,
 						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
 						 sleep_quanta * SLEEP_QUANTUM_DURATION,
@@ -162,6 +162,7 @@ ConsiderSummarizingWAL(void)
 	XLogRecPtr	end_of_summary_lsn;
 	uint64		bytes_per_summary = wal_summarize_mb * 1024 * 1024;
 	bool		exact;
+	int			summaries_produced = 0;
 
 	/*
 	 * WAL should only be summarized once it's been flushed to disk, so for
@@ -209,7 +210,7 @@ ConsiderSummarizingWAL(void)
 		 */
 		while (IsCheckpointerRemovingOldWALFiles())
 		{
-			/* Process any signals received recently */
+			/* Process any signals received recently. */
 			HandleWalSummarizerInterrupts();
 
 			/* Log a message for debugging purposes. */
@@ -255,86 +256,104 @@ ConsiderSummarizingWAL(void)
 								LSN_FORMAT_ARGS(latest_lsn)));
 
 	/*
-	 * Figure out where we want to stop the next WAL summary. We'll summarize
-	 * until we read a record that ends after the cutoff_lsn, so the actual
-	 * range of LSNs covered by the summary will typically be a little bit
-	 * greater than the cutoff (and could be far greater if the last WAL
-	 * record is really big).
-	 *
-	 * If we just established the cutoff LSN by adding bytes_per_summary to
-	 * previous_lsn, each file would cover on average a little more than the
-	 * configured number of bytes. That wouldn't be a disaster, but we prefer
-	 * to make the average number of bytes per summary equal to the configured
-	 * value. To accomplish that, we make the cutoff LSNs multiples of
-	 * bytes_per_summary. That way, the target number of bytes for each cycle
-	 * is reduced by the overrun from the previous cycle.
-	 *
-	 * A further advantage of this is that the number of bytes per summary
-	 * will often be a multiple of the WAL segment size, so we'll tend to
-	 * align summaries with the ends of segments.
-	 *
-	 * To avoid emitting really small summary files, if this algorithm would
-	 * produce a summary file covering less than one-fifth of the target
-	 * amount of WAL, bump the cutoff LSN to the next multiple of
-	 * bytes_per_summary. This should normally only happen when first starting
-	 * WAL summarization, but could also occur if the last summary ended with
-	 * a very large record.
+	 * It might be time to generate a summary, or we might be far enough
+	 * behind that we need to generate multiple summaries in quick succesion.
+	 * Loop until we've produced as many as required.
 	 */
-	cutoff_lsn = ((previous_lsn / bytes_per_summary) + 1) * bytes_per_summary;
-	if (cutoff_lsn - previous_lsn < bytes_per_summary / 5)
-		cutoff_lsn += bytes_per_summary;
-	elog(LOG,
-		 "WAL summarization cutoff is TLI %d @ %X/%X, flush position is %X/%X",
-		 latest_tli, LSN_FORMAT_ARGS(cutoff_lsn), LSN_FORMAT_ARGS(latest_lsn));
+	while (true)
+	{
+		/* Process any signals received recently. */
+		HandleWalSummarizerInterrupts();
+
+		/*
+		 * Figure out where we want to stop the next WAL summary. We'll
+		 * summarize until we read a record that ends after the cutoff_lsn
+		 * computed below, so the actual range of LSNs covered by the summary
+		 * will typically be a little bit greater than the cutoff (and could
+		 * be far greater if the last WAL record is really big).
+		 *
+		 * If we just established the cutoff LSN by adding bytes_per_summary
+		 * to previous_lsn, each file would cover on average a little more than
+		 * the configured number of bytes. That wouldn't be a disaster, but we
+		 * prefer to make the average number of bytes per summary equal to the
+		 * configured value. To accomplish that, we make the cutoff LSNs
+		 * multiples of bytes_per_summary. That way, the target number of bytes
+		 * for each cycle
+		 * is reduced by the overrun from the previous cycle.
+		 *
+		 * A further advantage of this is that the number of bytes per summary
+		 * will often be a multiple of the WAL segment size, so we'll tend to
+		 * align summaries with the ends of segments.
+		 *
+		 * To avoid emitting really small summary files, if this algorithm
+		 * would produce a summary file covering less than one-fifth of the
+		 * target amount of WAL, bump the cutoff LSN to the next multiple of
+		 * bytes_per_summary. This should normally only happen when first
+		 * starting WAL summarization, but could also occur if the last summary
+		 * ended with a very large record.
+		 */
+		cutoff_lsn =
+			((previous_lsn / bytes_per_summary) + 1) * bytes_per_summary;
+		if (cutoff_lsn - previous_lsn < bytes_per_summary / 5)
+			cutoff_lsn += bytes_per_summary;
+		elog(LOG,	/* XXX reduce log level */
+			 "WAL summarization cutoff is TLI %d @ %X/%X, flush position is %X/%X",
+			 latest_tli, LSN_FORMAT_ARGS(cutoff_lsn), LSN_FORMAT_ARGS(latest_lsn));
+
+		/*
+		 * If we've past the cutoff LSN, then we have all of the WAL that we
+		 * want to include in the next summary, except possibly for the last
+		 * record, which might still be incomplete. If we fail to read the
+		 * entire last record, we'll have to retry the whole summarization
+		 * process. While that shouldn't break anything, it's a waste of
+		 * resources -- so wait until the latest LSN values is at least 6 XLOG
+		 * blocks past the cutoff before starting summarization. Most WAL
+		 * records are smaller than that.
+		 */
+		if (latest_lsn < cutoff_lsn + 6 * XLOG_BLCKSZ)
+			break;
+
+		/* XXX clean up some things here */
+		elog(LOG,
+			 "summarizing from %X/%X with cutoff %X/%X",
+			 LSN_FORMAT_ARGS(previous_lsn), LSN_FORMAT_ARGS(cutoff_lsn));
+		end_of_summary_lsn = SummarizeWAL(previous_lsn, cutoff_lsn);
+		elog(LOG, "summary ended at %X/%X",
+			 LSN_FORMAT_ARGS(end_of_summary_lsn));
+		++summaries_produced;
+
+		/* Update state in shared memory. */
+		SpinLockAcquire(&WalSummarizerCtl->mutex);
+		WalSummarizerCtl->summarizer_lsn = end_of_summary_lsn;
+		WalSummarizerCtl->summarizer_tli = latest_tli;	/* XXX */
+		SpinLockRelease(&WalSummarizerCtl->mutex);
+
+		/* Update state for next loop iteration. */
+		previous_lsn = end_of_summary_lsn;
+		previous_tli = latest_tli;						/* XXX */
+	}
 
 	/*
-	 * If we've past the cutoff LSN, then we have all of the WAL that we want
-	 * to include in the next summary, except possibly for the last record,
-	 * which might still be incomplete. If we fail to read the entire last
-	 * record, we'll have to retry the whole summarization process. While that
-	 * shouldn't break anything, it's a waste of resources -- so wait until
-	 * the latest LSN values is at least 6 XLOG blocks past the cutoff before
-	 * starting summarization. Most WAL records are smaller than that.
+	 * Increase the sleep time if we didn't produce any summaries, are not
+	 * close to reaching the cutoff LSN, and aren't already sleeping for the
+	 * maximum time.
 	 */
-	if (latest_lsn < cutoff_lsn + 6 * XLOG_BLCKSZ)
-	{
-		/*
-		 * Increase the sleep time if we're not close to reaching the cutoff
-		 * LSN yet, unless it's already at the maximum.
-		 */
-		if (sleep_quanta < MAX_SLEEP_QUANTA &&
-			latest_lsn < cutoff_lsn - bytes_per_summary / 2)
-			sleep_quanta++;
-		return;
-	}
+	if (summaries_produced == 0 && sleep_quanta < MAX_SLEEP_QUANTA &&
+		latest_lsn < cutoff_lsn - bytes_per_summary / 2)
+		sleep_quanta++;
 
 	/*
 	 * Reduce the sleep time if we seem not to be keeping up, unless it's
-	 * already minimal. Reduce it more sharply if it looks like we're due to
-	 * produce 2 or more summaries immediately.
+	 * already minimal. Reduce it more sharply if we produced multiple
+	 * summaries, since that indicates we're falling well behind.
 	 */
-	if (sleep_quanta > MIN_SLEEP_QUANTA &&
-		latest_lsn > cutoff_lsn + bytes_per_summary / 2)
+	if (sleep_quanta > MIN_SLEEP_QUANTA)
 	{
-		if (latest_lsn > cutoff_lsn + bytes_per_summary)
+		if (summaries_produced > 1)
 			sleep_quanta = Max(sleep_quanta / 2, MIN_SLEEP_QUANTA);
-		else
+		else if (latest_lsn > cutoff_lsn + bytes_per_summary / 2)
 			sleep_quanta--;
 	}
-
-	elog(LOG,
-		 "summarizing from %X/%X with cutoff %X/%X",
-		 LSN_FORMAT_ARGS(previous_lsn), LSN_FORMAT_ARGS(cutoff_lsn));
-	end_of_summary_lsn = SummarizeWAL(previous_lsn, cutoff_lsn);
-	elog(LOG, "summary ended at %X/%X", LSN_FORMAT_ARGS(end_of_summary_lsn));
-
-	/* Update state in shared memory. */
-	SpinLockAcquire(&WalSummarizerCtl->mutex);
-	WalSummarizerCtl->summarizer_lsn = end_of_summary_lsn;
-	WalSummarizerCtl->summarizer_tli = latest_tli;	/* XXX */
-	SpinLockRelease(&WalSummarizerCtl->mutex);
-
-	/* XXX maybe we need to keep going */
 }
 
 /*
@@ -395,7 +414,7 @@ SummarizeWAL(XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn)
 				(errmsg("could not find a valid record after %X/%X",
 						LSN_FORMAT_ARGS(start_lsn))));
 
-	while (1)
+	while (true)
 	{
 		char *errormsg;
 		XLogRecord *record = XLogReadRecord(xlogreader, &errormsg);

@@ -3496,6 +3496,43 @@ XLogGetLastRemovedSegno(void)
 	return lastRemovedSegNo;
 }
 
+/*
+ * Return the oldest WAL segment on the given TLI that still exists in
+ * XLOGDIR, or 0 if none.
+ */
+XLogSegNo
+XLogGetOldestSegno(TimeLineID tli)
+{
+	DIR		   *xldir;
+	struct dirent *xlde;
+	XLogSegNo	oldest_segno = 0;
+
+	xldir = AllocateDir(XLOGDIR);
+	while ((xlde = ReadDir(xldir, XLOGDIR)) != NULL)
+	{
+		TimeLineID	file_tli;
+		XLogSegNo	file_segno;
+
+		/* Ignore files that are not XLOG segments */
+		if (!IsXLogFileName(xlde->d_name))
+			continue;
+
+		/* Parse filename to get TLI and segno. */
+		XLogFromFileName(xlde->d_name, &file_tli, &file_segno,
+						 wal_segment_size);
+
+		/* Ignore anything that's not from the TLI of interest. */
+		if (tli != file_tli)
+			continue;
+
+		/* If it's the oldest so far, update oldest_segno. */
+		if (oldest_segno == 0 || file_segno < oldest_segno)
+			oldest_segno = file_segno;
+	}
+
+	FreeDir(xldir);
+	return oldest_segno;
+}
 
 /*
  * Update the last removed segno pointer in shared memory, to reflect that the

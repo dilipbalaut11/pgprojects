@@ -14,6 +14,7 @@
 #include "postgres.h"
 
 #include "access/xlog.h"
+#include "access/xlog_internal.h"
 #include "access/xlogutils.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
@@ -164,6 +165,24 @@ ConsiderSummarizingWAL(void)
 	previous_tli = WalSummarizerCtl->summarizer_tli;
 	SpinLockRelease(&WalSummarizerCtl->mutex);
 
+	/*
+	 * XXX. If we have no information about what happened previously, make
+	 * something up.
+	 *
+	 * XXX. This doesn't interlock properly - the WAL could be removed after
+	 * we do this and before we read it. And this would be true even if the
+	 * checkpointer knew that we wanted it, because the data might not be
+	 * advertised until the checkpointer had already decided to nuke it.
+	 */
+	if (XLogRecPtrIsInvalid(previous_lsn))
+	{
+		XLogSegNo	oldest_segno = XLogGetOldestSegno(latest_tli);
+
+		previous_tli = latest_tli;
+		XLogSegNoOffsetToRecPtr(oldest_segno, 0, wal_segment_size,
+								previous_lsn);
+	}
+
 	/* Sanity check. */
 	if (latest_lsn < previous_lsn)
 		ereport(FATAL,
@@ -198,7 +217,7 @@ ConsiderSummarizingWAL(void)
 	 * a very large record.
 	 */
 	cutoff_lsn = ((previous_lsn / bytes_per_summary) + 1) * bytes_per_summary;
-	if (cutoff_lsn - previous_lsn > bytes_per_summary / 5)
+	if (cutoff_lsn - previous_lsn < bytes_per_summary / 5)
 		cutoff_lsn += bytes_per_summary;
 	elog(LOG,
 		 "WAL summarization cutoff is TLI %d @ %X/%X, flush position is %X/%X",
@@ -240,16 +259,15 @@ ConsiderSummarizingWAL(void)
 	}
 
 	elog(LOG,
-		 "summarizing from TLI %d @ %X/%X with cutoff TLI %d @ %X/%X",
-		 previous_tli, LSN_FORMAT_ARGS(previous_lsn),
-		 latest_tli, LSN_FORMAT_ARGS(latest_lsn));
+		 "summarizing from %X/%X with cutoff %X/%X",
+		 LSN_FORMAT_ARGS(previous_lsn), LSN_FORMAT_ARGS(cutoff_lsn));
 	end_of_summary_lsn = SummarizeWAL(previous_lsn, cutoff_lsn);
 	elog(LOG, "summary ended at %X/%X", LSN_FORMAT_ARGS(end_of_summary_lsn));
 
 	/* Update state in shared memory. */
 	SpinLockAcquire(&WalSummarizerCtl->mutex);
-	WalSummarizerCtl->summarizer_lsn = latest_lsn; /* XXX */
-	WalSummarizerCtl->summarizer_tli = end_of_summary_lsn;
+	WalSummarizerCtl->summarizer_lsn = end_of_summary_lsn;
+	WalSummarizerCtl->summarizer_tli = latest_tli;	/* XXX */
 	SpinLockRelease(&WalSummarizerCtl->mutex);
 
 	/* XXX maybe we need to keep going */
@@ -292,10 +310,6 @@ SummarizeWAL(XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn)
 
 	private_data = (ReadLocalXLogPageNoWaitPrivate *)
 		palloc0(sizeof(ReadLocalXLogPageNoWaitPrivate));
-
-	/* XXX ugly hack */
-	if (XLogRecPtrIsInvalid(start_lsn))
-		start_lsn = XLOG_BLCKSZ;
 
 	/* XXX the TLI has to matter here */
 	xlogreader = XLogReaderAllocate(wal_segment_size, NULL,

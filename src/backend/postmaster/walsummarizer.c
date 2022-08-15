@@ -36,7 +36,8 @@ typedef struct
 	slock_t		mutex;
 	TimeLineID	summarizer_tli;
 	XLogRecPtr	summarizer_lsn;
-}			WalSummarizerData;
+	bool		lsn_is_exact;
+} WalSummarizerData;
 
 /*
  * Between activity cycles, we sleep for a time that is a multiple of
@@ -62,7 +63,8 @@ int			wal_summarize_keep_time = 7 * 24 * 60;
 
 static void ConsiderSummarizingWAL(void);
 static void HandleWalSummarizerInterrupts(void);
-static XLogRecPtr SummarizeWAL(XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn);
+static XLogRecPtr SummarizeWAL(XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
+							   bool exact);
 
 Size
 WalSummarizerShmemSize(void)
@@ -85,6 +87,7 @@ WalSummarizerShmemInit(void)
 		SpinLockInit(&WalSummarizerCtl->mutex);
 		WalSummarizerCtl->summarizer_tli = 0;
 		WalSummarizerCtl->summarizer_lsn = InvalidXLogRecPtr;
+		WalSummarizerCtl->lsn_is_exact = false;
 	}
 }
 
@@ -178,8 +181,8 @@ ConsiderSummarizingWAL(void)
 	SpinLockAcquire(&WalSummarizerCtl->mutex);
 	previous_lsn = WalSummarizerCtl->summarizer_lsn;
 	previous_tli = WalSummarizerCtl->summarizer_tli;
+	exact = WalSummarizerCtl->lsn_is_exact;
 	SpinLockRelease(&WalSummarizerCtl->mutex);
-	exact = !XLogRecPtrIsInvalid(previous_lsn);
 
 	/*
 	 * If we have no information about what happened previously, examine
@@ -317,7 +320,7 @@ ConsiderSummarizingWAL(void)
 		elog(LOG,
 			 "summarizing from %X/%X with cutoff %X/%X",
 			 LSN_FORMAT_ARGS(previous_lsn), LSN_FORMAT_ARGS(cutoff_lsn));
-		end_of_summary_lsn = SummarizeWAL(previous_lsn, cutoff_lsn);
+		end_of_summary_lsn = SummarizeWAL(previous_lsn, cutoff_lsn, exact);
 		elog(LOG, "summary ended at %X/%X",
 			 LSN_FORMAT_ARGS(end_of_summary_lsn));
 		++summaries_produced;
@@ -326,6 +329,7 @@ ConsiderSummarizingWAL(void)
 		SpinLockAcquire(&WalSummarizerCtl->mutex);
 		WalSummarizerCtl->summarizer_lsn = end_of_summary_lsn;
 		WalSummarizerCtl->summarizer_tli = latest_tli;	/* XXX */
+		WalSummarizerCtl->lsn_is_exact = exact = true;
 		SpinLockRelease(&WalSummarizerCtl->mutex);
 
 		/* Update state for next loop iteration. */
@@ -384,7 +388,7 @@ HandleWalSummarizerInterrupts(void)
 }
 
 static XLogRecPtr
-SummarizeWAL(XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn)
+SummarizeWAL(XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn, bool exact)
 {
 	ReadLocalXLogPageNoWaitPrivate *private_data;
 	XLogReaderState *xlogreader;
@@ -406,13 +410,27 @@ SummarizeWAL(XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn)
 				 errmsg("out of memory"),
 				 errdetail("Failed while allocating a WAL reading processor.")));
 
-	/* XXX maybe only do this conditionally */
-	first_record_lsn = XLogFindNextRecord(xlogreader, start_lsn);
+	/*
+	 * Normally, we know the exact LSN from which we wish to start reading
+	 * WAL, but sometimes all we know is that we want to start summarizing from
+	 * the first complete record in a certain WAL file. In that case, we have
+	 * to search forward from the beginning of the file for where the
+	 * record actually starts.
+	 */
+	if (exact)
+	{
+		first_record_lsn = start_lsn;
+		XLogBeginRead(xlogreader, first_record_lsn);
+	}
+	else
+	{
+		first_record_lsn = XLogFindNextRecord(xlogreader, start_lsn);
+		if (XLogRecPtrIsInvalid(first_record_lsn))
+			ereport(ERROR,
+					(errmsg("could not find a valid record after %X/%X",
+							LSN_FORMAT_ARGS(start_lsn))));
+	}
 	result_lsn = first_record_lsn;
-	if (XLogRecPtrIsInvalid(first_record_lsn))
-		ereport(ERROR,
-				(errmsg("could not find a valid record after %X/%X",
-						LSN_FORMAT_ARGS(start_lsn))));
 
 	while (true)
 	{

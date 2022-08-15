@@ -16,6 +16,7 @@
 #include "access/timeline.h"
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
+#include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
@@ -80,6 +81,7 @@ int			wal_summarize_mb = 256;
 int			wal_summarize_keep_time = 7 * 24 * 60;
 
 static void ConsiderSummarizingWAL(void);
+static XLogRecPtr GetLatestLSN(TimeLineID *tli);
 static void HandleWalSummarizerInterrupts(void);
 static XLogRecPtr SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn,
 							   XLogRecPtr cutoff_lsn, XLogRecPtr current_lsn,
@@ -243,22 +245,13 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
 	 * obtain the lock in exclusive mode, so it's our job to do that
 	 * initialization.
 	 *
-	 * The first step is to figure out the current LSN and timeline. Since WAL
-	 * should only be summarized once it's been flushed to disk, the latest LSN
-	 * for our purposes means whatever was most recently flushed to disk.
-	 */
-	if (RecoveryInProgress())
-		latest_lsn = GetWalRcvFlushRecPtr(NULL, &latest_tli);
-	else
-		latest_lsn = GetFlushRecPtr(&latest_tli);
-
-	/*
-	 * Find the oldest timeline on which WAL still exists, and the earliest
+	 * So, find the oldest timeline on which WAL still exists, and the earliest
 	 * segment for which it exists.
 	 *
 	 * XXX. We should skip timelines or segments that are already summarized,
 	 * unless we instead choose to handle that elsewhere.
 	 */
+	latest_lsn = GetLatestLSN(&latest_tli);
 	tles = readTimeLineHistory(latest_tli);
 	for (n = list_length(tles) - 1; n >= 0; --n)
 	{
@@ -340,15 +333,8 @@ ConsiderSummarizingWAL(void)
 		return;
 	}
 
-	/*
-	 * WAL should only only be summarized once it's been flushed to disk, so
-	 * for our purposes here, the latest LSN for our purposes means whatever
-	 * was most recently flushed to disk.
-	 */
-	if (RecoveryInProgress())
-		latest_lsn = GetWalRcvFlushRecPtr(NULL, &latest_tli);
-	else
-		latest_lsn = GetFlushRecPtr(&latest_tli);
+	/* Find the LSN and TLI up to which we can safely summarize. */
+	latest_lsn = GetLatestLSN(&latest_tli);
 
 	/*
 	 * It might be time to generate a summary, or we might be far enough
@@ -514,7 +500,50 @@ ConsiderSummarizingWAL(void)
 }
 
 /*
- * Interrupt handler for main loop of WAL writer process.
+ * Get the latest LSN that is eligible to be summarized, and set *tli to the
+ * corresponding timeline.
+ */
+static XLogRecPtr
+GetLatestLSN(TimeLineID *tli)
+{
+	if (!RecoveryInProgress())
+	{
+		/* Don't summarize WAL before it's flushed. */
+		return GetFlushRecPtr(tli);
+	}
+	else
+	{
+		XLogRecPtr	flush_lsn;
+		TimeLineID	flush_tli;
+		XLogRecPtr	replay_lsn;
+		TimeLineID	replay_tli;
+
+		/*
+		 * What we really want to know is how much WAL has been flushed to
+		 * disk, but the only flush position available is the one provided
+		 * by the walreceiver, which may not be running, because this could
+		 * be crash recovery or recovery via restore_command. So use either
+		 * the WAL receiver's flush position or the replay position, whichever
+		 * is further ahead, on the theory that if the WAL has been replayed
+		 * then it must also have been flushed to disk.
+		 */
+		flush_lsn = GetWalRcvFlushRecPtr(NULL, &flush_tli);
+		replay_lsn = GetXLogReplayRecPtr(&replay_tli);
+		if (flush_lsn > replay_lsn)
+		{
+			*tli = flush_tli;
+			return flush_lsn;
+		}
+		else
+		{
+			*tli = replay_tli;
+			return replay_lsn;
+		}
+	}
+}
+
+/*
+ * Interrupt handler for main loop of WAL summarizer process.
  */
 static void
 HandleWalSummarizerInterrupts(void)

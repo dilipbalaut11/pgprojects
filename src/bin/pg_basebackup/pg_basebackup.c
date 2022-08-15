@@ -102,6 +102,11 @@ typedef void (*WriteDataCallback) (size_t nbytes, char *buf,
 #define MINIMUM_VERSION_FOR_TERMINATED_TARFILE 150000
 
 /*
+ * pg_wal/summaries exists beginning with v16.
+ */
+#define MINIMUM_VERSION_FOR_WAL_SUMMARIES 160000
+
+/*
  * Different ways to include WAL
  */
 typedef enum
@@ -674,6 +679,23 @@ StartLogStreamer(char *startpos, uint32 timeline, char *sysidentifier,
 
 		if (pg_mkdir_p(statusdir, pg_dir_create_mode) != 0 && errno != EEXIST)
 			pg_fatal("could not create directory \"%s\": %m", statusdir);
+
+		/*
+		 * For newer server versions, likewise create pg_wal/summaries
+		 */
+		if (PQserverVersion(conn) < MINIMUM_VERSION_FOR_WAL_SUMMARIES)
+		{
+			char	summarydir[MAXPGPATH];
+
+			snprintf(summarydir, sizeof(summarydir), "%s/%s/summaries",
+					 basedir,
+					 PQserverVersion(conn) < MINIMUM_VERSION_FOR_PG_WAL ?
+					 "pg_xlog" : "pg_wal");
+
+			if (pg_mkdir_p(statusdir, pg_dir_create_mode) != 0 &&
+				errno != EEXIST)
+				pg_fatal("could not create directory \"%s\": %m", summarydir);
+		}
 	}
 
 	/*

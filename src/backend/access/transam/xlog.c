@@ -3813,8 +3813,8 @@ RemoveXlogFile(const struct dirent *segment_de,
 }
 
 /*
- * Verify whether pg_wal and pg_wal/archive_status exist.
- * If the latter does not exist, recreate it.
+ * Verify whether pg_wal, pg_wal/archive_status, and pg_wal/summaries exist.
+ * If the latter do not exist, recreate them.
  *
  * It is not the goal of this function to verify the contents of these
  * directories, but to help in cases where someone has performed a cluster
@@ -3840,6 +3840,26 @@ ValidateXLOGDirectoryStructure(void)
 
 	/* Check for archive_status */
 	snprintf(path, MAXPGPATH, XLOGDIR "/archive_status");
+	if (stat(path, &stat_buf) == 0)
+	{
+		/* Check for weird cases where it exists but isn't a directory */
+		if (!S_ISDIR(stat_buf.st_mode))
+			ereport(FATAL,
+					(errmsg("required WAL directory \"%s\" does not exist",
+							path)));
+	}
+	else
+	{
+		ereport(LOG,
+				(errmsg("creating missing WAL directory \"%s\"", path)));
+		if (MakePGDirectory(path) < 0)
+			ereport(FATAL,
+					(errmsg("could not create missing directory \"%s\": %m",
+							path)));
+	}
+
+	/* Check for summaries */
+	snprintf(path, MAXPGPATH, XLOGDIR "/summaries");
 	if (stat(path, &stat_buf) == 0)
 	{
 		/* Check for weird cases where it exists but isn't a directory */
@@ -5179,9 +5199,9 @@ StartupXLOG(void)
 #endif
 
 	/*
-	 * Verify that pg_wal and pg_wal/archive_status exist.  In cases where
-	 * someone has performed a copy for PITR, these directories may have been
-	 * excluded and need to be re-created.
+	 * Verify that pg_wal, pg_wal/archive_status, and pg_wal/summaries exist.
+	 * In cases where someone has performed a copy for PITR, these directories
+	 * may have been excluded and need to be re-created.
 	 */
 	ValidateXLOGDirectoryStructure();
 

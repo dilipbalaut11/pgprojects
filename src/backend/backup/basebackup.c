@@ -1312,10 +1312,12 @@ sendDir(bbsink *sink, const char *path, int basepathlen, bool sizeonly,
 									&statbuf, sizeonly);
 
 			/*
-			 * Also send archive_status directory (by hackishly reusing
-			 * statbuf from above ...).
+			 * Also send archive_status and summaries directories (by
+			 * hackishly reusing statbuf from above ...).
 			 */
 			size += _tarWriteHeader(sink, "./pg_wal/archive_status", NULL,
+									&statbuf, sizeonly);
+			size += _tarWriteHeader(sink, "./pg_wal/summaries", NULL,
 									&statbuf, sizeonly);
 
 			continue;			/* don't recurse into pg_wal */

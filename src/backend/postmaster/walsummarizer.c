@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "access/timeline.h"
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "access/xlogutils.h"
@@ -55,10 +56,10 @@ typedef struct
 #define MIN_SLEEP_QUANTA		1
 #define MAX_SLEEP_QUANTA		12
 
-/*
- * Private data for this module.
- */
-static WalSummarizerData * WalSummarizerCtl;
+/* Pointer to shared memory state. */
+static WalSummarizerData *WalSummarizerCtl;
+
+/* Only used in walsummarizer process. */
 static long sleep_quanta = MIN_SLEEP_QUANTA;
 
 /*
@@ -154,9 +155,15 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
 	XLogRecPtr	latest_lsn;
 	TimeLineID	latest_tli;
 	LWLockMode	mode = LW_SHARED;
+	int			n;
 	XLogSegNo	oldest_segno;
+	List	   *tles;
 	XLogRecPtr	unsummarized_lsn;
-	TimeLineID	unsummarized_tli;
+	TimeLineID	unsummarized_tli = 0;
+
+	/* If not summarizing WAL, do nothing. */
+	if (wal_summarize_mb == 0)
+		return InvalidXLogRecPtr;
 
 	/*
 	 * Initially, we acquire the lock in shared mode and try to fetch the
@@ -202,14 +209,39 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
 		latest_lsn = GetFlushRecPtr(&latest_tli);
 
 	/*
-	 * XXX. We should really start with the oldest TLI that isn't yet fully
-	 * summarized, and the oldest LSN on that timeline that is not yet fully
-	 * summarized. But the code for that is not written yet, so punt.
+	 * Find the oldest timeline on which WAL still exists, and the earliest
+	 * segment for which it exists.
+	 *
+	 * XXX. We should skip timelines or segments that are already summarized,
+	 * unless we instead choose to handle that elsewhere.
 	 */
-	oldest_segno = XLogGetOldestSegno(latest_tli);
-	XLogSegNoOffsetToRecPtr(oldest_segno, 0, wal_segment_size,
-							unsummarized_lsn);
-	unsummarized_tli = latest_tli;
+	tles = readTimeLineHistory(latest_tli);
+	for (n = list_length(tles) - 1; n >= 0; --n)
+	{
+		TimeLineHistoryEntry *tle = list_nth(tles, n);
+
+		oldest_segno = XLogGetOldestSegno(tle->tli);
+		if (oldest_segno != 0)
+		{
+			unsummarized_tli = tle->tli;
+			XLogSegNoOffsetToRecPtr(oldest_segno, 0, wal_segment_size,
+									unsummarized_lsn);
+			break;
+		}
+	}
+
+	/*
+	 * It really should not be possible for us to find no WAL, but since WAL
+	 * summarization is a non-critical function, tolerate that situation if
+	 * somehow it occurs.
+	 */
+	if (unsummarized_tli == 0)
+	{
+		ereport(LOG,
+				errmsg("no WAL found on timeline %d", latest_tli));
+		LWLockRelease(WALSummarizerLock);
+		return InvalidXLogRecPtr;
+	}
 
 	/* Update shared memory with the discovered values. */
 	WalSummarizerCtl->initialized = true;
@@ -237,11 +269,25 @@ ConsiderSummarizingWAL(void)
 	TimeLineID	latest_tli;
 	XLogRecPtr	previous_lsn;
 	TimeLineID	previous_tli;
+	XLogRecPtr	switch_lsn = InvalidXLogRecPtr;
+	TimeLineID	switch_tli = 0;
 	XLogRecPtr	end_of_summary_lsn;
 	int			summaries_produced = 0;
 
 	/* Fetch information about previous progress from shared memory. */
 	previous_lsn = GetOldestUnsummarizedLSN(&previous_tli, &exact);
+
+	/*
+	 * If this happens, it probably means that WAL summarization has been
+	 * disabled and therefore this process should exit. It could also mean that
+	 * we couldn't figure out to begin summaring because pg_wal is all messed
+	 * up. In that case, a message will have already been logged.
+	 */
+	if (XLogRecPtrIsInvalid(previous_lsn))
+	{
+		sleep_quanta = MAX_SLEEP_QUANTA;
+		return;
+	}
 
 	/*
 	 * WAL should only only be summarized once it's been flushed to disk, so
@@ -262,6 +308,30 @@ ConsiderSummarizingWAL(void)
 	{
 		/* Process any signals received recently. */
 		HandleWalSummarizerInterrupts();
+
+		/*
+		 * If we're summarizing a historic timeline and we haven't yet
+		 * computed the point at which to switch to the next timeline, do
+		 * that now.
+		 *
+		 * Note that if this is a standby, what was previously the current
+		 * timeline could become historic at any time.
+		 *
+		 * latest_tli can't change during a single execution of this while
+		 * loop, but previous_tli can change multiple times, and switch_tli
+		 * needs to be recomputed each time.
+		 *
+		 * We could try to make this more efficient by caching the results
+		 * of readTimeLineHistory when latest_tli has not changed, but since
+		 * we only have to do this once per timeline switch, we probably
+		 * wouldn't save any significant amount of work in practice.
+		 */
+		if (previous_tli != latest_tli && XLogRecPtrIsInvalid(switch_lsn))
+		{
+			List   *tles = readTimeLineHistory(latest_tli);
+
+			switch_lsn = tliSwitchPoint(previous_tli, tles, &switch_tli);
+		}
 
 		/*
 		 * Figure out where we want to stop the next WAL summary. We'll
@@ -294,6 +364,8 @@ ConsiderSummarizingWAL(void)
 			((previous_lsn / bytes_per_summary) + 1) * bytes_per_summary;
 		if (cutoff_lsn - previous_lsn < bytes_per_summary / 5)
 			cutoff_lsn += bytes_per_summary;
+		if (!XLogRecPtrIsInvalid(switch_lsn) && cutoff_lsn > switch_lsn)
+			cutoff_lsn = switch_lsn;
 		elog(LOG,	/* XXX reduce log level */
 			 "WAL summarization cutoff is TLI %d @ %X/%X, flush position is %X/%X",
 			 latest_tli, LSN_FORMAT_ARGS(cutoff_lsn), LSN_FORMAT_ARGS(latest_lsn));
@@ -320,16 +392,28 @@ ConsiderSummarizingWAL(void)
 			 LSN_FORMAT_ARGS(end_of_summary_lsn));
 		++summaries_produced;
 
+		/*
+		 * Update state for next loop iteration.
+		 *
+		 * Next summary file should start from exactly where this one ended.
+		 * Timeline remains unchanged unless a switch LSN was computed and
+		 * we have reached it.
+		 */
+		previous_lsn = end_of_summary_lsn;
+		exact = true;
+		if (!XLogRecPtrIsInvalid(switch_lsn) && cutoff_lsn >= switch_lsn)
+		{
+			previous_tli = switch_tli;
+			switch_lsn = InvalidXLogRecPtr;
+			switch_tli = 0;
+		}
+
 		/* Update state in shared memory. */
 		LWLockAcquire(WALSummarizerLock, LW_EXCLUSIVE);
 		WalSummarizerCtl->summarizer_lsn = end_of_summary_lsn;
-		WalSummarizerCtl->summarizer_tli = latest_tli;	/* XXX */
-		WalSummarizerCtl->lsn_is_exact = exact = true;
+		WalSummarizerCtl->summarizer_tli = previous_tli;
+		WalSummarizerCtl->lsn_is_exact = true;
 		LWLockRelease(WALSummarizerLock);
-
-		/* Update state for next loop iteration. */
-		previous_lsn = end_of_summary_lsn;
-		previous_tli = latest_tli;						/* XXX */
 	}
 
 	/*
@@ -455,7 +539,7 @@ SummarizeWAL(XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn, bool exact)
 						 LSN_FORMAT_ARGS(first_record_lsn))));
 		}
 
-		if (xlogreader->EndRecPtr > cutoff_lsn)
+		if (xlogreader->EndRecPtr >= cutoff_lsn)
 		{
 			result_lsn = xlogreader->EndRecPtr;
 			break;

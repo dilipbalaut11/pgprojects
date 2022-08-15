@@ -380,8 +380,13 @@ ConsiderSummarizingWAL(void)
 		 * resources -- so wait until the latest LSN values is at least 6 XLOG
 		 * blocks past the cutoff before starting summarization. Most WAL
 		 * records are smaller than that.
+		 *
+		 * If we're summarizing a historic timeline, no more WAL is going to
+		 * be generated on this timeline ever, so we can go ahead and summarize
+		 * it right now.
 		 */
-		if (latest_lsn < cutoff_lsn + 6 * XLOG_BLCKSZ)
+		if (latest_lsn < cutoff_lsn + 6 * XLOG_BLCKSZ &&
+			previous_tli == latest_tli)
 			break;
 
 		/* Summarize WAL. */

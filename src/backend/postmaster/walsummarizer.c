@@ -46,6 +46,13 @@ typedef struct
 	bool		lsn_is_exact;
 } WalSummarizerData;
 
+typedef struct
+{
+	TimeLineID	tli;
+	XLogRecPtr	read_upto;
+	bool		end_of_wal;
+} SummarizerReadLocalXLogPrivate;
+
 /*
  * Between activity cycles, we sleep for a time that is a multiple of
  * SLEEP_QUANTUM_DURATION, which is measured in milliseconds. The multiplier
@@ -73,6 +80,11 @@ static void HandleWalSummarizerInterrupts(void);
 static XLogRecPtr SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn,
 							   XLogRecPtr cutoff_lsn, XLogRecPtr current_lsn,
 							   bool exact);
+static int summarizer_read_local_xlog_page(XLogReaderState *state,
+										   XLogRecPtr targetPagePtr,
+										   int reqLen,
+										   XLogRecPtr targetRecPtr,
+										   char *cur_page);
 
 Size
 WalSummarizerShmemSize(void)
@@ -509,17 +521,18 @@ static XLogRecPtr
 SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
 			 XLogRecPtr maximum_lsn, bool exact)
 {
-	ReadLocalXLogPageNoWaitPrivate *private_data;
+	SummarizerReadLocalXLogPrivate *private_data;
 	XLogReaderState *xlogreader;
 	XLogRecPtr	first_record_lsn;
 	XLogRecPtr	result_lsn = InvalidXLogRecPtr;
 
-	private_data = (ReadLocalXLogPageNoWaitPrivate *)
-		palloc0(sizeof(ReadLocalXLogPageNoWaitPrivate));
+	private_data = (SummarizerReadLocalXLogPrivate *)
+		palloc0(sizeof(SummarizerReadLocalXLogPrivate));
+	private_data->tli = tli;
+	private_data->read_upto = maximum_lsn;
 
-	/* XXX the TLI has to matter here */
 	xlogreader = XLogReaderAllocate(wal_segment_size, NULL,
-									XL_ROUTINE(.page_read = &read_local_xlog_page_no_wait,
+									XL_ROUTINE(.page_read = &summarizer_read_local_xlog_page,
 											   .segment_open = &wal_segment_open,
 											   .segment_close = &wal_segment_close),
 									private_data);
@@ -557,9 +570,9 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
 
 		if (record == NULL)
 		{
-			ReadLocalXLogPageNoWaitPrivate *private_data;
+			SummarizerReadLocalXLogPrivate *private_data;
 
-			private_data = (ReadLocalXLogPageNoWaitPrivate *)
+			private_data = (SummarizerReadLocalXLogPrivate *)
 				xlogreader->private_data;
 			if (private_data->end_of_wal)
 				break;
@@ -577,8 +590,6 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
 
 		if (xlogreader->EndRecPtr >= cutoff_lsn)
 		{
-			if (xlogreader->EndRecPtr > maximum_lsn)
-				break;
 			result_lsn = xlogreader->EndRecPtr;
 			break;
 		}
@@ -588,4 +599,56 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
 	XLogReaderFree(xlogreader);
 
 	return result_lsn;
+}
+
+/*
+ * Similar to read_local_xlog_page, but much simpler because the caller is
+ * required to specify the TLI and the highest LSN that is safe to read.
+ */
+static int
+summarizer_read_local_xlog_page(XLogReaderState *state,
+								XLogRecPtr targetPagePtr, int reqLen,
+								XLogRecPtr targetRecPtr, char *cur_page)
+{
+	XLogRecPtr	loc;
+	int			count;
+	WALReadError errinfo;
+	SummarizerReadLocalXLogPrivate *private_data;
+
+	private_data = (SummarizerReadLocalXLogPrivate *)
+			state->private_data;
+
+	loc = targetPagePtr + reqLen;
+
+	if (targetPagePtr + XLOG_BLCKSZ <= private_data->read_upto)
+	{
+		/*
+		 * more than one block available; read only that block, have caller
+		 * come back if they need more.
+		 */
+		count = XLOG_BLCKSZ;
+	}
+	else if (targetPagePtr + reqLen > private_data->read_upto)
+	{
+		/* not enough data there */
+		private_data->end_of_wal = true;
+		return -1;
+	}
+	else
+	{
+		/* enough bytes available to satisfy the request */
+		count = private_data->read_upto - targetPagePtr;
+	}
+
+	/*
+	 * Even though we just determined how much of the page can be validly read
+	 * as 'count', read the whole page anyway. It's guaranteed to be
+	 * zero-padded up to the page boundary if it's incomplete.
+	 */
+	if (!WALRead(state, cur_page, targetPagePtr, XLOG_BLCKSZ,
+				 private_data->tli, &errinfo))
+		WALReadRaiseError(&errinfo);
+
+	/* number of valid bytes in the buffer */
+	return count;
 }

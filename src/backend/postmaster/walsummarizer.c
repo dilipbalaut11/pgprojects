@@ -23,6 +23,7 @@
 #include "postmaster/walsummarizer.h"
 #include "replication/walreceiver.h"
 #include "storage/ipc.h"
+#include "storage/lwlock.h"
 #include "storage/latch.h"
 #include "storage/procsignal.h"
 #include "storage/shmem.h"
@@ -31,9 +32,13 @@
 #include "utils/memutils.h"
 #include "utils/wait_event.h"
 
+/*
+ * Data in shared memory related to WAL summarization.
+ *
+ * This is protected by WALSummarizerLock.
+ */
 typedef struct
 {
-	slock_t		mutex;
 	TimeLineID	summarizer_tli;
 	XLogRecPtr	summarizer_lsn;
 	bool		lsn_is_exact;
@@ -84,7 +89,6 @@ WalSummarizerShmemInit(void)
 	if (!found)
 	{
 		/* First time through, so initialize */
-		SpinLockInit(&WalSummarizerCtl->mutex);
 		WalSummarizerCtl->summarizer_tli = 0;
 		WalSummarizerCtl->summarizer_lsn = InvalidXLogRecPtr;
 		WalSummarizerCtl->lsn_is_exact = false;
@@ -147,9 +151,9 @@ GetOldestUnsummarizedLSN(void)
 {
 	XLogRecPtr	unsummarized_lsn;
 
-	SpinLockAcquire(&WalSummarizerCtl->mutex);
+	LWLockAcquire(WALSummarizerLock, LW_SHARED);
 	unsummarized_lsn = WalSummarizerCtl->summarizer_lsn;
-	SpinLockRelease(&WalSummarizerCtl->mutex);
+	LWLockRelease(WALSummarizerLock);
 
 	return unsummarized_lsn;
 }
@@ -178,11 +182,11 @@ ConsiderSummarizingWAL(void)
 		latest_lsn = GetFlushRecPtr(&latest_tli);
 
 	/* Fetch information about previous progress from shared memory. */
-	SpinLockAcquire(&WalSummarizerCtl->mutex);
+	LWLockAcquire(WALSummarizerLock, LW_SHARED);
 	previous_lsn = WalSummarizerCtl->summarizer_lsn;
 	previous_tli = WalSummarizerCtl->summarizer_tli;
 	exact = WalSummarizerCtl->lsn_is_exact;
-	SpinLockRelease(&WalSummarizerCtl->mutex);
+	LWLockRelease(WALSummarizerLock);
 
 	/*
 	 * If we have no information about what happened previously, examine
@@ -202,10 +206,10 @@ ConsiderSummarizingWAL(void)
 		previous_tli = latest_tli;
 		XLogSegNoOffsetToRecPtr(oldest_segno, 0, wal_segment_size,
 								previous_lsn);
-		SpinLockAcquire(&WalSummarizerCtl->mutex);
+		LWLockAcquire(WALSummarizerLock, LW_EXCLUSIVE);
 		WalSummarizerCtl->summarizer_lsn = previous_lsn;
 		WalSummarizerCtl->summarizer_tli = previous_tli;
-		SpinLockRelease(&WalSummarizerCtl->mutex);
+		LWLockRelease(WALSummarizerLock);
 
 		/*
 		 * If the checkpointer is in the middle of removing old WAL files,
@@ -246,9 +250,9 @@ ConsiderSummarizingWAL(void)
 		oldest_segno = XLogGetOldestSegno(latest_tli);
 		XLogSegNoOffsetToRecPtr(oldest_segno, 0, wal_segment_size,
 								previous_lsn);
-		SpinLockAcquire(&WalSummarizerCtl->mutex);
+		LWLockAcquire(WALSummarizerLock, LW_EXCLUSIVE);
 		WalSummarizerCtl->summarizer_lsn = previous_lsn;
-		SpinLockRelease(&WalSummarizerCtl->mutex);
+		LWLockRelease(WALSummarizerLock);
 	}
 
 	/* Sanity check. */
@@ -326,11 +330,11 @@ ConsiderSummarizingWAL(void)
 		++summaries_produced;
 
 		/* Update state in shared memory. */
-		SpinLockAcquire(&WalSummarizerCtl->mutex);
+		LWLockAcquire(WALSummarizerLock, LW_EXCLUSIVE);
 		WalSummarizerCtl->summarizer_lsn = end_of_summary_lsn;
 		WalSummarizerCtl->summarizer_tli = latest_tli;	/* XXX */
 		WalSummarizerCtl->lsn_is_exact = exact = true;
-		SpinLockRelease(&WalSummarizerCtl->mutex);
+		LWLockRelease(WALSummarizerLock);
 
 		/* Update state for next loop iteration. */
 		previous_lsn = end_of_summary_lsn;

@@ -135,6 +135,9 @@ WalSummarizerShmemInit(void)
 void
 WalSummarizerMain(void)
 {
+	sigjmp_buf	local_sigjmp_buf;
+	MemoryContext context;
+
 	/*
 	 * Properly accept or ignore signals the postmaster might send us
 	 *
@@ -150,6 +153,12 @@ WalSummarizerMain(void)
 	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
 	pqsignal(SIGUSR2, SIG_IGN); /* not used */
 
+	/* Create and switch to a memory context that we can reset on error. */
+	context = AllocSetContextCreate(TopMemoryContext,
+									"Wal Summarizer",
+									ALLOCSET_DEFAULT_SIZES);
+	MemoryContextSwitchTo(context);
+
 	/*
 	 * Reset some signals that are accepted by postmaster but not here
 	 */
@@ -163,7 +172,48 @@ WalSummarizerMain(void)
 	ereport(DEBUG1,
 			(errmsg_internal("WAL summarizer started")));
 
-	/* XXX error handing */
+	/*
+	 * If an exception is encountered, processing resumes here.
+	 */
+	if (sigsetjmp(local_sigjmp_buf, 1) != 0)
+	{
+		/* Since not using PG_TRY, must reset error stack by hand */
+		error_context_stack = NULL;
+
+		/* Prevent interrupts while cleaning up */
+		HOLD_INTERRUPTS();
+
+		/* Report the error to the server log */
+		EmitErrorReport();
+
+		/* Release resources we might have acquired. */
+		LWLockReleaseAll();
+		ConditionVariableCancelSleep();
+		pgstat_report_wait_end();
+		ReleaseAuxProcessResources(false);
+		AtEOXact_Files(false);
+		AtEOXact_HashTables(false);
+
+		/*
+		 * Now return to normal top-level context and clear ErrorContext for
+		 * next time.
+		 */
+		MemoryContextSwitchTo(context);
+		FlushErrorState();
+
+		/* Flush any leaked data in the top-level context */
+		MemoryContextResetAndDeleteChildren(context);
+
+		/* Now we can allow interrupts again */
+		RESUME_INTERRUPTS();
+
+		/*
+		 * Sleep at least 1 second after any error.  A write error is likely
+		 * to be repeated, and we don't want to be filling the error logs as
+		 * fast as we can.
+		 */
+		pg_usleep(1000000L);
+	}
 
 	/*
 	 * Loop forever
@@ -173,8 +223,10 @@ WalSummarizerMain(void)
 		/* Process any signals received recently. */
 		HandleWalSummarizerInterrupts();
 
-		/* Perhaps do some real work. */
+		/* If it's time to generate WAL summaries, then do that. */
 		ConsiderSummarizingWAL();
+
+		/* XXX also need to think about removing old WAL summaries */
 
 		/* Wait for something to happen. */
 		(void) WaitLatch(MyLatch,
@@ -620,6 +672,16 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
 	 */
 	if (exact)
 	{
+		/*
+		 * XXX. This causes this problem:
+		 *
+		 * TRAP: FailedAssertion("XRecOffIsValid(RecPtr)", File: "xlogreader.c"
+		 *
+		 * when the last record of a summary file ends just before a page
+		 * boundary, so that there's no record which spans the page boundary.
+		 * Then we end up with first_record_lsn pointing at the start of the
+		 * page instead of the start of the first record.
+		 */
 		first_record_lsn = start_lsn;
 		XLogBeginRead(xlogreader, first_record_lsn);
 	}

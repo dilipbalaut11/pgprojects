@@ -39,6 +39,7 @@
  */
 typedef struct
 {
+	bool		initialized;
 	TimeLineID	summarizer_tli;
 	XLogRecPtr	summarizer_lsn;
 	bool		lsn_is_exact;
@@ -89,6 +90,7 @@ WalSummarizerShmemInit(void)
 	if (!found)
 	{
 		/* First time through, so initialize */
+		WalSummarizerCtl->initialized = false;
 		WalSummarizerCtl->summarizer_tli = 0;
 		WalSummarizerCtl->summarizer_lsn = InvalidXLogRecPtr;
 		WalSummarizerCtl->lsn_is_exact = false;
@@ -147,12 +149,79 @@ WalSummarizerMain(void)
 }
 
 XLogRecPtr
-GetOldestUnsummarizedLSN(void)
+GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
 {
+	XLogRecPtr	latest_lsn;
+	TimeLineID	latest_tli;
+	LWLockMode	mode = LW_SHARED;
+	XLogSegNo	oldest_segno;
 	XLogRecPtr	unsummarized_lsn;
+	TimeLineID	unsummarized_tli;
 
-	LWLockAcquire(WALSummarizerLock, LW_SHARED);
-	unsummarized_lsn = WalSummarizerCtl->summarizer_lsn;
+	/*
+	 * Initially, we acquire the lock in shared mode and try to fetch the
+	 * required information. If the data structure hasn't been initialized,
+	 * we reacquire the lock in shared mode so that we can initialize it.
+	 * However, if someone else does that first before we get the lock, then
+	 * we can just return the requested information after all.
+	 */
+	while (true)
+	{
+		LWLockAcquire(WALSummarizerLock, mode);
+
+		if (WalSummarizerCtl->initialized)
+		{
+			unsummarized_lsn = WalSummarizerCtl->summarizer_lsn;
+			if (tli != NULL)
+				*tli = WalSummarizerCtl->summarizer_tli;
+			if (lsn_is_exact != NULL)
+				*lsn_is_exact = WalSummarizerCtl->lsn_is_exact;
+			LWLockRelease(WALSummarizerLock);
+			return unsummarized_lsn;
+		}
+
+		if (mode == LW_EXCLUSIVE)
+			break;
+
+		LWLockRelease(WALSummarizerLock);
+		mode = LW_EXCLUSIVE;
+	}
+
+	/*
+	 * The data structure needs to be initialized, and we are the first to
+	 * obtain the lock in exclusive mode, so it's our job to do that
+	 * initialization.
+	 *
+	 * The first step is to figure out the current LSN and timeline. Since WAL
+	 * should only be summarized once it's been flushed to disk, the latest LSN
+	 * for our purposes means whatever was most recently flushed to disk.
+	 */
+	if (RecoveryInProgress())
+		latest_lsn = GetWalRcvFlushRecPtr(NULL, &latest_tli);
+	else
+		latest_lsn = GetFlushRecPtr(&latest_tli);
+
+	/*
+	 * XXX. We should really start with the oldest TLI that isn't yet fully
+	 * summarized, and the oldest LSN on that timeline that is not yet fully
+	 * summarized. But the code for that is not written yet, so punt.
+	 */
+	oldest_segno = XLogGetOldestSegno(latest_tli);
+	XLogSegNoOffsetToRecPtr(oldest_segno, 0, wal_segment_size,
+							unsummarized_lsn);
+	unsummarized_tli = latest_tli;
+
+	/* Update shared memory with the discovered values. */
+	WalSummarizerCtl->initialized = true;
+	WalSummarizerCtl->summarizer_lsn = unsummarized_lsn;
+	WalSummarizerCtl->summarizer_tli = unsummarized_tli;
+	WalSummarizerCtl->lsn_is_exact = false;
+
+	/* Also return the to the caller as required. */
+	if (tli != NULL)
+		*tli = WalSummarizerCtl->summarizer_tli;
+	if (lsn_is_exact != NULL)
+		*lsn_is_exact = WalSummarizerCtl->lsn_is_exact;
 	LWLockRelease(WALSummarizerLock);
 
 	return unsummarized_lsn;
@@ -161,106 +230,28 @@ GetOldestUnsummarizedLSN(void)
 static void
 ConsiderSummarizingWAL(void)
 {
+	uint64		bytes_per_summary = wal_summarize_mb * 1024 * 1024;
 	XLogRecPtr	cutoff_lsn;
+	bool		exact;
 	XLogRecPtr	latest_lsn;
 	TimeLineID	latest_tli;
 	XLogRecPtr	previous_lsn;
 	TimeLineID	previous_tli;
 	XLogRecPtr	end_of_summary_lsn;
-	uint64		bytes_per_summary = wal_summarize_mb * 1024 * 1024;
-	bool		exact;
 	int			summaries_produced = 0;
 
+	/* Fetch information about previous progress from shared memory. */
+	previous_lsn = GetOldestUnsummarizedLSN(&previous_tli, &exact);
+
 	/*
-	 * WAL should only be summarized once it's been flushed to disk, so for
-	 * our purposes here, the latest LSN means whatever was most recently
-	 * flushed.
+	 * WAL should only only be summarized once it's been flushed to disk, so
+	 * for our purposes here, the latest LSN for our purposes means whatever
+	 * was most recently flushed to disk.
 	 */
 	if (RecoveryInProgress())
 		latest_lsn = GetWalRcvFlushRecPtr(NULL, &latest_tli);
 	else
 		latest_lsn = GetFlushRecPtr(&latest_tli);
-
-	/* Fetch information about previous progress from shared memory. */
-	LWLockAcquire(WALSummarizerLock, LW_SHARED);
-	previous_lsn = WalSummarizerCtl->summarizer_lsn;
-	previous_tli = WalSummarizerCtl->summarizer_tli;
-	exact = WalSummarizerCtl->lsn_is_exact;
-	LWLockRelease(WALSummarizerLock);
-
-	/*
-	 * If we have no information about what happened previously, examine
-	 * pg_wal to figure it out.
-	 */
-	if (!exact)
-	{
-		XLogSegNo	oldest_segno;
-
-		/*
-		 * Make a tentative determination of what WAL we'd like to keep around
-		 * so that we can summarize it, and advertise that in shared memory.
-		 *
-		 * XXX. This doesn't consider previous timelines.
-		 */
-		oldest_segno = XLogGetOldestSegno(latest_tli);
-		previous_tli = latest_tli;
-		XLogSegNoOffsetToRecPtr(oldest_segno, 0, wal_segment_size,
-								previous_lsn);
-		LWLockAcquire(WALSummarizerLock, LW_EXCLUSIVE);
-		WalSummarizerCtl->summarizer_lsn = previous_lsn;
-		WalSummarizerCtl->summarizer_tli = previous_tli;
-		LWLockRelease(WALSummarizerLock);
-
-		/*
-		 * If the checkpointer is in the middle of removing old WAL files,
-		 * wait until that's no longer the case.
-		 */
-		while (IsCheckpointerRemovingOldWALFiles())
-		{
-			/* Process any signals received recently. */
-			HandleWalSummarizerInterrupts();
-
-			/* Log a message for debugging purposes. */
-			elog(LOG,	/* XXX reduce log level */
-				 "waiting for checkpointer to finish removing old WAL files");
-
-			/* Sleep for just 1 quantum before rechecking. */
-			(void) WaitLatch(MyLatch,
-							 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-							 SLEEP_QUANTUM_DURATION,
-							 WAIT_EVENT_WAL_SUMMARIZER_MAIN);
-			ResetLatch(MyLatch);
-		}
-
-		/*
-		 * It's possible that the checkpointer decided to remove the file
-		 * we identified as our tentative candidate above before it realized
-		 * that we wanted to keep it around, so we need to recheck.
-		 *
-		 * Any value we derive now will certainly be at least as new as the
-		 * previous_lsn value we advertised in shard memory above, and we know
-		 * that the checkpointer is aware of the value already or will be the
-		 * next time it goes to remove files, so the value we derive this time
-		 * is safe: the files should definitely be there when we go to read
-		 * them.
-		 *
-		 * XXX. The TLI we identified previously could now be empty, and then
-		 * we'd need to start with something newer.
-		 */
-		oldest_segno = XLogGetOldestSegno(latest_tli);
-		XLogSegNoOffsetToRecPtr(oldest_segno, 0, wal_segment_size,
-								previous_lsn);
-		LWLockAcquire(WALSummarizerLock, LW_EXCLUSIVE);
-		WalSummarizerCtl->summarizer_lsn = previous_lsn;
-		LWLockRelease(WALSummarizerLock);
-	}
-
-	/* Sanity check. */
-	if (latest_lsn < previous_lsn)
-		ereport(FATAL,
-				errmsg_internal("flush LSN went backward from %X/%X to %X/%X",
-								LSN_FORMAT_ARGS(previous_lsn),
-								LSN_FORMAT_ARGS(latest_lsn)));
 
 	/*
 	 * It might be time to generate a summary, or we might be far enough

@@ -6894,7 +6894,6 @@ CreateCheckPoint(int flags)
 	 * Delete old log files, those no longer needed for last checkpoint to
 	 * prevent the disk holding the xlog from growing full.
 	 */
-	CheckpointerRemovingOldWALFiles(true);
 	XLByteToSeg(RedoRecPtr, _logSegNo, wal_segment_size);
 	KeepLogSeg(recptr, &_logSegNo);
 	if (InvalidateObsoleteReplicationSlots(_logSegNo))
@@ -6909,7 +6908,6 @@ CreateCheckPoint(int flags)
 	_logSegNo--;
 	RemoveOldXlogFiles(_logSegNo, RedoRecPtr, recptr,
 					   checkPoint.ThisTimeLineID);
-	CheckpointerRemovingOldWALFiles(false);
 
 	/*
 	 * Make more log segments if needed.  (Do this after recycling old log
@@ -7338,7 +7336,6 @@ CreateRestartPoint(int flags)
 	 * Retreat _logSegNo using the current end of xlog replayed or received,
 	 * whichever is later.
 	 */
-	CheckpointerRemovingOldWALFiles(true);
 	receivePtr = GetWalRcvFlushRecPtr(NULL, NULL);
 	replayPtr = GetXLogReplayRecPtr(&replayTLI);
 	endptr = (receivePtr < replayPtr) ? replayPtr : receivePtr;
@@ -7353,7 +7350,6 @@ CreateRestartPoint(int flags)
 		KeepLogSeg(endptr, &_logSegNo);
 	}
 	_logSegNo--;
-	CheckpointerRemovingOldWALFiles(false);
 
 	/*
 	 * Try to recycle segments on a useful timeline. If we've been promoted
@@ -7555,7 +7551,7 @@ KeepLogSeg(XLogRecPtr recptr, XLogSegNo *logSegNo)
 	 * If WAL summarization is in use, don't remove WAL that has yet to be
 	 * summarized.
 	 */
-	keep = GetOldestUnsummarizedLSN();
+	keep = GetOldestUnsummarizedLSN(NULL, NULL);
 	if (keep != InvalidXLogRecPtr)
 	{
 		XLogSegNo	unsummarized_segno;

@@ -10,6 +10,6 @@ extern Size WalSummarizerShmemSize(void);
 extern void WalSummarizerShmemInit(void);
 extern void WalSummarizerMain(void) pg_attribute_noreturn();
 
-extern XLogRecPtr GetOldestUnsummarizedLSN(void);
+extern XLogRecPtr GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact);
 
 #endif

@@ -23,6 +23,7 @@
 #include "postmaster/interrupt.h"
 #include "postmaster/walsummarizer.h"
 #include "replication/walreceiver.h"
+#include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
 #include "storage/latch.h"
@@ -159,6 +160,8 @@ WalSummarizerMain(void)
 
 	ereport(DEBUG1,
 			(errmsg_internal("WAL summarizer started")));
+
+	/* XXX error handing */
 
 	/*
 	 * Loop forever
@@ -635,8 +638,43 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
 		}
 	}
 
+	/* Destroy xlogreader. */
 	pfree(xlogreader->private_data);
 	XLogReaderFree(xlogreader);
+
+	/*
+	 * If we were able to read all the necessary WAL, write out a summary file.
+	 */
+	if (!XLogRecPtrIsInvalid(result_lsn))
+	{
+		char		temp_path[MAXPGPATH];
+		char		final_path[MAXPGPATH];
+		File		file;
+
+		/* Generate temporary and final path name. */
+		snprintf(temp_path, MAXPGPATH,
+				 XLOGDIR "/summaries/temp.summary");
+		snprintf(final_path, MAXPGPATH,
+				 XLOGDIR "/summaries/%08X%08X%08X%08X%08X.summary",
+				 tli,
+				 LSN_FORMAT_ARGS(first_record_lsn),
+				 LSN_FORMAT_ARGS(result_lsn));
+
+		/* Open the temporary file for writing. */
+		file = PathNameOpenFile(temp_path, O_WRONLY | O_CREAT | O_TRUNC);
+		if (file <= 0)
+			ereport(ERROR,
+					 (errcode_for_file_access(),
+					  errmsg("could not create file \"%s\": %m", temp_path)));
+
+		/* XXX write actual data to temporary file */
+
+		/* Close temporary file. */
+		FileClose(file);
+
+		/* Durably rename it into place. */
+		durable_rename(temp_path, final_path, ERROR);
+	}
 
 	return result_lsn;
 }

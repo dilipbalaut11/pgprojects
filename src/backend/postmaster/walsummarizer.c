@@ -70,7 +70,8 @@ int			wal_summarize_keep_time = 7 * 24 * 60;
 
 static void ConsiderSummarizingWAL(void);
 static void HandleWalSummarizerInterrupts(void);
-static XLogRecPtr SummarizeWAL(XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
+static XLogRecPtr SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn,
+							   XLogRecPtr cutoff_lsn, XLogRecPtr current_lsn,
 							   bool exact);
 
 Size
@@ -366,7 +367,7 @@ ConsiderSummarizingWAL(void)
 			cutoff_lsn += bytes_per_summary;
 		if (!XLogRecPtrIsInvalid(switch_lsn) && cutoff_lsn > switch_lsn)
 			cutoff_lsn = switch_lsn;
-		elog(LOG,	/* XXX reduce log level */
+		elog(DEBUG2,
 			 "WAL summarization cutoff is TLI %d @ %X/%X, flush position is %X/%X",
 			 latest_tli, LSN_FORMAT_ARGS(cutoff_lsn), LSN_FORMAT_ARGS(latest_lsn));
 
@@ -383,13 +384,31 @@ ConsiderSummarizingWAL(void)
 		if (latest_lsn < cutoff_lsn + 6 * XLOG_BLCKSZ)
 			break;
 
-		/* XXX clean up some things here */
-		elog(LOG,
-			 "summarizing from %X/%X with cutoff %X/%X",
-			 LSN_FORMAT_ARGS(previous_lsn), LSN_FORMAT_ARGS(cutoff_lsn));
-		end_of_summary_lsn = SummarizeWAL(previous_lsn, cutoff_lsn, exact);
-		elog(LOG, "summary ended at %X/%X",
-			 LSN_FORMAT_ARGS(end_of_summary_lsn));
+		/* Summarize WAL. */
+		end_of_summary_lsn = SummarizeWAL(previous_tli, previous_lsn,
+										  cutoff_lsn, latest_lsn, exact);
+		if (XLogRecPtrIsInvalid(end_of_summary_lsn))
+		{
+			/*
+			 * If we discover that the last record that was supposed to be
+			 * part of this summary extends past the flush position or just
+			 * doesn't exist on disk at all, we'll have to retry creating
+			 * this summary later.
+			 */
+			ereport(LOG,	/* XXX reduce log level */
+					errmsg("can't yet summarize WAL on TLI %d starting at %X/%X with cutoff %X/%X",
+						   previous_tli,
+						   LSN_FORMAT_ARGS(previous_lsn),
+						   LSN_FORMAT_ARGS(cutoff_lsn)));
+			break;
+		}
+
+		/* We have sucessfully produced a summary. */
+		ereport(LOG,
+				errmsg("summarized WAL on TLI %d from %X/%X to %X/%X",
+					   previous_tli,
+					   LSN_FORMAT_ARGS(previous_lsn),
+					   LSN_FORMAT_ARGS(end_of_summary_lsn)));
 		++summaries_produced;
 
 		/*
@@ -466,13 +485,29 @@ HandleWalSummarizerInterrupts(void)
 		ProcessLogMemoryContextInterrupt();
 }
 
+/*
+ * Summarize WAL on the timeline given by tli, starting at start_lsn and
+ * stopping when the LSN of the next record would be greater than or equal to
+ * cutoff_lsn.
+ *
+ * If exact = true, start_lsn is an exact value; if exact = false, search
+ * forward for the first WAL record beginning after start_lsn.
+ *
+ * It's possible that the last record extends far beyond cutoff_lsn; if so,
+ * it might not have been fully written and flushed yet. If we're unable to
+ * read enough WAL or the last record extends beyond maximum_lsn, we'll need
+ * retry later after more WAL is safely on disk. In this case, returns
+ * InvalidXLogRecPtr; else, returns the ending LSN of the last record in the
+ * new summary.
+ */
 static XLogRecPtr
-SummarizeWAL(XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn, bool exact)
+SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
+			 XLogRecPtr maximum_lsn, bool exact)
 {
 	ReadLocalXLogPageNoWaitPrivate *private_data;
 	XLogReaderState *xlogreader;
 	XLogRecPtr	first_record_lsn;
-	XLogRecPtr	result_lsn;
+	XLogRecPtr	result_lsn = InvalidXLogRecPtr;
 
 	private_data = (ReadLocalXLogPageNoWaitPrivate *)
 		palloc0(sizeof(ReadLocalXLogPageNoWaitPrivate));
@@ -509,7 +544,6 @@ SummarizeWAL(XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn, bool exact)
 					(errmsg("could not find a valid record after %X/%X",
 							LSN_FORMAT_ARGS(start_lsn))));
 	}
-	result_lsn = first_record_lsn;
 
 	while (true)
 	{
@@ -523,10 +557,7 @@ SummarizeWAL(XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn, bool exact)
 			private_data = (ReadLocalXLogPageNoWaitPrivate *)
 				xlogreader->private_data;
 			if (private_data->end_of_wal)
-			{
-				elog(LOG, "too soon"); /* XXX */
 				break;
-			}
 			if (errormsg)
 				ereport(ERROR,
 						(errcode_for_file_access(),
@@ -541,6 +572,8 @@ SummarizeWAL(XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn, bool exact)
 
 		if (xlogreader->EndRecPtr >= cutoff_lsn)
 		{
+			if (xlogreader->EndRecPtr > maximum_lsn)
+				break;
 			result_lsn = xlogreader->EndRecPtr;
 			break;
 		}

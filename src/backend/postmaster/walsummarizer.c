@@ -46,6 +46,9 @@ typedef struct
 	bool		lsn_is_exact;
 } WalSummarizerData;
 
+/*
+ * Private data for our xlogreader's page read callback.
+ */
 typedef struct
 {
 	TimeLineID	tli;
@@ -86,12 +89,18 @@ static int summarizer_read_local_xlog_page(XLogReaderState *state,
 										   XLogRecPtr targetRecPtr,
 										   char *cur_page);
 
+/*
+ * Amount of shared memory required for this module.
+ */
 Size
 WalSummarizerShmemSize(void)
 {
 	return sizeof(WalSummarizerData);
 }
 
+/*
+ * Create or attach to shared memory segment for this module.
+ */
 void
 WalSummarizerShmemInit(void)
 {
@@ -103,7 +112,13 @@ WalSummarizerShmemInit(void)
 
 	if (!found)
 	{
-		/* First time through, so initialize */
+		/*
+		 * First time through, so initialize.
+		 *
+		 * We're just filling in dummy values here -- the real initialization
+		 * will happen when GetOldestUnsummarizedLSN() is called for the first
+		 * time.
+		 */
 		WalSummarizerCtl->initialized = false;
 		WalSummarizerCtl->summarizer_tli = 0;
 		WalSummarizerCtl->summarizer_lsn = InvalidXLogRecPtr;
@@ -111,6 +126,9 @@ WalSummarizerShmemInit(void)
 	}
 }
 
+/*
+ * Entry point for walsummarizer process.
+ */
 void
 WalSummarizerMain(void)
 {
@@ -162,6 +180,16 @@ WalSummarizerMain(void)
 	}
 }
 
+/*
+ * Get the oldest LSN in this server's timeline history that has not yet been
+ * summarized.
+ *
+ * If *tli != NULL, it will be set to the TLI for the LSN that is returned.
+ *
+ * If *lsn_is_exact != NULL, it will be set to true if the returned LSN is
+ * necessarily the start of a WAL record and false if it's just the beginning
+ * of a WAL segment.
+ */
 XLogRecPtr
 GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
 {
@@ -272,6 +300,13 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
 	return unsummarized_lsn;
 }
 
+/*
+ * Determine whether it's time to generate any WAL summaries. If it is,
+ * generate as many as possible.
+ *
+ * As a side effect, adjusts sleep_quanta, which controls the time for which
+ * the main loop will sleep before calling this function again.
+ */
 static void
 ConsiderSummarizingWAL(void)
 {
@@ -476,7 +511,7 @@ ConsiderSummarizingWAL(void)
 }
 
 /*
- * Interrupt handler for main loops of WAL writer process.
+ * Interrupt handler for main loop of WAL writer process.
  */
 static void
 HandleWalSummarizerInterrupts(void)
@@ -526,11 +561,13 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
 	XLogRecPtr	first_record_lsn;
 	XLogRecPtr	result_lsn = InvalidXLogRecPtr;
 
+	/* Initialize private data for xlogreader. */
 	private_data = (SummarizerReadLocalXLogPrivate *)
 		palloc0(sizeof(SummarizerReadLocalXLogPrivate));
 	private_data->tli = tli;
 	private_data->read_upto = maximum_lsn;
 
+	/* Create xlogreader. */
 	xlogreader = XLogReaderAllocate(wal_segment_size, NULL,
 									XL_ROUTINE(.page_read = &summarizer_read_local_xlog_page,
 											   .segment_open = &wal_segment_open,
@@ -563,6 +600,9 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
 							LSN_FORMAT_ARGS(start_lsn))));
 	}
 
+	/*
+	 * Main loop: read xlog records one by one.
+	 */
 	while (true)
 	{
 		char *errormsg;

@@ -626,8 +626,10 @@ HandleWalSummarizerInterrupts(void)
  * stopping when the LSN of the next record would be greater than or equal to
  * cutoff_lsn.
  *
- * If exact = true, start_lsn is an exact value; if exact = false, search
- * forward for the first WAL record beginning after start_lsn.
+ * If exact = true, start_lsn should be the end LSN of the previous record as
+ * returned by the xlogreader machinery. It might be either the actual start
+ * of the next record or the start of a page header that is immediately
+ * followed by the start of a new record.
  *
  * It's possible that the last record extends far beyond cutoff_lsn; if so,
  * it might not have been fully written and flushed yet. If we're unable to
@@ -642,8 +644,11 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
 {
 	SummarizerReadLocalXLogPrivate *private_data;
 	XLogReaderState *xlogreader;
-	XLogRecPtr	first_record_lsn;
-	XLogRecPtr	result_lsn = InvalidXLogRecPtr;
+	XLogRecPtr	summary_start_lsn;
+	XLogRecPtr	summary_end_lsn;
+	char		temp_path[MAXPGPATH];
+	char		final_path[MAXPGPATH];
+	File		file;
 
 	/* Initialize private data for xlogreader. */
 	private_data = (SummarizerReadLocalXLogPrivate *)
@@ -664,40 +669,65 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
 				 errdetail("Failed while allocating a WAL reading processor.")));
 
 	/*
-	 * Normally, we know the exact LSN from which we wish to start reading
-	 * WAL, but sometimes all we know is that we want to start summarizing from
-	 * the first complete record in a certain WAL file. In that case, we have
-	 * to search forward from the beginning of the file for where the
-	 * record actually starts.
+	 * When exact = false, we're starting from an arbitrary point in the WAL
+	 * and must search forward for the start of the next record.
+	 *
+	 * When exact = true, start_lsn should be either the LSN where a record
+	 * begins, or the LSN of a page where the page header is immediately
+	 * followed by the start of a new record. XLogBeginRead should tolerate
+	 * either case.
+	 *
+	 * We need to allow for both cases because the behavior of xlogreader
+	 * varies. When a record spans two or more xlog pages, the ending LSN
+	 * reported by xlogreader will be the starting LSN of the followign record,
+	 * but when an xlog page boundary falls between two records, the end LSN
+	 * for the first will be reported as the first byte of the following page.
+	 * We can't know until we read that page how large the header will be, but
+	 * we'll have to skip over it to find the next record.
 	 */
 	if (exact)
 	{
 		/*
-		 * XXX. This causes this problem:
-		 *
-		 * TRAP: FailedAssertion("XRecOffIsValid(RecPtr)", File: "xlogreader.c"
-		 *
-		 * when the last record of a summary file ends just before a page
-		 * boundary, so that there's no record which spans the page boundary.
-		 * Then we end up with first_record_lsn pointing at the start of the
-		 * page instead of the start of the first record.
+		 * Even if start_lsn is the beginning of a page rather than the
+		 * beginning of the first record on that page, we should still use it
+		 * as the start LSN for the summary file. That's because we detect
+		 * missing summary files by looking for cases where the end LSN of
+		 * one file is less than the start LSN of the next file. When only
+		 * a page header is skipped, nothing has been missed.
 		 */
-		first_record_lsn = start_lsn;
-		XLogBeginRead(xlogreader, first_record_lsn);
+		XLogBeginRead(xlogreader, start_lsn);
+		summary_start_lsn = start_lsn;
 	}
 	else
 	{
-		first_record_lsn = XLogFindNextRecord(xlogreader, start_lsn);
-		if (XLogRecPtrIsInvalid(first_record_lsn))
+		summary_start_lsn = XLogFindNextRecord(xlogreader, start_lsn);
+		if (XLogRecPtrIsInvalid(summary_start_lsn))
+		{
+			/*
+			 * If we hit end-of-WAL while trying to find the next valid record,
+			 * that's not an error. It just means we need to wait for more WAL
+			 * to get written.
+			 *
+			 * XXX: What happens if a timeline switch occurs before we find
+			 * a valid record? I think this will just get stuck...
+			 */
+			if (private_data->end_of_wal)
+			{
+				elog(DEBUG1, "could not find a valid record after %X/%X: end of WAL at %X/%X",
+					 LSN_FORMAT_ARGS(start_lsn),
+					 LSN_FORMAT_ARGS(maximum_lsn));
+				return InvalidXLogRecPtr;
+			}
 			ereport(ERROR,
 					(errmsg("could not find a valid record after %X/%X",
 							LSN_FORMAT_ARGS(start_lsn))));
+		}
 	}
 
 	/*
 	 * Main loop: read xlog records one by one.
 	 */
-	while (true)
+	while (xlogreader->EndRecPtr < cutoff_lsn)
 	{
 		char *errormsg;
 		XLogRecord *record = XLogReadRecord(xlogreader, &errormsg);
@@ -709,65 +739,61 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
 			private_data = (SummarizerReadLocalXLogPrivate *)
 				xlogreader->private_data;
 			if (private_data->end_of_wal)
-				break;
+			{
+				/*
+				 * XXX: here again, what if a timeline change happens before
+				 * we find a valid record? again, i think we just get stuck.
+				 */
+				ereport(DEBUG1,
+						(errcode_for_file_access(),
+						 errmsg("could not read WAL at %X/%X: end of WAL at %X/%X",
+								LSN_FORMAT_ARGS(xlogreader->EndRecPtr),
+								LSN_FORMAT_ARGS(maximum_lsn))));
+				return InvalidXLogRecPtr;
+			}
 			if (errormsg)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not read WAL at %X/%X: %s",
-						 LSN_FORMAT_ARGS(first_record_lsn), errormsg)));
+						 LSN_FORMAT_ARGS(xlogreader->EndRecPtr), errormsg)));
 			else
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not read WAL at %X/%X",
-						 LSN_FORMAT_ARGS(first_record_lsn))));
-		}
-
-		if (xlogreader->EndRecPtr >= cutoff_lsn)
-		{
-			result_lsn = xlogreader->EndRecPtr;
-			break;
+						 LSN_FORMAT_ARGS(xlogreader->EndRecPtr))));
 		}
 	}
 
-	/* Destroy xlogreader. */
+	/* Save ending LSN before destroying xlogreader. */
+	summary_end_lsn = xlogreader->EndRecPtr;
 	pfree(xlogreader->private_data);
 	XLogReaderFree(xlogreader);
 
-	/*
-	 * If we were able to read all the necessary WAL, write out a summary file.
-	 */
-	if (!XLogRecPtrIsInvalid(result_lsn))
-	{
-		char		temp_path[MAXPGPATH];
-		char		final_path[MAXPGPATH];
-		File		file;
+	/* Generate temporary and final path name. */
+	snprintf(temp_path, MAXPGPATH,
+			 XLOGDIR "/summaries/temp.summary");
+	snprintf(final_path, MAXPGPATH,
+			 XLOGDIR "/summaries/%08X%08X%08X%08X%08X.summary",
+			 tli,
+			 LSN_FORMAT_ARGS(summary_start_lsn),
+			 LSN_FORMAT_ARGS(summary_end_lsn));
 
-		/* Generate temporary and final path name. */
-		snprintf(temp_path, MAXPGPATH,
-				 XLOGDIR "/summaries/temp.summary");
-		snprintf(final_path, MAXPGPATH,
-				 XLOGDIR "/summaries/%08X%08X%08X%08X%08X.summary",
-				 tli,
-				 LSN_FORMAT_ARGS(first_record_lsn),
-				 LSN_FORMAT_ARGS(result_lsn));
+	/* Open the temporary file for writing. */
+	file = PathNameOpenFile(temp_path, O_WRONLY | O_CREAT | O_TRUNC);
+	if (file <= 0)
+		ereport(ERROR,
+				 (errcode_for_file_access(),
+				  errmsg("could not create file \"%s\": %m", temp_path)));
 
-		/* Open the temporary file for writing. */
-		file = PathNameOpenFile(temp_path, O_WRONLY | O_CREAT | O_TRUNC);
-		if (file <= 0)
-			ereport(ERROR,
-					 (errcode_for_file_access(),
-					  errmsg("could not create file \"%s\": %m", temp_path)));
+	/* XXX write actual data to temporary file */
 
-		/* XXX write actual data to temporary file */
+	/* Close temporary file and shut down xlogreader. */
+	FileClose(file);
 
-		/* Close temporary file. */
-		FileClose(file);
+	/* Durably rename the new summary into place. */
+	durable_rename(temp_path, final_path, ERROR);
 
-		/* Durably rename it into place. */
-		durable_rename(temp_path, final_path, ERROR);
-	}
-
-	return result_lsn;
+	return summary_end_lsn;
 }
 
 /*

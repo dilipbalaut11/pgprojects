@@ -245,6 +245,9 @@ pgstat_get_wait_activity(WaitEventActivity w)
 		case WAIT_EVENT_WAL_SUMMARIZER_MAIN:
 			event_name = "WalSummarizerMain";
 			break;
+		case WAIT_EVENT_WAL_SUMMARIZER_WAL:
+			event_name = "WalSummarizerWal";
+			break;
 		case WAIT_EVENT_WAL_WRITER_MAIN:
 			event_name = "WalWriterMain";
 			break;

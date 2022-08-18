@@ -54,6 +54,7 @@ typedef struct
 typedef struct
 {
 	TimeLineID	tli;
+	bool		historic;
 	XLogRecPtr	read_upto;
 	bool		end_of_wal;
 } SummarizerReadLocalXLogPrivate;
@@ -83,9 +84,9 @@ int			wal_summarize_keep_time = 7 * 24 * 60;
 static void ConsiderSummarizingWAL(void);
 static XLogRecPtr GetLatestLSN(TimeLineID *tli);
 static void HandleWalSummarizerInterrupts(void);
-static XLogRecPtr SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn,
-							   XLogRecPtr cutoff_lsn, XLogRecPtr current_lsn,
-							   bool exact);
+static XLogRecPtr SummarizeWAL(TimeLineID tli, bool historic,
+							   XLogRecPtr start_lsn, bool exact,
+							   XLogRecPtr cutoff_lsn, XLogRecPtr maximum_lsn);
 static int summarizer_read_local_xlog_page(XLogReaderState *state,
 										   XLogRecPtr targetPagePtr,
 										   int reqLen,
@@ -460,41 +461,31 @@ ConsiderSummarizingWAL(void)
 			 latest_tli, LSN_FORMAT_ARGS(cutoff_lsn), LSN_FORMAT_ARGS(latest_lsn));
 
 		/*
-		 * If we've past the cutoff LSN, then we have all of the WAL that we
-		 * want to include in the next summary, except possibly for the last
-		 * record, which might still be incomplete. If we fail to read the
-		 * entire last record, we'll have to retry the whole summarization
-		 * process. While that shouldn't break anything, it's a waste of
-		 * resources -- so wait until the latest LSN values is at least 6 XLOG
-		 * blocks past the cutoff before starting summarization. Most WAL
-		 * records are smaller than that.
+		 * If we're on a historic timeline, no new WAL can ever appear, so
+		 * we may as well try to generate the summary now.
 		 *
-		 * If we're summarizing a historic timeline, no more WAL is going to
-		 * be generated on this timeline ever, so we can go ahead and summarize
-		 * it right now.
+		 * If we're on the current timeline, we could really begin generating
+		 * the summary at any time, because if the required amount of WAL
+		 * is not on disk yet, SummarizeWAL will just wait. However, it
+		 * sleeps in very short increments, so we prefer to sleep in the main
+		 * loop when possible.
+		 *
+		 * If the amount of WAL known to be flushed to disk hasn't reached
+		 * cutoff_lsn, SumamrizeWAL will definitely have to wait, so bail
+		 * out in that case. Even if it has, there's a chance we might have
+		 * to wait anyway, if the last WAL record that would be included
+		 * in the summary continues into subsequent blocks and isn't fully
+		 * flushed yet. However, that case should be rare.
 		 */
-		if (latest_lsn < cutoff_lsn + 6 * XLOG_BLCKSZ &&
-			previous_tli == latest_tli)
+		if (latest_lsn < cutoff_lsn && previous_tli == latest_tli)
 			break;
 
 		/* Summarize WAL. */
-		end_of_summary_lsn = SummarizeWAL(previous_tli, previous_lsn,
-										  cutoff_lsn, latest_lsn, exact);
-		if (XLogRecPtrIsInvalid(end_of_summary_lsn))
-		{
-			/*
-			 * If we discover that the last record that was supposed to be
-			 * part of this summary extends past the flush position or just
-			 * doesn't exist on disk at all, we'll have to retry creating
-			 * this summary later.
-			 */
-			ereport(LOG,	/* XXX reduce log level */
-					errmsg("can't yet summarize WAL on TLI %d starting at %X/%X with cutoff %X/%X",
-						   previous_tli,
-						   LSN_FORMAT_ARGS(previous_lsn),
-						   LSN_FORMAT_ARGS(cutoff_lsn)));
-			break;
-		}
+		end_of_summary_lsn = SummarizeWAL(previous_tli,
+										  previous_tli != latest_tli,
+										  previous_lsn, exact,
+										  cutoff_lsn, latest_lsn);
+		Assert(!XLogRecPtrIsInvalid(end_of_summary_lsn));
 
 		/* We have sucessfully produced a summary. */
 		ereport(LOG,
@@ -622,30 +613,39 @@ HandleWalSummarizerInterrupts(void)
 }
 
 /*
- * Summarize WAL on the timeline given by tli, starting at start_lsn and
- * stopping when the LSN of the next record would be greater than or equal to
- * cutoff_lsn.
+ * Summarize a range of WAL records on a single timeline.
  *
- * If exact = true, start_lsn should be the end LSN of the previous record as
- * returned by the xlogreader machinery. It might be either the actual start
- * of the next record or the start of a page header that is immediately
- * followed by the start of a new record.
+ * 'tli' is the timeline to be summarized. 'historic' should be false if the
+ * timeline in question is the latest one and true otherwise.
  *
- * It's possible that the last record extends far beyond cutoff_lsn; if so,
- * it might not have been fully written and flushed yet. If we're unable to
- * read enough WAL or the last record extends beyond maximum_lsn, we'll need
- * retry later after more WAL is safely on disk. In this case, returns
- * InvalidXLogRecPtr; else, returns the ending LSN of the last record in the
- * new summary.
+ * 'start_lsn' is the point at which we should start summarizing. If this
+ * value comes from the end LSN of the previous record as returned by the
+ * xlograder machinery, 'exact' should be true; otherwise, 'exact' should
+ * be false, and this function will search forward for the start of a valid
+ * WAL record.
+ *
+ * 'cutoff_lsn' is the point at which we should stop summarizing. The first
+ * record that ends at or after cutoff_lsn will be the last one included
+ * in the summary.
+ *
+ * 'maximum_lsn' identifies the point beyond which we can't count on being
+ * able to read any more WAL. It should be the switch point when reading a
+ * historic timeline, or the most-recently-measured end of WAL when reading
+ * the current timeline.
+ *
+ * The return value is the LSN at which the WAL summary actually ends. This
+ * might be exactly cutoff_lsn, but will often be slightly greater, because
+ * there may not be a record ending at exactly that LSN.
  */
 static XLogRecPtr
-SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
-			 XLogRecPtr maximum_lsn, bool exact)
+SummarizeWAL(TimeLineID tli, bool historic,
+			 XLogRecPtr start_lsn, bool exact,
+			 XLogRecPtr cutoff_lsn, XLogRecPtr maximum_lsn)
 {
 	SummarizerReadLocalXLogPrivate *private_data;
 	XLogReaderState *xlogreader;
 	XLogRecPtr	summary_start_lsn;
-	XLogRecPtr	summary_end_lsn;
+	XLogRecPtr	summary_end_lsn = cutoff_lsn;
 	char		temp_path[MAXPGPATH];
 	char		final_path[MAXPGPATH];
 	File		file;
@@ -705,22 +705,27 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
 		{
 			/*
 			 * If we hit end-of-WAL while trying to find the next valid record,
-			 * that's not an error. It just means we need to wait for more WAL
-			 * to get written.
-			 *
-			 * XXX: What happens if a timeline switch occurs before we find
-			 * a valid record? I think this will just get stuck...
+			 * we must be on a historic timeline that has no valid records
+			 * that begin after start_lsn and before cutoff_lsn. This should
+			 * only happen as a result of a record that is continued across
+			 * multiple pages and doesn't end before the TLI switch.
 			 */
 			if (private_data->end_of_wal)
 			{
-				elog(DEBUG1, "could not find a valid record after %X/%X: end of WAL at %X/%X",
-					 LSN_FORMAT_ARGS(start_lsn),
-					 LSN_FORMAT_ARGS(maximum_lsn));
-				return InvalidXLogRecPtr;
+				ereport(DEBUG1,
+						errmsg_internal("could not read WAL from timeline %d at %X/%X: end of WAL at %X/%X",
+										tli,
+										LSN_FORMAT_ARGS(start_lsn),
+										LSN_FORMAT_ARGS(private_data->read_upto)));
+
+				/* Arrange for an empty summary file to be generated. */
+				summary_start_lsn = start_lsn;
+				xlogreader->EndRecPtr = cutoff_lsn;
 			}
-			ereport(ERROR,
-					(errmsg("could not find a valid record after %X/%X",
-							LSN_FORMAT_ARGS(start_lsn))));
+			else
+				ereport(ERROR,
+						(errmsg("could not find a valid record after %X/%X",
+								LSN_FORMAT_ARGS(start_lsn))));
 		}
 	}
 
@@ -741,15 +746,19 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
 			if (private_data->end_of_wal)
 			{
 				/*
-				 * XXX: here again, what if a timeline change happens before
-				 * we find a valid record? again, i think we just get stuck.
+				 * This timeline must be historic and must end before we were
+				 * able to read a complete record. This should only happen
+				 * as a result of a record that is continued across multiple
+				 * pages and doesn't end before the TLI switch.
 				 */
 				ereport(DEBUG1,
-						(errcode_for_file_access(),
-						 errmsg("could not read WAL at %X/%X: end of WAL at %X/%X",
-								LSN_FORMAT_ARGS(xlogreader->EndRecPtr),
-								LSN_FORMAT_ARGS(maximum_lsn))));
-				return InvalidXLogRecPtr;
+						errmsg_internal("could not read WAL from timeline %d at %X/%X: end of WAL at %X/%X",
+										tli,
+										LSN_FORMAT_ARGS(xlogreader->EndRecPtr),
+										LSN_FORMAT_ARGS(private_data->read_upto)));
+				/* Summary ends exactly at cutoff. */
+				summary_end_lsn = cutoff_lsn;
+				break;
 			}
 			if (errormsg)
 				ereport(ERROR,
@@ -762,10 +771,40 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
 						 errmsg("could not read WAL at %X/%X",
 						 LSN_FORMAT_ARGS(xlogreader->EndRecPtr))));
 		}
+
+		if (xlogreader->ReadRecPtr >= cutoff_lsn)
+		{
+			/*
+			 * Woops! We've read a record that *starts* after the cutoff LSN,
+			 * contrary to our goal of reading only until we hit the first
+			 * record that ends at or after the cutoff LSN. Pretend we didn't
+			 * read it after all by bailing out of this loop right here, before
+			 * we do anything with this record.
+			 *
+			 * This can happen because the last record before the cutoff LSN
+			 * might be continued across multiple pages, and then we might
+			 * come to a page with XLP_FIRST_IS_OVERWRITE_CONTRECORD set.
+			 * In that case, the record that was continued across multiple
+			 * pages is incomplete and will be disregarded, and the read
+			 * will restart from the beginning of the page that is flagged
+			 * XLP_FIRST_IS_OVERWRITE_CONTRECORD.
+			 *
+			 * If this case occurs, we can fairly say that the current summary
+			 * file ends at the cutoff LSN exactly. The first record on the
+			 * page marked XLP_FIRST_IS_OVERWRITE_CONTRECORD will be discovered
+			 * when generating the next summary file.
+			 */
+			summary_end_lsn = cutoff_lsn;
+			break;
+		}
+
+		/* XXX feed this record into blkreftable code here */
+
+		/* Update our notion of where this summary file ends. */
+		summary_end_lsn = xlogreader->EndRecPtr;
 	}
 
-	/* Save ending LSN before destroying xlogreader. */
-	summary_end_lsn = xlogreader->EndRecPtr;
+	/* Destroy xlogreader. */
 	pfree(xlogreader->private_data);
 	XLogReaderFree(xlogreader);
 
@@ -797,8 +836,17 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr cutoff_lsn,
 }
 
 /*
- * Similar to read_local_xlog_page, but much simpler because the caller is
- * required to specify the TLI and the highest LSN that is safe to read.
+ * Similar to read_local_xlog_page, but limited to read from one particular
+ * timeline. If the end of WAL is reached, it will wait for more if reading
+ * from the current timeline, or give up if reading from a historic timeline.
+ * In the latter case, it will also set private_data->end_of_wal = true.
+ *
+ * Caller must set private_data->tli to the TLI of interest,
+ * private_data->read_upto to the lowest LSN that is not known to be safe
+ * to read on that timeline, and private_data->historic to true if and only
+ * if the timeline is not the current timeline. This function will update
+ * private_data->read_upto and private_data->historic if more WAL appears
+ * on the current timeline or if the current timeline becomes historic.
  */
 static int
 summarizer_read_local_xlog_page(XLogReaderState *state,
@@ -815,24 +863,79 @@ summarizer_read_local_xlog_page(XLogReaderState *state,
 
 	loc = targetPagePtr + reqLen;
 
-	if (targetPagePtr + XLOG_BLCKSZ <= private_data->read_upto)
+	while (true)
 	{
-		/*
-		 * more than one block available; read only that block, have caller
-		 * come back if they need more.
-		 */
-		count = XLOG_BLCKSZ;
-	}
-	else if (targetPagePtr + reqLen > private_data->read_upto)
-	{
-		/* not enough data there */
-		private_data->end_of_wal = true;
-		return -1;
-	}
-	else
-	{
-		/* enough bytes available to satisfy the request */
-		count = private_data->read_upto - targetPagePtr;
+		if (targetPagePtr + XLOG_BLCKSZ <= private_data->read_upto)
+		{
+			/*
+			 * more than one block available; read only that block, have caller
+			 * come back if they need more.
+			 */
+			count = XLOG_BLCKSZ;
+			break;
+		}
+		else if (targetPagePtr + reqLen > private_data->read_upto)
+		{
+			/* We don't seem to have enough data. */
+			if (private_data->historic)
+			{
+				/*
+				 * This is a historic timeline, so there will never be any
+				 * more data than we have currently.
+				 */
+				private_data->end_of_wal = true;
+				return -1;
+			}
+			else
+			{
+				XLogRecPtr	latest_lsn;
+				TimeLineID	latest_tli;
+
+				/*
+				 * This is - or at least was up until very recently - the
+				 * current timeline, so more data might show up.  Pause briefly
+				 * here so we don't tight-loop while waiting for that to
+				 * happen.
+				 */
+				HandleWalSummarizerInterrupts();
+				(void) WaitLatch(MyLatch,
+								 WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+								 1,
+								 WAIT_EVENT_WAL_SUMMARIZER_WAL);
+
+				latest_lsn = GetLatestLSN(&latest_tli);
+				if (private_data->tli == latest_tli)
+				{
+					/* Still the current timeline, update max LSN. */
+					Assert(latest_lsn >= private_data->read_upto);
+					private_data->read_upto = latest_lsn;
+				}
+				else
+				{
+					List   *tles = readTimeLineHistory(latest_tli);
+					XLogRecPtr	switchpoint;
+
+					/*
+					 * The timeline we're scanning is no longer the latest
+					 * one. Figure out when it ended and allow reads up to
+					 * exactly that point.
+					 */
+					private_data->historic = true;
+					switchpoint = tliSwitchPoint(private_data->tli, tles,
+												 NULL);
+					Assert(switchpoint >= private_data->read_upto);
+					private_data->read_upto = switchpoint;
+				}
+
+				/* Go around and try again. */
+			}
+		}
+		else
+		{
+			/* enough bytes available to satisfy the request */
+			count = private_data->read_upto - targetPagePtr;
+			break;
+		}
 	}
 
 	/*

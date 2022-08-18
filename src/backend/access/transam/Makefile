@@ -13,6 +13,7 @@ top_builddir = ../../../..
 include $(top_builddir)/src/Makefile.global
 
 OBJS = \
+	blkreftable.o \
 	clog.o \
 	commit_ts.o \
 	generic_xlog.o \

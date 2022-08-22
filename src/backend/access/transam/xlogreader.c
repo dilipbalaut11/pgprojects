@@ -1387,6 +1387,13 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 		if (readLen < 0)
 			goto err;
 
+#ifdef FRONTEND
+		if (header->xlp_info & XLP_FIRST_IS_CONTRECORD)
+			pg_fatal("XLP_FIRST_IS_CONTRECORD");
+		else if (header->xlp_info & XLP_FIRST_IS_OVERWRITE_CONTRECORD)
+			pg_fatal("XLP_FIRST_IS_OVERWRITE_CONTRECORD");
+#endif
+
 		/* skip over potential continuation data */
 		if (header->xlp_info & XLP_FIRST_IS_CONTRECORD)
 		{

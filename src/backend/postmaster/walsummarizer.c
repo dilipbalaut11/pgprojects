@@ -13,11 +13,13 @@
  */
 #include "postgres.h"
 
+#include "access/blkreftable.h"
 #include "access/timeline.h"
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
+#include "catalog/storage_xlog.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "postmaster/bgwriter.h"
@@ -613,6 +615,43 @@ HandleWalSummarizerInterrupts(void)
 }
 
 /*
+* Extract information on which blocks the current record modifies.
+*/
+static void
+SummarizeOneRecord(BlockRefTable *brtab, XLogReaderState *record)
+{
+	int		block_id;
+	RmgrId	rmid = XLogRecGetRmid(record);
+	uint8	info = XLogRecGetInfo(record);
+	uint8	rminfo = info & ~XLR_INFO_MASK;
+
+	if (rmid == RM_SMGR_ID && rminfo == XLOG_SMGR_CREATE)
+	{
+		xl_smgr_create *xlrec = (xl_smgr_create *) XLogRecGetData(record);
+
+		BlockRefTableMarkRelationForkNew(brtab, &xlrec->rlocator,
+										 xlrec->forkNum);
+	}
+
+	for (block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
+	{
+		RelFileLocator	rlocator;
+		ForkNumber		forknum;
+		BlockNumber		blkno;
+
+		if (!XLogRecGetBlockTagExtended(record, block_id, &rlocator, &forknum,
+										&blkno, NULL))
+			continue;
+
+		/* We only care about the main fork */
+		if (forknum != MAIN_FORKNUM)
+			continue;
+
+		BlockRefTableMarkBlockModified(brtab, &rlocator, forknum, blkno);
+	}
+}
+
+/*
  * Summarize a range of WAL records on a single timeline.
  *
  * 'tli' is the timeline to be summarized. 'historic' should be false if the
@@ -649,6 +688,7 @@ SummarizeWAL(TimeLineID tli, bool historic,
 	char		temp_path[MAXPGPATH];
 	char		final_path[MAXPGPATH];
 	File		file;
+	BlockRefTable *brtab;
 
 	/* Initialize private data for xlogreader. */
 	private_data = (SummarizerReadLocalXLogPrivate *)
@@ -729,6 +769,9 @@ SummarizeWAL(TimeLineID tli, bool historic,
 		}
 	}
 
+	/* create a block reference table to store */
+	brtab = CreateEmptyBlockRefTable(CurrentMemoryContext);
+
 	/*
 	 * Main loop: read xlog records one by one.
 	 */
@@ -799,6 +842,8 @@ SummarizeWAL(TimeLineID tli, bool historic,
 		}
 
 		/* XXX feed this record into blkreftable code here */
+		SummarizeOneRecord(brtab, xlogreader);
+
 
 		/* Update our notion of where this summary file ends. */
 		summary_end_lsn = xlogreader->EndRecPtr;
@@ -825,6 +870,7 @@ SummarizeWAL(TimeLineID tli, bool historic,
 				  errmsg("could not create file \"%s\": %m", temp_path)));
 
 	/* XXX write actual data to temporary file */
+	WriteBlockRefTable(brtab, file);
 
 	/* Close temporary file and shut down xlogreader. */
 	FileClose(file);

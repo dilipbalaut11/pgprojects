@@ -139,6 +139,9 @@ WalSummarizerMain(void)
 	sigjmp_buf	local_sigjmp_buf;
 	MemoryContext context;
 
+	ereport(DEBUG1,
+			(errmsg_internal("WAL summarizer started")));
+
 	/*
 	 * Properly accept or ignore signals the postmaster might send us
 	 *
@@ -164,14 +167,6 @@ WalSummarizerMain(void)
 	 * Reset some signals that are accepted by postmaster but not here
 	 */
 	pqsignal(SIGCHLD, SIG_DFL);
-
-	/*
-	 * Unblock signals (they were blocked when the postmaster forked us)
-	 */
-	PG_SETMASK(&UnBlockSig);
-
-	ereport(DEBUG1,
-			(errmsg_internal("WAL summarizer started")));
 
 	/*
 	 * If an exception is encountered, processing resumes here.
@@ -215,6 +210,14 @@ WalSummarizerMain(void)
 		 */
 		pg_usleep(1000000L);
 	}
+
+	/* We can now handle ereport(ERROR) */
+	PG_exception_stack = &local_sigjmp_buf;
+
+	/*
+	 * Unblock signals (they were blocked when the postmaster forked us)
+	 */
+	PG_SETMASK(&UnBlockSig);
 
 	/*
 	 * Loop forever

@@ -44,6 +44,7 @@
 
 #include "catalog/pg_class_d.h"
 #include "common/file_perm.h"
+#include "common/hashfn.h"
 #include "common/logging.h"
 #include "common/restricted_token.h"
 #include "fe_utils/string_utils.h"
@@ -72,6 +73,40 @@ char	   *output_files[] = {
 	NULL
 };
 
+/*
+ * XXX describe in comments.
+ */
+typedef struct RelFileNumberEntry
+{
+	RelFileNumber	relfilenumber;	/* the indexed relfilenumber. */
+	uint32			status;			/* hash status */
+	char		   *relname;		/* relation name. */
+} RelFileNumberEntry;
+
+static inline uint32
+relnumberhash_hash_key(RelFileNumber relnumber)
+{
+	uint32	hash;
+	uint32	relnumber_hi = relnumber >> 32;
+	uint32	relnumber_lo = relnumber & 0xffffffff;
+
+	hash = murmurhash32(relnumber_hi);
+	hash = hash_combine(hash, relnumber_lo);
+
+	return hash;
+}
+
+#define SH_PREFIX		relnumber
+#define SH_ELEMENT_TYPE	RelFileNumberEntry
+#define SH_KEY_TYPE		RelFileNumber
+#define	SH_KEY			relfilenumber
+#define SH_HASH_KEY(tb, key)	relnumberhash_hash_key(key)
+#define SH_EQUAL(tb, a, b) a == b
+#define	SH_SCOPE		static inline
+#define SH_RAW_ALLOCATOR	pg_malloc0
+#define SH_DECLARE
+#define SH_DEFINE
+#include "lib/simplehash.h"
 
 int
 main(int argc, char **argv)
@@ -415,6 +450,66 @@ prepare_new_globals(void)
 	check_ok();
 }
 
+/*
+ * Check whether the relfilenumber from the old cluster's table are conflicting
+ * with the system tables in the new cluster.
+ */
+static void
+check_relnumber_conflict_and_rewrite(ClusterInfo *cluster, DbInfo *dbinfo)
+{
+#define RELNUMBERHASH_INITIAL_SIZE	10000
+
+	PGconn	   *conn = connectToServer(cluster,
+									   dbinfo->db_name);
+	PGresult   *res;
+	int			ntups;
+	int			relnum;
+	char	   *relname = NULL;
+	int			i_relfilenumber,
+				i_relname;
+	bool		found;
+	int			i;
+	RelFileNumber	relfilenumber;
+	char		query[QUERY_ALLOC];
+	relnumber_hash	*relnumhash;
+	RelFileNumberEntry	*entry;
+
+	query[0] = '\0';			/* initialize query string to empty */
+
+	snprintf(query, sizeof(query), "SELECT c.relname, pg_catalog.pg_relation_filenode(c.oid) as filenode \n "
+			 "FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n \n"
+			 "ON c.relnamespace = n.oid WHERE relkind IN ('r') and n.nspname='pg_catalog';");
+
+	res = executeQueryOrDie(conn, "%s", query);
+
+	ntups = PQntuples(res);
+
+	i_relname = PQfnumber(res, "relname");
+	i_relfilenumber = PQfnumber(res, "filenode");
+
+	relnumhash = relnumber_create(RELNUMBERHASH_INITIAL_SIZE, NULL);
+
+	for (relnum = 0; relnum < ntups; relnum++)
+	{
+		relname = PQgetvalue(res, relnum, i_relname);
+		relfilenumber = atorelnumber(PQgetvalue(res, relnum, i_relfilenumber));
+
+		entry = relnumber_insert(relnumhash, relfilenumber, &found);
+		Assert(!found);
+		entry->relname = pg_strdup(relname);
+	}
+
+	PQclear(res);
+	for (i = 0; i < dbinfo->rel_arr.nrels; i++)
+	{
+		entry = relnumber_lookup(relnumhash,
+								 dbinfo->rel_arr.rels[i].relfilenumber);
+		if (entry)
+			PQclear(executeQueryOrDie(conn, "CLUSTER pg_class USING pg_class_oid_index;"));
+	}
+
+	PQfinish(conn);
+}
 
 static void
 create_new_objects(void)
@@ -449,6 +544,8 @@ create_new_objects(void)
 		 * to propagate its database-level properties.
 		 */
 		create_opts = "--clean --create";
+
+		check_relnumber_conflict_and_rewrite(&old_cluster, old_db);
 
 		exec_prog(log_file_name,
 				  NULL,
@@ -489,6 +586,8 @@ create_new_objects(void)
 			create_opts = "--clean --create";
 		else
 			create_opts = "--create";
+
+		check_relnumber_conflict_and_rewrite(&old_cluster, old_db);
 
 		parallel_exec_prog(log_file_name,
 						   NULL,

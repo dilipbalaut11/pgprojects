@@ -87,7 +87,7 @@ check_and_dump_old_cluster(bool live_check)
 	/* -- OLD -- */
 
 	if (!live_check)
-		start_postmaster(&old_cluster, true);
+		start_postmaster(&old_cluster, true, true);
 
 	/* Extract a list of databases and tables from the old cluster */
 	get_db_and_rel_infos(&old_cluster);
@@ -238,7 +238,7 @@ issue_warnings_and_set_wal_level(void)
 	 * the rsync instructions, they will need pg_upgrade to write its final
 	 * WAL record showing wal_level as 'replica'.
 	 */
-	start_postmaster(&new_cluster, true);
+	start_postmaster(&new_cluster, true, true);
 
 	/* Reindex hash indexes for old < 10.0 */
 	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 906)

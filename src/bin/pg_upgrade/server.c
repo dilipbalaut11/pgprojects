@@ -195,7 +195,8 @@ stop_postmaster_atexit(void)
 
 
 bool
-start_postmaster(ClusterInfo *cluster, bool report_and_exit_on_error)
+start_postmaster(ClusterInfo *cluster, bool report_and_exit_on_error,
+				 bool binary_upgrade_mode)
 {
 	char		cmd[MAXPGPATH * 4 + 1000];
 	PGconn	   *conn;
@@ -238,15 +239,24 @@ start_postmaster(ClusterInfo *cluster, bool report_and_exit_on_error)
 	 * Force vacuum_defer_cleanup_age to 0 on the new cluster, so that
 	 * vacuumdb --freeze actually freezes the tuples.
 	 */
-	snprintf(cmd, sizeof(cmd),
-			 "\"%s/pg_ctl\" -w -l \"%s/%s\" -D \"%s\" -o \"-p %d -b%s %s%s\" start",
-			 cluster->bindir,
-			 log_opts.logdir,
-			 SERVER_LOG_FILE, cluster->pgconfig, cluster->port,
-			 (cluster == &new_cluster) ?
-			 " -c synchronous_commit=off -c fsync=off -c full_page_writes=off -c vacuum_defer_cleanup_age=0" : "",
-			 cluster->pgopts ? cluster->pgopts : "", socket_string);
-
+	if (binary_upgrade_mode)
+		snprintf(cmd, sizeof(cmd),
+				"\"%s/pg_ctl\" -w -l \"%s/%s\" -D \"%s\" -o \"-p %d -b%s %s%s\" start",
+				cluster->bindir,
+				log_opts.logdir,
+				SERVER_LOG_FILE, cluster->pgconfig, cluster->port,
+				(cluster == &new_cluster) ?
+				" -c synchronous_commit=off -c fsync=off -c full_page_writes=off -c vacuum_defer_cleanup_age=0" : "",
+				cluster->pgopts ? cluster->pgopts : "", socket_string);
+	else
+		snprintf(cmd, sizeof(cmd),
+				"\"%s/pg_ctl\" -w -l \"%s/%s\" -D \"%s\" -o \"-p %d %s %s%s\" start",
+				cluster->bindir,
+				log_opts.logdir,
+				SERVER_LOG_FILE, cluster->pgconfig, cluster->port,
+				(cluster == &new_cluster) ?
+				" -c synchronous_commit=off -c fsync=off -c full_page_writes=off -c vacuum_defer_cleanup_age=0" : "",
+				cluster->pgopts ? cluster->pgopts : "", socket_string);
 	/*
 	 * Don't throw an error right away, let connecting throw the error because
 	 * it might supply a reason for the failure.

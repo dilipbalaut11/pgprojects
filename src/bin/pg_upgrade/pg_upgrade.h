@@ -418,7 +418,8 @@ PGresult   *executeQueryOrDie(PGconn *conn, const char *fmt,...) pg_attribute_pr
 
 char	   *cluster_conn_opts(ClusterInfo *cluster);
 
-bool		start_postmaster(ClusterInfo *cluster, bool report_and_exit_on_error);
+bool		start_postmaster(ClusterInfo *cluster, bool report_and_exit_on_error,
+							 bool binary_upgrade_mode);
 void		stop_postmaster(bool in_atexit);
 uint32		get_major_server_version(ClusterInfo *cluster);
 void		check_pghost_envvar(void);

@@ -25,6 +25,7 @@
 #include "access/sysattr.h"
 #include "access/table.h"
 #include "access/transam.h"
+#include "catalog/binary_upgrade.h"
 #include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_auth_members.h"
@@ -412,7 +413,8 @@ GetNewOidWithIndex(Relation relation, Oid indexId, AttrNumber oidcolumn)
 	 * assign.  Hitting this assert means there's some path where we failed to
 	 * ensure that a type OID is determined by commands in the dump script.
 	 */
-	Assert(!IsBinaryUpgrade || RelationGetRelid(relation) != TypeRelationId);
+	Assert(!IsBinaryUpgrade || RelationGetRelid(relation) != TypeRelationId ||
+		   binary_upgrade_relation_oid_and_relfilenode_assignment);
 
 	/* Generate new OIDs until we find one not in the table */
 	do

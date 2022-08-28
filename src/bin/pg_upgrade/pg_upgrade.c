@@ -500,6 +500,8 @@ check_relnumber_conflict_and_rewrite(ClusterInfo *cluster, DbInfo *dbinfo)
 	}
 
 	PQclear(res);
+	PQclear(executeQueryOrDie(conn,
+			"SELECT binary_upgrade_set_relation_oid_and_relfilenode_assignment(true);"));
 	for (i = 0; i < dbinfo->rel_arr.nrels; i++)
 	{
 		entry = relnumber_lookup(relnumhash,
@@ -507,6 +509,9 @@ check_relnumber_conflict_and_rewrite(ClusterInfo *cluster, DbInfo *dbinfo)
 		if (entry)
 			PQclear(executeQueryOrDie(conn, "CLUSTER pg_class USING pg_class_oid_index;"));
 	}
+
+	PQclear(executeQueryOrDie(conn,
+			"SELECT binary_upgrade_set_relation_oid_and_relfilenode_assignment(false);"));
 
 	PQfinish(conn);
 }

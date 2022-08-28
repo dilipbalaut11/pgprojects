@@ -268,3 +268,15 @@ binary_upgrade_set_missing_value(PG_FUNCTION_ARGS)
 
 	PG_RETURN_VOID();
 }
+
+Datum
+binary_upgrade_set_relation_oid_and_relfilenode_assignment(PG_FUNCTION_ARGS)
+{
+	bool			allow = PG_GETARG_BOOL(0);
+
+	//CHECK_IS_BINARY_UPGRADE;
+	binary_upgrade_relation_oid_and_relfilenode_assignment = allow;
+	IsBinaryUpgrade = !allow;
+
+	PG_RETURN_VOID();
+}

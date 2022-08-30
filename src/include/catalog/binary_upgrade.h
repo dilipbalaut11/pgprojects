@@ -32,5 +32,6 @@ extern PGDLLIMPORT Oid binary_upgrade_next_pg_enum_oid;
 extern PGDLLIMPORT Oid binary_upgrade_next_pg_authid_oid;
 
 extern PGDLLIMPORT bool binary_upgrade_record_init_privs;
+extern PGDLLIMPORT bool binary_upgrade_relation_oid_and_relfilenode_assignment_allowed;
 
 #endif							/* BINARY_UPGRADE_H */

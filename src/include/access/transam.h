@@ -209,7 +209,7 @@ FullTransactionIdAdvance(FullTransactionId *dest)
  * worry about them.
  * ----------
  */
-#define FirstNormalRelFileNumber	((RelFileNumber) 100000)
+#define FirstNormalRelFileNumber	((RelFileNumber) 100800)
 
 #define CHECK_RELFILENUMBER_RANGE(relfilenumber)				\
 do {																\

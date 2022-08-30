@@ -80,6 +80,7 @@ Oid			binary_upgrade_next_heap_pg_class_oid = InvalidOid;
 Oid			binary_upgrade_next_toast_pg_class_oid = InvalidOid;
 RelFileNumber binary_upgrade_next_heap_pg_class_relfilenumber = InvalidRelFileNumber;
 RelFileNumber binary_upgrade_next_toast_pg_class_relfilenumber = InvalidRelFileNumber;
+bool		binary_upgrade_relation_oid_and_relfilenode_assignment_allowed = false;
 
 static void AddNewRelationTuple(Relation pg_class_desc,
 								Relation new_rel_desc,
@@ -348,11 +349,13 @@ heap_create(const char *relname,
 		 */
 		if (!RelFileNumberIsValid(relfilenumber))
 		{
-			if (relid < FirstNormalObjectId)
+			relfilenumber = GetNewRelFileNumber(reltablespace,
+												relpersistence);
+/*			if (relid < FirstNormalObjectId)
 				relfilenumber = relid;
 			else
 				relfilenumber = GetNewRelFileNumber(reltablespace,
-													relpersistence);
+													relpersistence);*/
 		}
 	}
 
@@ -1182,7 +1185,8 @@ heap_create_with_catalog(const char *relname,
 	if (!OidIsValid(relid))
 	{
 		/* Use binary-upgrade override for pg_class.oid and relfilenumber */
-		if (IsBinaryUpgrade)
+		if (IsBinaryUpgrade &&
+			!binary_upgrade_relation_oid_and_relfilenode_assignment_allowed)
 		{
 			/*
 			 * Indexes are not supported here; they use

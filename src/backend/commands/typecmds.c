@@ -2400,7 +2400,8 @@ AssignTypeArrayOid(void)
 	Oid			type_array_oid;
 
 	/* Use binary-upgrade override for pg_type.typarray? */
-	if (IsBinaryUpgrade)
+	if (IsBinaryUpgrade &&
+		!binary_upgrade_relation_oid_and_relfilenode_assignment_allowed)
 	{
 		if (!OidIsValid(binary_upgrade_next_array_pg_type_oid))
 			ereport(ERROR,

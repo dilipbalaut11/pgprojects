@@ -3708,7 +3708,8 @@ RelationSetNewRelfilenumber(Relation relation, char persistence)
 	TransactionId freezeXid = InvalidTransactionId;
 	RelFileLocator newrlocator;
 
-	if (!IsBinaryUpgrade)
+	if (!IsBinaryUpgrade ||
+		binary_upgrade_relation_oid_and_relfilenode_assignment_allowed)
 	{
 		/* Allocate a new relfilenumber */
 		newrelfilenumber = GetNewRelFileNumber(relation->rd_rel->reltablespace,

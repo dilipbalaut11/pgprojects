@@ -21,6 +21,7 @@
 #include "access/transam.h"
 #include "access/xact.h"
 #include "access/xlogutils.h"
+#include "catalog/binary_upgrade.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_tablespace.h"
 #include "commands/dbcommands.h"
@@ -639,7 +640,8 @@ GetNewRelFileNumber(Oid reltablespace, char relpersistence)
 	if (RecoveryInProgress())
 		elog(ERROR, "cannot assign RelFileNumber during recovery");
 
-	if (IsBinaryUpgrade)
+	if (IsBinaryUpgrade &&
+		!binary_upgrade_relation_oid_and_relfilenode_assignment_allowed)
 		elog(ERROR, "cannot assign RelFileNumber during binary upgrade");
 
 	LWLockAcquire(RelFileNumberGenLock, LW_EXCLUSIVE);

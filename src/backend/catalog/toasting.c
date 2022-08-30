@@ -157,7 +157,8 @@ create_toast_table(Relation rel, Oid toastOid, Oid toastIndexOid,
 	/*
 	 * Check to see whether the table actually needs a TOAST table.
 	 */
-	if (!IsBinaryUpgrade)
+	if (!IsBinaryUpgrade ||
+		binary_upgrade_relation_oid_and_relfilenode_assignment_allowed)
 	{
 		/* Normal mode, normal check */
 		if (!needs_toast_table(rel))

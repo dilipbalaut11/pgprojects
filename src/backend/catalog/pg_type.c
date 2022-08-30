@@ -126,7 +126,8 @@ TypeShellMake(const char *typeName, Oid typeNamespace, Oid ownerId)
 	nulls[Anum_pg_type_typacl - 1] = true;
 
 	/* Use binary-upgrade override for pg_type.oid? */
-	if (IsBinaryUpgrade)
+	if (IsBinaryUpgrade &&
+		!binary_upgrade_relation_oid_and_relfilenode_assignment_allowed)
 	{
 		if (!OidIsValid(binary_upgrade_next_pg_type_oid))
 			ereport(ERROR,
@@ -466,7 +467,8 @@ TypeCreate(Oid newTypeOid,
 		if (OidIsValid(newTypeOid))
 			typeObjectId = newTypeOid;
 		/* Use binary-upgrade override for pg_type.oid, if supplied. */
-		else if (IsBinaryUpgrade)
+		else if (IsBinaryUpgrade &&
+				 !binary_upgrade_relation_oid_and_relfilenode_assignment_allowed)
 		{
 			if (!OidIsValid(binary_upgrade_next_pg_type_oid))
 				ereport(ERROR,

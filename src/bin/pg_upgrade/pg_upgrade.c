@@ -44,6 +44,7 @@
 
 #include "catalog/pg_class_d.h"
 #include "common/file_perm.h"
+#include "common/hashfn.h"
 #include "common/logging.h"
 #include "common/restricted_token.h"
 #include "fe_utils/string_utils.h"
@@ -51,6 +52,7 @@
 
 static void prepare_new_cluster(void);
 static void prepare_new_globals(void);
+static void check_conflict(void);
 static void create_new_objects(void);
 static void copy_xact_xlog_xid(void);
 static void set_frozenxids(bool minmxid_only);
@@ -72,6 +74,42 @@ char	   *output_files[] = {
 	NULL
 };
 
+/*
+ * XXX describe in comments.
+ */
+typedef struct RelFileNumberEntry
+{
+	RelFileNumber	relfilenumber;	/* the indexed relfilenumber. */
+	uint32			status;			/* hash status */
+	char			relkind;		/* relation's relkind */
+	char		   *nspname;		/* relation's namespace */
+	char		   *relname;		/* relation name. */
+} RelFileNumberEntry;
+
+static inline uint32
+relnumberhash_hash_key(RelFileNumber relnumber)
+{
+	uint32	hash;
+	uint32	relnumber_hi = relnumber >> 32;
+	uint32	relnumber_lo = relnumber & 0xffffffff;
+
+	hash = murmurhash32(relnumber_hi);
+	hash = hash_combine(hash, relnumber_lo);
+
+	return hash;
+}
+
+#define SH_PREFIX		relnumber
+#define SH_ELEMENT_TYPE	RelFileNumberEntry
+#define SH_KEY_TYPE		RelFileNumber
+#define	SH_KEY			relfilenumber
+#define SH_HASH_KEY(tb, key)	relnumberhash_hash_key(key)
+#define SH_EQUAL(tb, a, b) a == b
+#define	SH_SCOPE		static inline
+#define SH_RAW_ALLOCATOR	pg_malloc0
+#define SH_DECLARE
+#define SH_DEFINE
+#include "lib/simplehash.h"
 
 int
 main(int argc, char **argv)
@@ -415,6 +453,116 @@ prepare_new_globals(void)
 	check_ok();
 }
 
+/*
+ * Check whether the relfilenumber from the old cluster's table are conflicting
+ * with the system tables in the new cluster.
+ */
+static void
+check_relnumber_conflict_and_rewrite(ClusterInfo *cluster, DbInfo *dbinfo)
+{
+#define RELNUMBERHASH_INITIAL_SIZE	10000
+
+	PGconn	   *conn = connectToServer(cluster,
+									   dbinfo->db_name);
+	PGresult   *res;
+	int			ntups;
+	int			relnum;
+	char	   *relname = NULL;
+	char	   *relnamespace = NULL;
+	int			i_relfilenumber,
+				i_relname,
+				i_relkind,
+				i_relnamespace;
+	char		relkind;
+	bool		found;
+	int			i;
+	RelFileNumber	relfilenumber;
+	char		query[QUERY_ALLOC];
+	relnumber_hash	*relnumhash;
+	RelFileNumberEntry	*entry;
+/*
+ * TODO: drop and create database with all valid option as old cluster.
+ * refer pg_dump.c that how it is generating for binary upgrade mode with
+ * custom format.
+	exec_prog(log_file_name, NULL, true, true,
+				"\"%s/createdb\" -O \"%s\" %s \"%s\"",
+				new_cluster.bindir,
+				old_db->db_owner,
+				cluster_conn_opts(&new_cluster),
+				old_db->db_name);
+*/
+	query[0] = '\0';			/* initialize query string to empty */
+
+/*	snprintf(query, sizeof(query), "SELECT c.relname, pg_catalog.pg_relation_filenode(c.oid) as filenode \n "
+			 "FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n \n"
+			 "ON c.relnamespace = n.oid WHERE relkind IN ('r') and n.nspname='pg_catalog';");*/
+	snprintf(query, sizeof(query), "SELECT c.relname, c.relkind, n.nspname, \n"
+			 "CASE WHEN relfilenode = 0 THEN pg_relation_filenode(c.oid) ELSE relfilenode END AS filenode \n"
+			 "FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n \n"
+			 "ON c.relnamespace = n.oid WHERE relkind IN ('r', 'i', 't');");
+
+	res = executeQueryOrDie(conn, "%s", query);
+
+	ntups = PQntuples(res);
+
+	i_relname = PQfnumber(res, "relname");
+	i_relkind = PQfnumber(res, "relkind");
+	i_relnamespace = PQfnumber(res, "nspname");
+	i_relfilenumber = PQfnumber(res, "filenode");
+
+	relnumhash = relnumber_create(RELNUMBERHASH_INITIAL_SIZE, NULL);
+
+	for (relnum = 0; relnum < ntups; relnum++)
+	{
+		relname = PQgetvalue(res, relnum, i_relname);
+		relkind = *PQgetvalue(res, relnum, i_relkind);
+		relnamespace = PQgetvalue(res, relnum, i_relnamespace);
+		relfilenumber = atorelnumber(PQgetvalue(res, relnum, i_relfilenumber));
+
+		entry = relnumber_insert(relnumhash, relfilenumber, &found);
+		Assert(!found);
+		entry->relname = pg_strdup(relname);
+		entry->relkind = relkind;
+		entry->nspname = pg_strdup(relnamespace);
+	}
+
+	PQclear(res);
+	
+	PQclear(executeQueryOrDie(conn,
+			"SELECT binary_upgrade_set_next_relfilenode(200000);"));
+	PQclear(executeQueryOrDie(conn,
+			"SELECT binary_upgrade_allow_relation_oid_and_relfilenode_assignment(true);"));
+	for (i = 0; i < dbinfo->rel_arr.nrels; i++)
+	{
+		entry = relnumber_lookup(relnumhash,
+								 dbinfo->rel_arr.rels[i].relfilenumber);
+		if (entry)
+		{
+			if (entry->relkind == 'i')
+				PQclear(executeQueryOrDie(conn, "REINDEX INDEX %s.%s;", entry->nspname, entry->relname));
+			else
+				PQclear(executeQueryOrDie(conn, "VACUUM FULL %s.%s;", entry->nspname, entry->relname));
+		}
+	}
+
+	PQclear(executeQueryOrDie(conn,
+			"SELECT binary_upgrade_allow_relation_oid_and_relfilenode_assignment(false);"));
+
+	PQfinish(conn);
+}
+
+static void
+check_conflict(void)
+{
+	int			dbnum;
+
+	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
+	{
+		DbInfo	   *old_db = &old_cluster.dbarr.dbs[dbnum];
+
+		check_relnumber_conflict_and_rewrite(&old_cluster, old_db);
+	}
+}
 
 static void
 create_new_objects(void)
@@ -422,6 +570,8 @@ create_new_objects(void)
 	int			dbnum;
 
 	prep_status_progress("Restoring database schemas in the new cluster");
+
+	check_conflict();
 
 	/*
 	 * We cannot process the template1 database concurrently with others,
@@ -450,7 +600,7 @@ create_new_objects(void)
 		 */
 		create_opts = "--clean --create";
 
-		exec_prog(log_file_name,
+/*		exec_prog(log_file_name,
 				  NULL,
 				  true,
 				  true,
@@ -460,7 +610,17 @@ create_new_objects(void)
 				  cluster_conn_opts(&new_cluster),
 				  create_opts,
 				  log_opts.dumpdir,
-				  sql_file_name);
+				  sql_file_name);*/
+		exec_prog(log_file_name,
+				  NULL,
+				  true,
+				  true,
+				  "\"%s/pg_restore\" %s --exit-on-error --verbose "
+				  "--dbname postgres \"%s/%s\"",
+				  new_cluster.bindir,
+				  cluster_conn_opts(&new_cluster),
+				  log_opts.dumpdir,
+				  sql_file_name);			  
 
 		break;					/* done once we've processed template1 */
 	}
@@ -490,13 +650,22 @@ create_new_objects(void)
 		else
 			create_opts = "--create";
 
-		parallel_exec_prog(log_file_name,
+/*		parallel_exec_prog(log_file_name,
 						   NULL,
 						   "\"%s/pg_restore\" %s %s --exit-on-error --verbose "
 						   "--dbname template1 \"%s/%s\"",
 						   new_cluster.bindir,
 						   cluster_conn_opts(&new_cluster),
 						   create_opts,
+						   log_opts.dumpdir,
+						   sql_file_name);*/
+		parallel_exec_prog(log_file_name,
+						   NULL,
+						   "\"%s/pg_restore\" %s --exit-on-error --verbose "
+						   "--dbname %s \"%s/%s\"",
+						   new_cluster.bindir,
+						   cluster_conn_opts(&new_cluster),
+						   old_db->db_name,
 						   log_opts.dumpdir,
 						   sql_file_name);
 	}

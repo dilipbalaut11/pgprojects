@@ -11139,6 +11139,14 @@
   proname => 'binary_upgrade_set_next_pg_tablespace_oid', provolatile => 'v',
   proparallel => 'u', prorettype => 'void', proargtypes => 'oid',
   prosrc => 'binary_upgrade_set_next_pg_tablespace_oid' },
+{ oid => '3813', descr => 'for use by pg_upgrade',
+  proname => 'binary_upgrade_allow_relation_oid_and_relfilenode_assignment', provolatile => 'v',
+  proparallel => 'u', prorettype => 'void', proargtypes => 'bool',
+  prosrc => 'binary_upgrade_allow_relation_oid_and_relfilenode_assignment' },
+{ oid => '3814', descr => 'for use by pg_upgrade',
+  proname => 'binary_upgrade_set_next_relfilenode', provolatile => 'v',
+  proparallel => 'u', prorettype => 'void', proargtypes => 'int8',
+  prosrc => 'binary_upgrade_set_next_relfilenode' },  
 
 # conversion functions
 { oid => '4302',

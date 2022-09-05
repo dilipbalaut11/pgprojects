@@ -178,6 +178,7 @@ typedef struct
 	char	   *db_ctype;
 	char		db_collprovider;
 	char	   *db_iculocale;
+	char	   *db_collversion;
 	int			db_encoding;
 	RelInfoArr	rel_arr;		/* array of all user relinfos */
 } DbInfo;

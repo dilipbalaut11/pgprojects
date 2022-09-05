@@ -314,6 +314,7 @@ get_db_infos(ClusterInfo *cluster)
 				i_datctype,
 				i_datlocprovider,
 				i_daticulocale,
+				i_datcollversion,
 				i_spclocation;
 	char		query[QUERY_ALLOC];
 
@@ -324,7 +325,7 @@ get_db_infos(ClusterInfo *cluster)
 				 "'c' AS datlocprovider, NULL AS daticulocale, ");
 	else
 		snprintf(query + strlen(query), sizeof(query) - strlen(query),
-				 "datlocprovider, daticulocale, ");
+				 "datlocprovider, daticulocale, datcollversion, ");
 	snprintf(query + strlen(query), sizeof(query) - strlen(query),
 			 "pg_catalog.pg_tablespace_location(t.oid) AS spclocation "
 			 "FROM pg_catalog.pg_database d "
@@ -342,6 +343,7 @@ get_db_infos(ClusterInfo *cluster)
 	i_datctype = PQfnumber(res, "datctype");
 	i_datlocprovider = PQfnumber(res, "datlocprovider");
 	i_daticulocale = PQfnumber(res, "daticulocale");
+	i_datcollversion = PQfnumber(res, "datcollversion");
 	i_spclocation = PQfnumber(res, "spclocation");
 
 	ntups = PQntuples(res);
@@ -359,6 +361,7 @@ get_db_infos(ClusterInfo *cluster)
 			dbinfos[tupnum].db_iculocale = NULL;
 		else
 			dbinfos[tupnum].db_iculocale = pg_strdup(PQgetvalue(res, tupnum, i_daticulocale));
+		dbinfos[tupnum].db_collversion = pg_strdup(PQgetvalue(res, tupnum, i_datcollversion));
 		snprintf(dbinfos[tupnum].db_tablespace, sizeof(dbinfos[tupnum].db_tablespace), "%s",
 				 PQgetvalue(res, tupnum, i_spclocation));
 	}

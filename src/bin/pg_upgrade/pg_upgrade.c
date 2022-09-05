@@ -52,7 +52,6 @@
 
 static void prepare_new_cluster(void);
 static void prepare_new_globals(void);
-static void check_conflict(void);
 static void create_new_objects(void);
 static void copy_xact_xlog_xid(void);
 static void set_frozenxids(bool minmxid_only);
@@ -552,16 +551,114 @@ check_relnumber_conflict_and_rewrite(ClusterInfo *cluster, DbInfo *dbinfo)
 }
 
 static void
-check_conflict(void)
+create_target_databases(ClusterInfo *cluster, DbInfo *dbinfo)
 {
-	int			dbnum;
+	PQExpBuffer query = createPQExpBuffer();
+	int			client_encoding;
+	bool		is_std_strings;
+	PGconn	   *conn;
+	const char *std_strings;
+	const char *encoding;
 
-	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
+	/*
+	 * If creating template1 database the connect to the postgres database
+	 * otherwise, connect to the template1 database while creating any
+	 * other database.
+	 */
+	if (strcmp(dbinfo->db_name, "template1") == 0)
 	{
-		DbInfo	   *old_db = &old_cluster.dbarr.dbs[dbnum];
+		conn = connectToServer(&old_cluster, "postgres");
 
-		check_relnumber_conflict_and_rewrite(&old_cluster, old_db);
+		PQclear(executeQueryOrDie(conn,
+				"UPDATE pg_catalog.pg_database SET datistemplate = false WHERE datname = '%s';",
+				dbinfo->db_name));
+		PQclear(executeQueryOrDie(conn,
+				"DROP DATABASE %s;", dbinfo->db_name));
 	}
+	else if (strcmp(dbinfo->db_name, "postgres") == 0)
+	{
+		conn = connectToServer(&old_cluster, "template1");
+
+		PQclear(executeQueryOrDie(conn,
+				"DROP DATABASE %s;", dbinfo->db_name));			
+	}
+	else
+		conn = connectToServer(&old_cluster, "template1");
+
+	std_strings = PQparameterStatus(conn, "standard_conforming_strings");
+	is_std_strings = (std_strings && strcmp(std_strings, "on") == 0);
+	client_encoding = PQclientEncoding(conn);
+
+	appendPQExpBuffer(query, "CREATE DATABASE %s WITH TEMPLATE = template0 OID = %u",
+					  dbinfo->db_name, dbinfo->db_oid);
+
+	encoding = pg_encoding_to_char(dbinfo->db_encoding);
+
+	if (strlen(encoding) > 0)
+	{
+		appendPQExpBufferStr(query, " ENCODING = ");
+		appendStringLiteral(query, encoding, client_encoding,
+							is_std_strings);
+	}
+
+	appendPQExpBufferStr(query, " LOCALE_PROVIDER = ");
+	if (dbinfo->db_collprovider == 'c')
+		appendPQExpBufferStr(query, "libc");
+	else if (dbinfo->db_collprovider == 'i')
+		appendPQExpBufferStr(query, "icu");
+
+	if (strlen(dbinfo->db_collate) > 0 &&
+		strcmp(dbinfo->db_collate, dbinfo->db_ctype) == 0)
+	{
+		appendPQExpBufferStr(query, " LOCALE = ");
+		appendStringLiteral(query, dbinfo->db_collate, client_encoding,
+							is_std_strings);
+	}
+	else
+	{
+		if (strlen(dbinfo->db_collate) > 0)
+		{
+			appendPQExpBufferStr(query, " LC_COLLATE = ");
+			appendStringLiteral(query, dbinfo->db_collate, client_encoding,
+								is_std_strings);
+		}
+		if (strlen(dbinfo->db_ctype) > 0)
+		{
+			appendPQExpBufferStr(query, " LC_CTYPE = ");
+			appendStringLiteral(query, dbinfo->db_ctype, client_encoding,
+								is_std_strings);
+		}
+	}
+
+	if (dbinfo->db_iculocale)
+	{
+		appendPQExpBufferStr(query, " ICU_LOCALE = ");
+		appendStringLiteral(query, dbinfo->db_iculocale, client_encoding,
+							is_std_strings);
+	}
+	if (dbinfo->db_collversion)
+	{
+		appendPQExpBufferStr(query, " COLLATION_VERSION = ");
+		appendStringLiteral(query, dbinfo->db_collversion, client_encoding,
+							is_std_strings);
+	}
+
+	/*
+	* Note: looking at dopt->outputNoTablespaces here is completely the wrong
+	* thing; the decision whether to specify a tablespace should be left till
+	* pg_restore, so that pg_restore --no-tablespaces applies.  Ideally we'd
+	* label the DATABASE entry with the tablespace and let the normal
+	* tablespace selection logic work ... but CREATE DATABASE doesn't pay
+	* attention to default_tablespace, so that won't work.
+	*/
+	if (strlen(dbinfo->db_tablespace) > 0 &&
+		strcmp(dbinfo->db_tablespace, "pg_default") != 0)
+		appendPQExpBuffer(query, " TABLESPACE = %s",
+						fmtId(dbinfo->db_tablespace));
+
+	PQclear(executeQueryOrDie(conn, query->data));
+	resetPQExpBuffer(query);
+	PQfinish(conn);
 }
 
 static void
@@ -571,58 +668,20 @@ create_new_objects(void)
 
 	prep_status_progress("Restoring database schemas in the new cluster");
 
-	check_conflict();
-
-	/*
-	 * We cannot process the template1 database concurrently with others,
-	 * because when it's transiently dropped, connection attempts would fail.
-	 * So handle it in a separate non-parallelized pass.
-	 */
+	/* loop the create all the database into the target cluster */
 	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
 	{
-		char		sql_file_name[MAXPGPATH],
-					log_file_name[MAXPGPATH];
 		DbInfo	   *old_db = &old_cluster.dbarr.dbs[dbnum];
-		const char *create_opts;
 
-		/* Process only template1 in this pass */
-		if (strcmp(old_db->db_name, "template1") != 0)
-			continue;
+		create_target_databases(&old_cluster, old_db);
+	}
 
-		pg_log(PG_STATUS, "%s", old_db->db_name);
-		snprintf(sql_file_name, sizeof(sql_file_name), DB_DUMP_FILE_MASK, old_db->db_oid);
-		snprintf(log_file_name, sizeof(log_file_name), DB_DUMP_LOG_FILE_MASK, old_db->db_oid);
+	/* loop the check the conflict and rewrite the tables  */
+	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
+	{
+		DbInfo	   *old_db = &old_cluster.dbarr.dbs[dbnum];
 
-		/*
-		 * template1 database will already exist in the target installation,
-		 * so tell pg_restore to drop and recreate it; otherwise we would fail
-		 * to propagate its database-level properties.
-		 */
-		create_opts = "--clean --create";
-
-/*		exec_prog(log_file_name,
-				  NULL,
-				  true,
-				  true,
-				  "\"%s/pg_restore\" %s %s --exit-on-error --verbose "
-				  "--dbname postgres \"%s/%s\"",
-				  new_cluster.bindir,
-				  cluster_conn_opts(&new_cluster),
-				  create_opts,
-				  log_opts.dumpdir,
-				  sql_file_name);*/
-		exec_prog(log_file_name,
-				  NULL,
-				  true,
-				  true,
-				  "\"%s/pg_restore\" %s --exit-on-error --verbose "
-				  "--dbname postgres \"%s/%s\"",
-				  new_cluster.bindir,
-				  cluster_conn_opts(&new_cluster),
-				  log_opts.dumpdir,
-				  sql_file_name);			  
-
-		break;					/* done once we've processed template1 */
+		check_relnumber_conflict_and_rewrite(&old_cluster, old_db);
 	}
 
 	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
@@ -630,35 +689,11 @@ create_new_objects(void)
 		char		sql_file_name[MAXPGPATH],
 					log_file_name[MAXPGPATH];
 		DbInfo	   *old_db = &old_cluster.dbarr.dbs[dbnum];
-		const char *create_opts;
-
-		/* Skip template1 in this pass */
-		if (strcmp(old_db->db_name, "template1") == 0)
-			continue;
 
 		pg_log(PG_STATUS, "%s", old_db->db_name);
 		snprintf(sql_file_name, sizeof(sql_file_name), DB_DUMP_FILE_MASK, old_db->db_oid);
 		snprintf(log_file_name, sizeof(log_file_name), DB_DUMP_LOG_FILE_MASK, old_db->db_oid);
 
-		/*
-		 * postgres database will already exist in the target installation, so
-		 * tell pg_restore to drop and recreate it; otherwise we would fail to
-		 * propagate its database-level properties.
-		 */
-		if (strcmp(old_db->db_name, "postgres") == 0)
-			create_opts = "--clean --create";
-		else
-			create_opts = "--create";
-
-/*		parallel_exec_prog(log_file_name,
-						   NULL,
-						   "\"%s/pg_restore\" %s %s --exit-on-error --verbose "
-						   "--dbname template1 \"%s/%s\"",
-						   new_cluster.bindir,
-						   cluster_conn_opts(&new_cluster),
-						   create_opts,
-						   log_opts.dumpdir,
-						   sql_file_name);*/
 		parallel_exec_prog(log_file_name,
 						   NULL,
 						   "\"%s/pg_restore\" %s --exit-on-error --verbose "

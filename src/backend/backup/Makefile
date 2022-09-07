@@ -25,6 +25,7 @@ OBJS = \
 	basebackup_server.o \
 	basebackup_sink.o \
 	basebackup_target.o \
-	basebackup_throttle.o
+	basebackup_throttle.o \
+	blkreftable.o
 
 include $(top_srcdir)/src/backend/common.mk

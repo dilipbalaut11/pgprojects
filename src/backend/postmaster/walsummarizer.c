@@ -18,6 +18,8 @@
 #include "access/xlog_internal.h"
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
+#include "backup/blkreftable.h"
+#include "catalog/storage_xlog.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "postmaster/bgwriter.h"
@@ -87,6 +89,10 @@ static void HandleWalSummarizerInterrupts(void);
 static XLogRecPtr SummarizeWAL(TimeLineID tli, bool historic,
 							   XLogRecPtr start_lsn, bool exact,
 							   XLogRecPtr cutoff_lsn, XLogRecPtr maximum_lsn);
+static void SummarizeSmgrRecord(XLogReaderState *xlogreader,
+								BlockRefTable *brtab);
+static void SummarizeXactRecord(XLogReaderState *xlogreader,
+								BlockRefTable *brtab);
 static int summarizer_read_local_xlog_page(XLogReaderState *state,
 										   XLogRecPtr targetPagePtr,
 										   int reqLen,
@@ -652,6 +658,7 @@ SummarizeWAL(TimeLineID tli, bool historic,
 	char		temp_path[MAXPGPATH];
 	char		final_path[MAXPGPATH];
 	File		file;
+	BlockRefTable *brtab = CreateEmptyBlockRefTable();
 
 	/* Initialize private data for xlogreader. */
 	private_data = (SummarizerReadLocalXLogPrivate *)
@@ -737,6 +744,7 @@ SummarizeWAL(TimeLineID tli, bool historic,
 	 */
 	while (xlogreader->EndRecPtr < cutoff_lsn)
 	{
+		int		block_id;
 		char *errormsg;
 		XLogRecord *record = XLogReadRecord(xlogreader, &errormsg);
 
@@ -801,7 +809,38 @@ SummarizeWAL(TimeLineID tli, bool historic,
 			break;
 		}
 
-		/* XXX feed this record into blkreftable code here */
+		/* Special handling for particular types of WAL records. */
+		switch (XLogRecGetRmid(xlogreader))
+		{
+			case RM_SMGR_ID:
+				SummarizeSmgrRecord(xlogreader, brtab);
+				break;
+			case RM_XACT_ID:
+				SummarizeXactRecord(xlogreader, brtab);
+				break;
+			default:
+				break;
+		}
+
+		/* Feed block references from xlog record to block reference table. */
+		for (block_id = 0; block_id <= XLogRecMaxBlockId(xlogreader);
+			 block_id++)
+		{
+			RelFileLocator	rlocator;
+			ForkNumber		forknum;
+			BlockNumber		blocknum;
+
+			if (!XLogRecGetBlockTagExtended(xlogreader, block_id, &rlocator,
+											&forknum, &blocknum, NULL))
+				continue;
+			/*
+			 * The FSM isn't fully WAL-logged, so just ignore any references
+			 * to it.
+			 */
+			if (forknum != FSM_FORKNUM)
+				BlockRefTableMarkBlockModified(brtab, &rlocator, forknum,
+											   blocknum);
+		}
 
 		/* Update our notion of where this summary file ends. */
 		summary_end_lsn = xlogreader->EndRecPtr;
@@ -822,12 +861,13 @@ SummarizeWAL(TimeLineID tli, bool historic,
 
 	/* Open the temporary file for writing. */
 	file = PathNameOpenFile(temp_path, O_WRONLY | O_CREAT | O_TRUNC);
-	if (file <= 0)
+	if (file < 0)
 		ereport(ERROR,
 				 (errcode_for_file_access(),
 				  errmsg("could not create file \"%s\": %m", temp_path)));
 
-	/* XXX write actual data to temporary file */
+	/* Write the data. */
+	WriteBlockRefTable(brtab, file);
 
 	/* Close temporary file and shut down xlogreader. */
 	FileClose(file);
@@ -836,6 +876,102 @@ SummarizeWAL(TimeLineID tli, bool historic,
 	durable_rename(temp_path, final_path, ERROR);
 
 	return summary_end_lsn;
+}
+
+/*
+ * Special handling for WAL records with RM_SMGR_ID.
+ */
+static void
+SummarizeSmgrRecord(XLogReaderState *xlogreader, BlockRefTable *brtab)
+{
+	uint8	info = XLogRecGetInfo(xlogreader) & ~XLR_INFO_MASK;
+
+	if (info == XLOG_SMGR_CREATE)
+	{
+		xl_smgr_create *xlrec;
+
+		/*
+		 * If a new relation fork is created on disk, there is no point
+		 * tracking anything about which blocks have been modified, because the
+		 * whole thing will be new. Hence, set the limit block for this fork
+		 * to 0.
+		 *
+		 * Ignore the FSM fork, which is not fully WAL-logged.
+		 */
+		xlrec = (xl_smgr_create *) XLogRecGetData(xlogreader);
+
+		if (xlrec->forkNum != FSM_FORKNUM)
+			BlockRefTableSetLimitBlock(brtab, &xlrec->rlocator,
+									   xlrec->forkNum, 0);
+	}
+	else if (info == XLOG_SMGR_TRUNCATE)
+	{
+		xl_smgr_truncate *xlrec;
+
+		xlrec = (xl_smgr_truncate *) XLogRecGetData(xlogreader);
+
+		/*
+		 * If a relation fork is truncated on disk, there is in point in
+		 * tracking anything about block modifications beyond the truncation
+		 * point.
+		 *
+		 * We ignore SMGR_TRUNCATE_FSM here because the FSM isn't fully
+		 * WAL-logged and thus we can't track modified blocks for it anyway.
+		 */
+		if ((xlrec->flags & SMGR_TRUNCATE_HEAP) != 0)
+			BlockRefTableSetLimitBlock(brtab, &xlrec->rlocator,
+									   MAIN_FORKNUM, xlrec->blkno);
+		if ((xlrec->flags & SMGR_TRUNCATE_VM) != 0)
+			BlockRefTableSetLimitBlock(brtab, &xlrec->rlocator,
+									   VISIBILITYMAP_FORKNUM, xlrec->blkno);
+	}
+}
+
+/*
+ * Special handling for WAL recods with RM_XACT_ID.
+ */
+static void
+SummarizeXactRecord(XLogReaderState *xlogreader, BlockRefTable *brtab)
+{
+	uint8	info = XLogRecGetInfo(xlogreader) & ~XLR_INFO_MASK;
+	uint8	xact_info = info & XLOG_XACT_OPMASK;
+
+	if (xact_info == XLOG_XACT_COMMIT ||
+		xact_info == XLOG_XACT_COMMIT_PREPARED)
+	{
+		xl_xact_commit *xlrec = (xl_xact_commit *) XLogRecGetData(xlogreader);
+		xl_xact_parsed_commit parsed;
+		int		i;
+
+		ParseCommitRecord(XLogRecGetInfo(xlogreader), xlrec, &parsed);
+		for (i = 0; i < parsed.nrels; ++i)
+		{
+			ForkNumber	forknum;
+
+			for (forknum = 0; forknum <= MAX_FORKNUM; ++forknum)
+				if (forknum != FSM_FORKNUM)
+					BlockRefTableSetLimitBlock(brtab, &parsed.xlocators[i],
+											   forknum, 0);
+		}
+	}
+	else if (xact_info == XLOG_XACT_ABORT ||
+			 xact_info == XLOG_XACT_ABORT_PREPARED)
+	{
+		xl_xact_abort *xlrec = (xl_xact_abort *) XLogRecGetData(xlogreader);
+		xl_xact_parsed_abort parsed;
+		int		i;
+
+		ParseAbortRecord(XLogRecGetInfo(xlogreader), xlrec, &parsed);
+		for (i = 0; i < parsed.nrels; ++i)
+		{
+			ForkNumber	forknum;
+
+			for (forknum = 0; forknum <= MAX_FORKNUM; ++forknum)
+				if (forknum != FSM_FORKNUM)
+					BlockRefTableSetLimitBlock(brtab, &parsed.xlocators[i],
+											   forknum, 0);
+		}
+	}
 }
 
 /*

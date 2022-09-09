@@ -243,6 +243,10 @@ WriteBlockRefTable(BlockRefTable *brtab, File fd)
 	HASH_SEQ_STATUS			seq_status;
 	BlockRefTableEntry	   *entry;
 	BlockRefFileHandle	   *handle;
+	int						totalblocks = 0;
+	int						bitmapcontainer=0;
+	int						arraycontainer=0;
+
 
 	if (brtab->nentries == 0)
 		return;
@@ -274,19 +278,28 @@ WriteBlockRefTable(BlockRefTable *brtab, File fd)
 
 			/* write chaged block info. */
 			if (container->isarray)
+			{
 				BlockRefFilePutData(handle,
 									(char *) container->blkinfo.blkarray,
 									sizeof(uint16) * container->nblocks);
+				arraycontainer++;
+			}
 			/* XXX instead of BLKREF_CONTAINER_SIZE copy actual bitmap size. */
 			else
+			{
 				BlockRefFilePutData(handle,
 									(char *) container->blkinfo.blkmap,
 									BLKREF_CONTAINER_SIZE);
+				bitmapcontainer++;
+			}
+			//debug info
+			totalblocks +=  container->nblocks;
 		}
 	}
 
 	/* flush any remaining data in the buffer. */
 	BlockRefFileFlush(handle);
+	elog(LOG, "END WriteBlockRefTable entries: %d blocks=%d array-container = %d bitmap-container = %d", brtab->nentries, totalblocks, arraycontainer, bitmapcontainer);
 
 	pfree(handle);
 }

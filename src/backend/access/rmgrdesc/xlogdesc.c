@@ -196,6 +196,9 @@ xlog_identify(uint8 info)
 		case XLOG_FPI_FOR_HINT:
 			id = "FPI_FOR_HINT";
 			break;
+		case XLOG_CHECKPOINT_REDOPOINT:
+			id = "CHECKPOINT_REDOPOINT";
+			break;
 	}
 
 	return id;

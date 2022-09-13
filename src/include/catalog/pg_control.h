@@ -78,7 +78,7 @@ typedef struct CheckPoint
 #define XLOG_FPI						0xB0
 /* 0xC0 is used in Postgres 9.5-11 */
 #define XLOG_OVERWRITE_CONTRECORD		0xD0
-
+#define XLOG_CHECKPOINT_REDOPOINT		0xE0
 
 /*
  * System status indicator.  Note this is stored in pg_control; if you change

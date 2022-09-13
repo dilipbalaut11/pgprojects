@@ -740,6 +740,7 @@ XLogInsertRecord(XLogRecData *rdata,
 	XLogRecPtr	StartPos;
 	XLogRecPtr	EndPos;
 	bool		prevDoPageWrites = doPageWrites;
+	bool		acquire_insertlock = !holdingAllLocks;
 	TimeLineID	insertTLI;
 
 	/* we assume that all of the record header is in the first chunk */
@@ -788,10 +789,18 @@ XLogInsertRecord(XLogRecData *rdata,
 	 *----------
 	 */
 	START_CRIT_SECTION();
-	if (isLogSwitch)
-		WALInsertLockAcquireExclusive();
-	else
-		WALInsertLockAcquire();
+
+	/*
+	 * We are already holding all wal insertion lock so we should not do it
+	 * now.
+	 */
+	if (acquire_insertlock)
+	{
+		if (isLogSwitch)
+			WALInsertLockAcquireExclusive();
+		else
+			WALInsertLockAcquire();
+	}
 
 	/*
 	 * Check to see if my copy of RedoRecPtr is out of date. If so, may have
@@ -824,7 +833,8 @@ XLogInsertRecord(XLogRecData *rdata,
 		 * Oops, some buffer now needs to be backed up that the caller didn't
 		 * back up.  Start over.
 		 */
-		WALInsertLockRelease();
+		if (acquire_insertlock)
+			WALInsertLockRelease();
 		END_CRIT_SECTION();
 		return InvalidXLogRecPtr;
 	}
@@ -882,9 +892,12 @@ XLogInsertRecord(XLogRecData *rdata,
 	}
 
 	/*
-	 * Done! Let others know that we're finished.
+	 * Done! Let others know that we're finished.  But if we are holding all
+	 * wal insertion locks then release it now.  The caller will take care of
+	 * that.
 	 */
-	WALInsertLockRelease();
+	if (acquire_insertlock)
+		WALInsertLockRelease();
 
 	END_CRIT_SECTION();
 
@@ -6494,6 +6507,32 @@ CreateCheckPoint(int flags)
 	RedoRecPtr = XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
 
 	/*
+	 * For walsummarizer to generate the wal summary files at the checkpoint
+	 * redo boundary, insert this special purpose record as the first record
+	 * at the checkPoint.redo point.  So that whenever the walsummarizer
+	 * can look for this record and whenever it finds this record it can
+	 * summarize the wal.
+	 *
+	 * Note that we do have the checkpoint record which knows the exact redo
+	 * point but there might be some other record between the checkpoint redo
+	 * point LSN and the checkpoint record LSN so by the time we reach to the
+	 * checkpoint record we might have processed those intermediate record as
+	 * well.
+	 *
+	 * XXX while shutting down we can not insert concurrent WAL, but
+	 * walsummarizer can directly use the checkpoint record to end the summary
+	 * file if it is a shutdown checkpoint.
+	 */
+	if (!shutdown)
+	{
+		int			dummy = 0;
+
+		XLogBeginInsert();
+		XLogRegisterData((char *) &dummy, sizeof(dummy));
+		recptr = XLogInsert(RM_XLOG_ID, XLOG_CHECKPOINT_REDOPOINT);
+	}
+
+	/*
 	 * Now we can release the WAL insertion locks, allowing other xacts to
 	 * proceed while we are flushing disk buffers.
 	 */
@@ -7949,6 +7988,11 @@ xlog_redo(XLogReaderState *record)
 		/* Keep track of full_page_writes */
 		lastFullPageWrites = fpw;
 	}
+	else if (info == XLOG_CHECKPOINT_REDOPOINT)
+	{
+		/* nothing to do here, handled in walsummarizer */
+	}
+
 }
 
 /*

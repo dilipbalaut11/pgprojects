@@ -31,6 +31,7 @@
 #include "access/relation.h"
 #include "access/xact.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_tablespace.h"
 #include "catalog/pg_type.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -511,7 +512,8 @@ autoprewarm_database_main(Datum main_arg)
 
 			Assert(rel == NULL);
 			StartTransactionCommand();
-			reloid = RelidByRelfilenumber(blk->tablespace, blk->filenumber);
+			reloid = RelidByRelfilenumber(blk->filenumber,
+										  blk->tablespace == GLOBALTABLESPACE_OID);
 			if (OidIsValid(reloid))
 				rel = try_relation_open(reloid, AccessShareLock);
 

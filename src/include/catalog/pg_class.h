@@ -154,7 +154,7 @@ typedef FormData_pg_class *Form_pg_class;
 
 DECLARE_UNIQUE_INDEX_PKEY(pg_class_oid_index, 2662, ClassOidIndexId, on pg_class using btree(oid oid_ops));
 DECLARE_UNIQUE_INDEX(pg_class_relname_nsp_index, 2663, ClassNameNspIndexId, on pg_class using btree(relname name_ops, relnamespace oid_ops));
-DECLARE_INDEX(pg_class_tblspc_relfilenode_index, 3455, ClassTblspcRelfilenodeIndexId, on pg_class using btree(reltablespace oid_ops, relfilenode int8_ops));
+DECLARE_INDEX(pg_class_relfilenode_index, 3455, ClassRelfilenodeIndexId, on pg_class using btree(relfilenode int8_ops));
 
 #ifdef EXPOSE_TO_CLIENT_CODE
 

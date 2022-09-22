@@ -908,7 +908,8 @@ pg_filenode_relation(PG_FUNCTION_ARGS)
 	if (!RelFileNumberIsValid(relfilenumber))
 		PG_RETURN_NULL();
 
-	heaprel = RelidByRelfilenumber(reltablespace, relfilenumber);
+	heaprel = RelidByRelfilenumber(relfilenumber,
+								   reltablespace== GLOBALTABLESPACE_OID);
 
 	if (!OidIsValid(heaprel))
 		PG_RETURN_NULL();

@@ -91,6 +91,7 @@
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 #include "catalog/catalog.h"
+#include "catalog/pg_tablespace.h"
 #include "lib/binaryheap.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -2153,8 +2154,8 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 				case REORDER_BUFFER_CHANGE_DELETE:
 					Assert(snapshot_now);
 
-					reloid = RelidByRelfilenumber(change->data.tp.rlocator.spcOid,
-												  change->data.tp.rlocator.relNumber);
+					reloid = RelidByRelfilenumber(change->data.tp.rlocator.relNumber,
+												  change->data.tp.rlocator.spcOid == GLOBALTABLESPACE_OID);												  
 
 					/*
 					 * Mapped catalog tuple without data, emitted while

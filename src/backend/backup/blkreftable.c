@@ -154,6 +154,16 @@ CreateEmptyBlockRefTable(void)
 }
 
 /*
+ * Create an empty block reference table.
+ */
+void
+BlockRefTableReset(BlockRefTable *brtab)
+{
+	blockreftable_destroy(brtab->hash);
+	brtab->hash = blockreftable_create(brtab->mcxt, 4096, NULL);
+}
+
+/*
  * Set the "limit block" for a relation fork.
  *
  * The "limit block" is the smallest block number such that the block in

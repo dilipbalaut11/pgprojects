@@ -83,9 +83,13 @@ static long sleep_quanta = MIN_SLEEP_QUANTA;
 int			wal_summarize_mb = 256;
 int			wal_summarize_keep_time = 7 * 24 * 60;
 
-static void ConsiderSummarizingWAL(void);
+static void ConsiderSummarizingWAL(TimeLineID *current_tli,
+								   XLogRecPtr *current_lsn);
 static XLogRecPtr GetLatestLSN(TimeLineID *tli);
 static void HandleWalSummarizerInterrupts(void);
+static XLogRecPtr GetCheckPointRedoLSN(XLogRecPtr previous_lsn,
+									   XLogRecPtr start_lsn,
+									   XLogRecPtr end_lsn);
 static XLogRecPtr SummarizeWAL(TimeLineID tli, bool historic,
 							   XLogRecPtr start_lsn, bool exact,
 							   XLogRecPtr cutoff_lsn, XLogRecPtr maximum_lsn);
@@ -144,7 +148,8 @@ WalSummarizerMain(void)
 {
 	sigjmp_buf	local_sigjmp_buf;
 	MemoryContext context;
-
+	XLogRecPtr	current_lsn = InvalidXLogRecPtr;
+	TimeLineID	current_tli;
 	ereport(DEBUG1,
 			(errmsg_internal("WAL summarizer started")));
 
@@ -234,7 +239,7 @@ WalSummarizerMain(void)
 		HandleWalSummarizerInterrupts();
 
 		/* If it's time to generate WAL summaries, then do that. */
-		ConsiderSummarizingWAL();
+		ConsiderSummarizingWAL(&current_tli, &current_lsn);
 
 		/* XXX also need to think about removing old WAL summaries */
 
@@ -366,7 +371,7 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
  * the main loop will sleep before calling this function again.
  */
 static void
-ConsiderSummarizingWAL(void)
+ConsiderSummarizingWAL(TimeLineID *current_tli, XLogRecPtr *current_lsn)
 {
 	uint64		bytes_per_summary = wal_summarize_mb * 1024 * 1024;
 	XLogRecPtr	cutoff_lsn;
@@ -397,6 +402,12 @@ ConsiderSummarizingWAL(void)
 
 	/* Find the LSN and TLI up to which we can safely summarize. */
 	latest_lsn = GetLatestLSN(&latest_tli);
+
+	if (XLogRecPtrIsInvalid(*current_lsn))
+	{
+		*current_tli = previous_tli;
+		*current_lsn = previous_lsn;
+	}
 
 	/*
 	 * It might be time to generate a summary, or we might be far enough
@@ -432,62 +443,25 @@ ConsiderSummarizingWAL(void)
 			switch_lsn = tliSwitchPoint(previous_tli, tles, &switch_tli);
 		}
 
-		/*
-		 * Figure out where we want to stop the next WAL summary. We'll
-		 * summarize until we read a record that ends after the cutoff_lsn
-		 * computed below, so the actual range of LSNs covered by the summary
-		 * will typically be a little bit greater than the cutoff (and could
-		 * be far greater if the last WAL record is really big).
-		 *
-		 * If we just established the cutoff LSN by adding bytes_per_summary
-		 * to previous_lsn, each file would cover on average a little more than
-		 * the configured number of bytes. That wouldn't be a disaster, but we
-		 * prefer to make the average number of bytes per summary equal to the
-		 * configured value. To accomplish that, we make the cutoff LSNs
-		 * multiples of bytes_per_summary. That way, the target number of bytes
-		 * for each cycle
-		 * is reduced by the overrun from the previous cycle.
-		 *
-		 * A further advantage of this is that the number of bytes per summary
-		 * will often be a multiple of the WAL segment size, so we'll tend to
-		 * align summaries with the ends of segments.
-		 *
-		 * To avoid emitting really small summary files, if this algorithm
-		 * would produce a summary file covering less than one-fifth of the
-		 * target amount of WAL, bump the cutoff LSN to the next multiple of
-		 * bytes_per_summary. This should normally only happen when first
-		 * starting WAL summarization, but could also occur if the last summary
-		 * ended with a very large record.
-		 */
-		cutoff_lsn =
-			((previous_lsn / bytes_per_summary) + 1) * bytes_per_summary;
-		if (cutoff_lsn - previous_lsn < bytes_per_summary / 5)
-			cutoff_lsn += bytes_per_summary;
-		if (!XLogRecPtrIsInvalid(switch_lsn) && cutoff_lsn > switch_lsn)
+
+		cutoff_lsn = GetCheckPointRedoLSN(previous_lsn, *current_lsn,
+										  *current_tli == latest_tli ?
+										  latest_lsn : switch_lsn);
+
+		if (!XLogRecPtrIsInvalid(switch_lsn) &&
+			(XLogRecPtrIsInvalid(cutoff_lsn) ||  cutoff_lsn > switch_lsn))
 			cutoff_lsn = switch_lsn;
+
 		elog(DEBUG2,
 			 "WAL summarization cutoff is TLI %d @ %X/%X, flush position is %X/%X",
 			 latest_tli, LSN_FORMAT_ARGS(cutoff_lsn), LSN_FORMAT_ARGS(latest_lsn));
 
-		/*
-		 * If we're on a historic timeline, no new WAL can ever appear, so
-		 * we may as well try to generate the summary now.
-		 *
-		 * If we're on the current timeline, we could really begin generating
-		 * the summary at any time, because if the required amount of WAL
-		 * is not on disk yet, SummarizeWAL will just wait. However, it
-		 * sleeps in very short increments, so we prefer to sleep in the main
-		 * loop when possible.
-		 *
-		 * If the amount of WAL known to be flushed to disk hasn't reached
-		 * cutoff_lsn, SumamrizeWAL will definitely have to wait, so bail
-		 * out in that case. Even if it has, there's a chance we might have
-		 * to wait anyway, if the last WAL record that would be included
-		 * in the summary continues into subsequent blocks and isn't fully
-		 * flushed yet. However, that case should be rare.
-		 */
-		if (latest_lsn < cutoff_lsn && previous_tli == latest_tli)
+		if (XLogRecPtrIsInvalid(cutoff_lsn))
+		{
+			*current_tli = latest_tli;
+			*current_lsn = latest_lsn;
 			break;
+		}
 
 		/* Summarize WAL. */
 		end_of_summary_lsn = SummarizeWAL(previous_tli,
@@ -495,6 +469,7 @@ ConsiderSummarizingWAL(void)
 										  previous_lsn, exact,
 										  cutoff_lsn, latest_lsn);
 		Assert(!XLogRecPtrIsInvalid(end_of_summary_lsn));
+		Assert(end_of_summary_lsn == cutoff_lsn);
 
 		/* We have sucessfully produced a summary. */
 		ereport(LOG,
@@ -503,6 +478,7 @@ ConsiderSummarizingWAL(void)
 					   LSN_FORMAT_ARGS(previous_lsn),
 					   LSN_FORMAT_ARGS(end_of_summary_lsn)));
 		++summaries_produced;
+		*current_lsn = end_of_summary_lsn;
 
 		/*
 		 * Update state for next loop iteration.
@@ -619,6 +595,78 @@ HandleWalSummarizerInterrupts(void)
 	/* Perform logging of memory contexts of this process */
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
+}
+
+static XLogRecPtr
+GetCheckPointRedoLSN(XLogRecPtr previous_lsn,
+					 XLogRecPtr start_lsn, XLogRecPtr end_lsn)
+{
+	XLogReaderState *xlogreader;
+	ReadLocalXLogPageNoWaitPrivate *private_data;
+	XLogRecPtr 		 lsn = InvalidXLogRecPtr;
+
+	private_data = (ReadLocalXLogPageNoWaitPrivate *)
+		palloc0(sizeof(ReadLocalXLogPageNoWaitPrivate));
+
+	/* Create xlogreader. */
+	xlogreader = XLogReaderAllocate(wal_segment_size, NULL,
+									XL_ROUTINE(.page_read = &read_local_xlog_page_no_wait,
+											   .segment_open = &wal_segment_open,
+											   .segment_close = &wal_segment_close),
+									private_data);
+	if (xlogreader == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory"),
+				 errdetail("Failed while allocating a WAL reading processor.")));
+
+
+	start_lsn = XLogFindNextRecord(xlogreader, start_lsn);
+	if (XLogRecPtrIsInvalid(start_lsn))
+		return InvalidXLogRecPtr;
+
+	XLogBeginRead(xlogreader, start_lsn);
+
+	/*
+	 * Main loop: read xlog records one by one.
+	 */
+	while (xlogreader->EndRecPtr < end_lsn)
+	{
+		char   *errormsg;
+		XLogRecord *record = XLogReadRecord(xlogreader, &errormsg);
+
+		if (record == NULL)
+		{
+			if (errormsg)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not read WAL at %X/%X: %s",
+						 LSN_FORMAT_ARGS(xlogreader->EndRecPtr), errormsg)));
+			else
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not read WAL at %X/%X",
+						 LSN_FORMAT_ARGS(xlogreader->EndRecPtr))));
+		}
+
+		/*
+		 * If we have found the checkpoint redopoint wal record then this lsn
+		 * will be the end of the summary file.  Make sure that this lsn is not
+		 * same as previous lsn because the previous summary file end at the
+		 * start of this record so when we start scanning for the next summary
+		 * file we will see the same record again.
+		 */
+		if (xlogreader->ReadRecPtr != previous_lsn &&
+			record->xl_info == XLOG_CHECKPOINT_REDOPOINT)
+		{
+			lsn = xlogreader->ReadRecPtr;
+			break;
+		}
+	}
+
+	XLogReaderFree(xlogreader);
+
+	return lsn;
 }
 
 /*
@@ -868,6 +916,7 @@ SummarizeWAL(TimeLineID tli, bool historic,
 
 	/* Write the data. */
 	WriteBlockRefTable(brtab, file);
+	BlockRefTableReset(brtab);
 
 	/* Close temporary file and shut down xlogreader. */
 	FileClose(file);

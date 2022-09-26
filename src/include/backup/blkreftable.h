@@ -32,7 +32,7 @@ struct BlockRefTable;
 typedef struct BlockRefTable BlockRefTable;
 
 extern BlockRefTable *CreateEmptyBlockRefTable(void);
-
+extern void BlockRefTableReset(BlockRefTable *brtab);
 extern void BlockRefTableSetLimitBlock(BlockRefTable *brtab,
 									   const RelFileLocator *rlocator,
 									   ForkNumber forknum,

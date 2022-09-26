@@ -489,8 +489,6 @@ WriteBlockRefTable(BlockRefTable *brtab, File file)
 			BlockRefTableEntry *brtentry;
 			BlockRefTableKey	key;
 			unsigned	j;
-			BlockNumber	blknum[BLOCKS_PER_CHUNK];
-			unsigned	blkcount = 0;
 
 			elog(LOG, "DB %u TS %u RFN %u FORK %u LIMIT %u CHUNKS %u",
 				 sentry->rlocator.dbOid,
@@ -507,6 +505,8 @@ WriteBlockRefTable(BlockRefTable *brtab, File file)
 
 			for (j = 0; j < brtentry->nchunks; ++j)
 			{
+				BlockNumber	blknum[BLOCKS_PER_CHUNK];
+				unsigned	blkcount = 0;				
 				if (brtentry->chunk_usage[j] == 0)
 				{
 					/* Chunk does not exist. */

@@ -204,7 +204,7 @@ static void RecordTransactionCommitPrepared(TransactionId xid,
 											int nchildren,
 											TransactionId *children,
 											int nrels,
-											RelFileLocator *rels,
+											RelFileLocator32 *rels,
 											int nstats,
 											xl_xact_stats_item *stats,
 											int ninvalmsgs,
@@ -215,7 +215,7 @@ static void RecordTransactionAbortPrepared(TransactionId xid,
 										   int nchildren,
 										   TransactionId *children,
 										   int nrels,
-										   RelFileLocator *rels,
+										   RelFileLocator32 *rels,
 										   int nstats,
 										   xl_xact_stats_item *stats,
 										   const char *gid);
@@ -1045,8 +1045,8 @@ StartPrepare(GlobalTransaction gxact)
 	TransactionId xid = gxact->xid;
 	TwoPhaseFileHeader hdr;
 	TransactionId *children;
-	RelFileLocator *commitrels;
-	RelFileLocator *abortrels;
+	RelFileLocator32 *commitrels;
+	RelFileLocator32 *abortrels;
 	xl_xact_stats_item *abortstats = NULL;
 	xl_xact_stats_item *commitstats = NULL;
 	SharedInvalidationMessage *invalmsgs;
@@ -1100,12 +1100,12 @@ StartPrepare(GlobalTransaction gxact)
 	}
 	if (hdr.ncommitrels > 0)
 	{
-		save_state_data(commitrels, hdr.ncommitrels * sizeof(RelFileLocator));
+		save_state_data(commitrels, hdr.ncommitrels * sizeof(RelFileLocator32));
 		pfree(commitrels);
 	}
 	if (hdr.nabortrels > 0)
 	{
-		save_state_data(abortrels, hdr.nabortrels * sizeof(RelFileLocator));
+		save_state_data(abortrels, hdr.nabortrels * sizeof(RelFileLocator32));
 		pfree(abortrels);
 	}
 	if (hdr.ncommitstats > 0)
@@ -1487,9 +1487,9 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	TwoPhaseFileHeader *hdr;
 	TransactionId latestXid;
 	TransactionId *children;
-	RelFileLocator *commitrels;
-	RelFileLocator *abortrels;
-	RelFileLocator *delrels;
+	RelFileLocator32 *commitrels;
+	RelFileLocator32 *abortrels;
+	RelFileLocator32 *delrels;
 	int			ndelrels;
 	xl_xact_stats_item *commitstats;
 	xl_xact_stats_item *abortstats;
@@ -1523,10 +1523,10 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	bufptr += MAXALIGN(hdr->gidlen);
 	children = (TransactionId *) bufptr;
 	bufptr += MAXALIGN(hdr->nsubxacts * sizeof(TransactionId));
-	commitrels = (RelFileLocator *) bufptr;
-	bufptr += MAXALIGN(hdr->ncommitrels * sizeof(RelFileLocator));
-	abortrels = (RelFileLocator *) bufptr;
-	bufptr += MAXALIGN(hdr->nabortrels * sizeof(RelFileLocator));
+	commitrels = (RelFileLocator32 *) bufptr;
+	bufptr += MAXALIGN(hdr->ncommitrels * sizeof(RelFileLocator32));
+	abortrels = (RelFileLocator32 *) bufptr;
+	bufptr += MAXALIGN(hdr->nabortrels * sizeof(RelFileLocator32));
 	commitstats = (xl_xact_stats_item *) bufptr;
 	bufptr += MAXALIGN(hdr->ncommitstats * sizeof(xl_xact_stats_item));
 	abortstats = (xl_xact_stats_item *) bufptr;
@@ -2283,7 +2283,7 @@ RecordTransactionCommitPrepared(TransactionId xid,
 								int nchildren,
 								TransactionId *children,
 								int nrels,
-								RelFileLocator *rels,
+								RelFileLocator32 *rels,
 								int nstats,
 								xl_xact_stats_item *stats,
 								int ninvalmsgs,
@@ -2381,7 +2381,7 @@ RecordTransactionAbortPrepared(TransactionId xid,
 							   int nchildren,
 							   TransactionId *children,
 							   int nrels,
-							   RelFileLocator *rels,
+							   RelFileLocator32 *rels,
 							   int nstats,
 							   xl_xact_stats_item *stats,
 							   const char *gid)

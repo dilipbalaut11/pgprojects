@@ -261,7 +261,7 @@ typedef struct xl_xact_subxacts
 typedef struct xl_xact_relfilelocators
 {
 	int			nrels;			/* number of relations */
-	RelFileLocator xlocators[FLEXIBLE_ARRAY_MEMBER];
+	RelFileLocator32 xlocators[FLEXIBLE_ARRAY_MEMBER];
 } xl_xact_relfilelocators;
 #define MinSizeOfXactRelfileLocators offsetof(xl_xact_relfilelocators, xlocators)
 
@@ -373,7 +373,7 @@ typedef struct xl_xact_parsed_commit
 	TransactionId *subxacts;
 
 	int			nrels;
-	RelFileLocator *xlocators;
+	RelFileLocator32 *xlocators;
 
 	int			nstats;
 	xl_xact_stats_item *stats;
@@ -384,7 +384,7 @@ typedef struct xl_xact_parsed_commit
 	TransactionId twophase_xid; /* only for 2PC */
 	char		twophase_gid[GIDSIZE];	/* only for 2PC */
 	int			nabortrels;		/* only for 2PC */
-	RelFileLocator *abortlocators;	/* only for 2PC */
+	RelFileLocator32 *abortlocators;	/* only for 2PC */
 	int			nabortstats;	/* only for 2PC */
 	xl_xact_stats_item *abortstats; /* only for 2PC */
 
@@ -406,7 +406,7 @@ typedef struct xl_xact_parsed_abort
 	TransactionId *subxacts;
 
 	int			nrels;
-	RelFileLocator *xlocators;
+	RelFileLocator32 *xlocators;
 
 	int			nstats;
 	xl_xact_stats_item *stats;
@@ -489,7 +489,7 @@ extern int	xactGetCommittedChildren(TransactionId **ptr);
 
 extern XLogRecPtr XactLogCommitRecord(TimestampTz commit_time,
 									  int nsubxacts, TransactionId *subxacts,
-									  int nrels, RelFileLocator *rels,
+									  int nrels, RelFileLocator32 *rels,
 									  int ndroppedstats,
 									  xl_xact_stats_item *droppedstats,
 									  int nmsgs, SharedInvalidationMessage *msgs,
@@ -500,7 +500,7 @@ extern XLogRecPtr XactLogCommitRecord(TimestampTz commit_time,
 
 extern XLogRecPtr XactLogAbortRecord(TimestampTz abort_time,
 									 int nsubxacts, TransactionId *subxacts,
-									 int nrels, RelFileLocator *rels,
+									 int nrels, RelFileLocator32 *rels,
 									 int ndroppedstats,
 									 xl_xact_stats_item *droppedstats,
 									 int xactflags, TransactionId twophase_xid,

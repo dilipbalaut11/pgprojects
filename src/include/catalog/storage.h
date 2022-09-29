@@ -42,7 +42,7 @@ extern void RestorePendingSyncs(char *startAddress);
  */
 extern void smgrDoPendingDeletes(bool isCommit);
 extern void smgrDoPendingSyncs(bool isCommit, bool isParallelWorker);
-extern int	smgrGetPendingDeletes(bool forCommit, RelFileLocator **ptr);
+extern int	smgrGetPendingDeletes(bool forCommit, RelFileLocator32 **ptr);
 extern void AtSubCommit_smgr(void);
 extern void AtSubAbort_smgr(void);
 extern void PostPrepare_smgr(void);

@@ -867,11 +867,11 @@ smgrDoPendingSyncs(bool isCommit, bool isParallelWorker)
  * by upper-level transactions.
  */
 int
-smgrGetPendingDeletes(bool forCommit, RelFileLocator **ptr)
+smgrGetPendingDeletes(bool forCommit, RelFileLocator32 **ptr)
 {
 	int			nestLevel = GetCurrentTransactionNestLevel();
 	int			nrels;
-	RelFileLocator *rptr;
+	RelFileLocator32 *rptr;
 	PendingRelDelete *pending;
 
 	nrels = 0;
@@ -886,14 +886,14 @@ smgrGetPendingDeletes(bool forCommit, RelFileLocator **ptr)
 		*ptr = NULL;
 		return 0;
 	}
-	rptr = (RelFileLocator *) palloc(nrels * sizeof(RelFileLocator));
+	rptr = (RelFileLocator32 *) palloc(nrels * sizeof(RelFileLocator32));
 	*ptr = rptr;
 	for (pending = pendingDeletes; pending != NULL; pending = pending->next)
 	{
 		if (pending->nestLevel >= nestLevel && pending->atCommit == forCommit
 			&& pending->backend == InvalidBackendId)
 		{
-			*rptr = pending->rlocator;
+			*rptr = RelFileLocatorToRelFileLocatorTo32(&pending->rlocator);
 			rptr++;
 		}
 	}

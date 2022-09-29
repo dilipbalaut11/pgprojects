@@ -62,6 +62,51 @@ typedef struct RelFileLocator
 	RelFileNumber relNumber;	/* relation */
 } RelFileLocator;
 
+typedef struct RelFileLocator32
+{
+	Oid			spcOid;			/* tablespace */
+	Oid			dbOid;			/* database */
+	uint32 		relNumber_hi;	/* high 32 bits of relation file number */
+	uint32 		relNumber_lo;	/* lowe 32 bits of relation file number */
+} RelFileLocator32;
+
+static inline RelFileNumber
+RelFileLocatorGetRelNumber(const RelFileLocator32 *locator)
+{
+	return ((uint64)locator->relNumber_hi << 32) | locator->relNumber_lo;
+}
+
+static inline void
+RelFileLocatorSetRelNumber(RelFileLocator32 *locator, RelFileNumber relnumber)
+{
+	locator->relNumber_hi = relnumber >> 32;
+	locator->relNumber_lo = relnumber & 0xFFFFFFFF;
+}
+
+static inline RelFileLocator32
+RelFileLocatorToRelFileLocatorTo32(const RelFileLocator *locator)
+{
+	RelFileLocator32	rlocator;
+
+	rlocator.spcOid = locator->spcOid;
+	rlocator.dbOid = locator->dbOid;
+	RelFileLocatorSetRelNumber(&rlocator, locator->relNumber);
+
+	return rlocator;
+}
+
+static inline RelFileLocator
+RelFileLocator32ToRelFileLocator(const RelFileLocator32 *locator)
+{
+	RelFileLocator rlocator;
+
+	rlocator.spcOid = locator->spcOid;
+	rlocator.dbOid = locator->dbOid;
+	rlocator.relNumber = RelFileLocatorGetRelNumber(locator);
+
+	return rlocator;
+}
+
 /*
  * Augmenting a relfilelocator with the backend ID provides all the information
  * we need to locate the physical storage.  The backend ID is InvalidBackendId

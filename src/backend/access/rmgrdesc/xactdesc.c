@@ -260,11 +260,11 @@ ParsePrepareRecord(uint8 info, xl_xact_prepare *xlrec, xl_xact_parsed_prepare *p
 	parsed->subxacts = (TransactionId *) bufptr;
 	bufptr += MAXALIGN(xlrec->nsubxacts * sizeof(TransactionId));
 
-	parsed->xlocators = (RelFileLocator *) bufptr;
-	bufptr += MAXALIGN(xlrec->ncommitrels * sizeof(RelFileLocator));
+	parsed->xlocators = (RelFileLocator32 *) bufptr;
+	bufptr += MAXALIGN(xlrec->ncommitrels * sizeof(RelFileLocator32));
 
-	parsed->abortlocators = (RelFileLocator *) bufptr;
-	bufptr += MAXALIGN(xlrec->nabortrels * sizeof(RelFileLocator));
+	parsed->abortlocators = (RelFileLocator32 *) bufptr;
+	bufptr += MAXALIGN(xlrec->nabortrels * sizeof(RelFileLocator32));
 
 	parsed->stats = (xl_xact_stats_item *) bufptr;
 	bufptr += MAXALIGN(xlrec->ncommitstats * sizeof(xl_xact_stats_item));
@@ -278,7 +278,7 @@ ParsePrepareRecord(uint8 info, xl_xact_prepare *xlrec, xl_xact_parsed_prepare *p
 
 static void
 xact_desc_relations(StringInfo buf, char *label, int nrels,
-					RelFileLocator *xlocators)
+					RelFileLocator32 *xlocators)
 {
 	int			i;
 
@@ -287,7 +287,8 @@ xact_desc_relations(StringInfo buf, char *label, int nrels,
 		appendStringInfo(buf, "; %s:", label);
 		for (i = 0; i < nrels; i++)
 		{
-			char	   *path = relpathperm(xlocators[i], MAIN_FORKNUM);
+			char	   *path = relpathperm(RelFileLocator32ToRelFileLocator(&xlocators[i]),
+										   MAIN_FORKNUM);
 
 			appendStringInfo(buf, " %s", path);
 			pfree(path);

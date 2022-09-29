@@ -1282,7 +1282,7 @@ RecordTransactionCommit(void)
 	bool		markXidCommitted = TransactionIdIsValid(xid);
 	TransactionId latestXid = InvalidTransactionId;
 	int			nrels;
-	RelFileLocator *rels;
+	RelFileLocator32 *rels;
 	int			nchildren;
 	TransactionId *children;
 	int			ndroppedstats = 0;
@@ -1705,7 +1705,7 @@ RecordTransactionAbort(bool isSubXact)
 	TransactionId xid = GetCurrentTransactionIdIfAny();
 	TransactionId latestXid;
 	int			nrels;
-	RelFileLocator *rels;
+	RelFileLocator32 *rels;
 	int			ndroppedstats = 0;
 	xl_xact_stats_item *droppedstats = NULL;
 	int			nchildren;
@@ -5608,7 +5608,7 @@ xactGetCommittedChildren(TransactionId **ptr)
 XLogRecPtr
 XactLogCommitRecord(TimestampTz commit_time,
 					int nsubxacts, TransactionId *subxacts,
-					int nrels, RelFileLocator *rels,
+					int nrels, RelFileLocator32 *rels,
 					int ndroppedstats, xl_xact_stats_item *droppedstats,
 					int nmsgs, SharedInvalidationMessage *msgs,
 					bool relcacheInval,
@@ -5737,7 +5737,7 @@ XactLogCommitRecord(TimestampTz commit_time,
 		XLogRegisterData((char *) (&xl_relfilelocators),
 						 MinSizeOfXactRelfileLocators);
 		XLogRegisterData((char *) rels,
-						 nrels * sizeof(RelFileLocator));
+						 nrels * sizeof(RelFileLocator32));
 	}
 
 	if (xl_xinfo.xinfo & XACT_XINFO_HAS_DROPPED_STATS)
@@ -5780,7 +5780,7 @@ XactLogCommitRecord(TimestampTz commit_time,
 XLogRecPtr
 XactLogAbortRecord(TimestampTz abort_time,
 				   int nsubxacts, TransactionId *subxacts,
-				   int nrels, RelFileLocator *rels,
+				   int nrels, RelFileLocator32 *rels,
 				   int ndroppedstats, xl_xact_stats_item *droppedstats,
 				   int xactflags, TransactionId twophase_xid,
 				   const char *twophase_gid)
@@ -5891,7 +5891,7 @@ XactLogAbortRecord(TimestampTz abort_time,
 		XLogRegisterData((char *) (&xl_relfilelocators),
 						 MinSizeOfXactRelfileLocators);
 		XLogRegisterData((char *) rels,
-						 nrels * sizeof(RelFileLocator));
+						 nrels * sizeof(RelFileLocator32));
 	}
 
 	if (xl_xinfo.xinfo & XACT_XINFO_HAS_DROPPED_STATS)

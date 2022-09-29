@@ -1078,7 +1078,7 @@ ForgetDatabaseSyncRequests(Oid dbid)
  * DropRelationFiles -- drop files of all given relations
  */
 void
-DropRelationFiles(RelFileLocator *delrels, int ndelrels, bool isRedo)
+DropRelationFiles(RelFileLocator32 *delrels, int ndelrels, bool isRedo)
 {
 	SMgrRelation *srels;
 	int			i;
@@ -1086,14 +1086,16 @@ DropRelationFiles(RelFileLocator *delrels, int ndelrels, bool isRedo)
 	srels = palloc(sizeof(SMgrRelation) * ndelrels);
 	for (i = 0; i < ndelrels; i++)
 	{
-		SMgrRelation srel = smgropen(delrels[i], InvalidBackendId);
+		SMgrRelation srel = smgropen(RelFileLocator32ToRelFileLocator(&delrels[i]),
+									 InvalidBackendId);
 
 		if (isRedo)
 		{
 			ForkNumber	fork;
 
 			for (fork = 0; fork <= MAX_FORKNUM; fork++)
-				XLogDropRelation(delrels[i], fork);
+				XLogDropRelation(RelFileLocator32ToRelFileLocator(&delrels[i]),
+								 fork);
 		}
 		srels[i] = srel;
 	}

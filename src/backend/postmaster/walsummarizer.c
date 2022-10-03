@@ -260,7 +260,6 @@ WalSummarizerMain(void)
 XLogRecPtr
 GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
 {
-	XLogRecPtr	latest_lsn;
 	TimeLineID	latest_tli;
 	LWLockMode	mode = LW_SHARED;
 	int			n;
@@ -313,7 +312,7 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
 	 * XXX. We should skip timelines or segments that are already summarized,
 	 * unless we instead choose to handle that elsewhere.
 	 */
-	latest_lsn = GetLatestLSN(&latest_tli);
+	(void) GetLatestLSN(&latest_tli);
 	tles = readTimeLineHistory(latest_tli);
 	for (n = list_length(tles) - 1; n >= 0; --n)
 	{
@@ -992,15 +991,12 @@ summarizer_read_local_xlog_page(XLogReaderState *state,
 								XLogRecPtr targetPagePtr, int reqLen,
 								XLogRecPtr targetRecPtr, char *cur_page)
 {
-	XLogRecPtr	loc;
 	int			count;
 	WALReadError errinfo;
 	SummarizerReadLocalXLogPrivate *private_data;
 
 	private_data = (SummarizerReadLocalXLogPrivate *)
 			state->private_data;
-
-	loc = targetPagePtr + reqLen;
 
 	while (true)
 	{

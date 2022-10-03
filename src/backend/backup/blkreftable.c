@@ -482,6 +482,7 @@ WriteBlockRefTable(BlockRefTable *brtab, File file)
 		qsort(sdata, i, sizeof(BlockRefTableSerializedEntry),
 			  BlockRefTableComparator);
 
+#if 0
 		/* XXX DEBUG */
 		for (i = 0; i < brtab->hash->members; ++i)
 		{
@@ -561,6 +562,7 @@ WriteBlockRefTable(BlockRefTable *brtab, File file)
 				}
 			}
 		}
+#endif
 	}
 
 	elog(LOG, "END WriteBlockRefTable (total of %u blocks using %u entries)",

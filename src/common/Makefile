@@ -78,6 +78,7 @@ OBJS_COMMON = \
 	stringinfo.o \
 	unicode_norm.o \
 	username.o \
+	varint.o \
 	wait_error.o \
 	wchar.o
 

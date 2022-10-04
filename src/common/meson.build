@@ -28,6 +28,7 @@ common_sources = files(
   'stringinfo.c',
   'unicode_norm.c',
   'username.c',
+  'varint.c',
   'wait_error.c',
   'wchar.c',
 )

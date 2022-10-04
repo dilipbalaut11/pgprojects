@@ -61,21 +61,29 @@ typedef struct
 	bool		end_of_wal;
 } SummarizerReadLocalXLogPrivate;
 
-/*
- * Between activity cycles, we sleep for a time that is a multiple of
- * SLEEP_QUANTUM_DURATION, which is measured in milliseconds. The multiplier
- * can be anywhere between MIN_SLEEP_QUANTA and MAX_SLEEP_QUANTA depending on
- * how busy the system is.
- */
-#define SLEEP_QUANTUM_DURATION	5000
-#define MIN_SLEEP_QUANTA		1
-#define MAX_SLEEP_QUANTA		12
-
 /* Pointer to shared memory state. */
 static WalSummarizerData *WalSummarizerCtl;
 
-/* Only used in walsummarizer process. */
-static long sleep_quanta = MIN_SLEEP_QUANTA;
+/*
+ * When we reach end of WAL and need to read more, we sleep for a number of
+ * milliseconds that is a integer multiple of MS_PER_SLEEP_QUANTUM. This is
+ * the multiplier. It should vary between 1 and MAX_SLEEP_QUANTA, depending
+ * on system activity. See summarizer_wait_for_wal() for how we adjust this.
+ */
+long		sleep_quanta = 1;
+
+/*
+ * The sleep time will always be a multiple of 200ms and will not exceed
+ * one minute (300 * 200 = 60 * 1000).
+ */
+#define MAX_SLEEP_QUANTA		300
+#define MS_PER_SLEEP_QUANTUM	200
+
+/*
+ * This is a count of the number of pages of WAL that we've read since the
+ * last time we waited for more WAL to appear.
+ */
+long		pages_read_since_last_sleep = 0;
 
 /*
  * GUC parameters
@@ -83,7 +91,6 @@ static long sleep_quanta = MIN_SLEEP_QUANTA;
 int			wal_summarize_mb = 256;
 int			wal_summarize_keep_time = 7 * 24 * 60;
 
-static void ConsiderSummarizingWAL(void);
 static XLogRecPtr GetLatestLSN(TimeLineID *tli);
 static void HandleWalSummarizerInterrupts(void);
 static XLogRecPtr SummarizeWAL(TimeLineID tli, bool historic,
@@ -98,6 +105,7 @@ static int summarizer_read_local_xlog_page(XLogReaderState *state,
 										   int reqLen,
 										   XLogRecPtr targetRecPtr,
 										   char *cur_page);
+static void summarizer_wait_for_wal(void);
 
 /*
  * Amount of shared memory required for this module.
@@ -144,6 +152,23 @@ WalSummarizerMain(void)
 {
 	sigjmp_buf	local_sigjmp_buf;
 	MemoryContext context;
+
+	/*
+	 * Within this function, 'current_lsn' and 'current_tli' refer to the
+	 * point from which the next WAL summary file should start. 'exact' is
+	 * true if 'current_lsn' is known to be the start of a WAL recod or WAL
+	 * segment, and false if it might be in the middle of a record someplace.
+	 *
+	 * 'switch_lsn' and 'switch_tli', if set, are the LSN at which we need
+	 * to switch to a new timeline and the timeline to which we need to switch.
+	 * If not set, we either haven't figured out the answers yet or we're
+	 * already on the latest timeline.
+	 */
+	XLogRecPtr	current_lsn;
+	TimeLineID	current_tli;
+	bool		exact;
+	XLogRecPtr	switch_lsn = InvalidXLogRecPtr;
+	TimeLineID	switch_tli = 0;
 
 	ereport(DEBUG1,
 			(errmsg_internal("WAL summarizer started")));
@@ -210,11 +235,19 @@ WalSummarizerMain(void)
 		RESUME_INTERRUPTS();
 
 		/*
-		 * Sleep at least 1 second after any error.  A write error is likely
-		 * to be repeated, and we don't want to be filling the error logs as
-		 * fast as we can.
+		 * Sleep for 10 seconds before attempting to resume operations in
+		 * order to avoid excessing logging.
+		 *
+		 * Many of the likely error conditions are things that will repeat
+		 * every time. For example, if the WAL can't be read or the summary
+		 * can't be written, only administrator action will cure the problem.
+		 * So a really fast retry time doesn't seem to be especially
+		 * beneficial, and it will clutter the logs.
 		 */
-		pg_usleep(1000000L);
+		(void) WaitLatch(MyLatch,
+						 WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 10000,
+						 WAIT_EVENT_WAL_SUMMARIZER_MAIN); /* XXX FIX NAME */
 	}
 
 	/* We can now handle ereport(ERROR) */
@@ -226,24 +259,102 @@ WalSummarizerMain(void)
 	PG_SETMASK(&UnBlockSig);
 
 	/*
+	 * Fetch information about previous progress from shared memory.
+	 *
+	 * If we discover that WAL summarization is not enabled, just exit.
+	 */
+	current_lsn = GetOldestUnsummarizedLSN(&current_tli, &exact);
+	if (XLogRecPtrIsInvalid(current_lsn))
+		proc_exit(0);
+
+	/*
 	 * Loop forever
 	 */
 	for (;;)
 	{
+		XLogRecPtr	latest_lsn;
+		TimeLineID	latest_tli;
+		XLogRecPtr	cutoff_lsn;
+		XLogRecPtr	end_of_summary_lsn;
+
 		/* Process any signals received recently. */
 		HandleWalSummarizerInterrupts();
 
-		/* If it's time to generate WAL summaries, then do that. */
-		ConsiderSummarizingWAL();
-
 		/* XXX also need to think about removing old WAL summaries */
 
-		/* Wait for something to happen. */
-		(void) WaitLatch(MyLatch,
-						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-						 sleep_quanta * SLEEP_QUANTUM_DURATION,
-						 WAIT_EVENT_WAL_SUMMARIZER_MAIN);
-		ResetLatch(MyLatch);
+		/* Find the LSN and TLI up to which we can safely summarize. */
+		latest_lsn = GetLatestLSN(&latest_tli);
+
+		/*
+		 * If we're summarizing a historic timeline and we haven't yet
+		 * computed the point at which to switch to the next timeline, do
+		 * that now.
+		 *
+		 * Note that if this is a standby, what was previously the current
+		 * timeline could become historic at any time.
+		 *
+		 * We could try to make this more efficient by caching the results
+		 * of readTimeLineHistory when latest_tli has not changed, but since
+		 * we only have to do this once per timeline switch, we probably
+		 * wouldn't save any significant amount of work in practice.
+		 */
+		if (current_tli != latest_tli && XLogRecPtrIsInvalid(switch_lsn))
+		{
+			List   *tles = readTimeLineHistory(latest_tli);
+
+			switch_lsn = tliSwitchPoint(current_tli, tles, &switch_tli);
+		}
+
+		/*
+		 * Figure out where we want to stop the next WAL summary. We'll
+		 * summarize until we read a record that ends after the cutoff_lsn
+		 * computed below, so the actual range of LSNs covered by the summary
+		 * will typically be a little bit greater than the cutoff (and could
+		 * be far greater if the last WAL record is really big).
+		 */
+		cutoff_lsn = current_lsn + wal_summarize_mb * 1024 * 1024;
+		if (!XLogRecPtrIsInvalid(switch_lsn) && cutoff_lsn > switch_lsn)
+			cutoff_lsn = switch_lsn;
+		elog(LOG,
+			 "WAL summarization cutoff is TLI %d @ %X/%X, flush position is %X/%X",
+				 latest_tli, LSN_FORMAT_ARGS(cutoff_lsn), LSN_FORMAT_ARGS(latest_lsn));
+
+		/* Summarize WAL. */
+		end_of_summary_lsn = SummarizeWAL(current_tli,
+										  current_tli != latest_tli,
+										  current_lsn, exact,
+										  cutoff_lsn, latest_lsn);
+		Assert(!XLogRecPtrIsInvalid(end_of_summary_lsn));
+
+		/* We have sucessfully produced a summary. */
+		ereport(LOG,
+				errmsg("summarized WAL on TLI %d from %X/%X to %X/%X",
+					   current_tli,
+					   LSN_FORMAT_ARGS(current_lsn),
+					   LSN_FORMAT_ARGS(end_of_summary_lsn)));
+
+		/*
+		 * Update state for next loop iteration.
+		 *
+		 * Next summary file should start from exactly where this one ended.
+		 * Timeline remains unchanged unless a switch LSN was computed and
+		 * we have reached it.
+		 */
+		current_lsn = end_of_summary_lsn;
+		exact = true;
+		if (!XLogRecPtrIsInvalid(switch_lsn) && cutoff_lsn >= switch_lsn)
+		{
+			current_tli = switch_tli;
+			switch_lsn = InvalidXLogRecPtr;
+			switch_tli = 0;
+		}
+
+		/* Update state in shared memory. */
+		LWLockAcquire(WALSummarizerLock, LW_EXCLUSIVE);
+		WalSummarizerCtl->summarizer_lsn = end_of_summary_lsn;
+		WalSummarizerCtl->summarizer_tli = current_tli;
+		WalSummarizerCtl->lsn_is_exact = true;
+		LWLockRelease(WALSummarizerLock);
 	}
 }
 
@@ -328,18 +439,11 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
 		}
 	}
 
-	/*
-	 * It really should not be possible for us to find no WAL, but since WAL
-	 * summarization is a non-critical function, tolerate that situation if
-	 * somehow it occurs.
-	 */
+	/* It really should not be possible for us to find no WAL. */
 	if (unsummarized_tli == 0)
-	{
-		ereport(LOG,
-				errmsg("no WAL found on timeline %d", latest_tli));
-		LWLockRelease(WALSummarizerLock);
-		return InvalidXLogRecPtr;
-	}
+		ereport(ERROR,
+				errcode(ERRCODE_INTERNAL_ERROR),
+				errmsg_internal("no WAL found on timeline %d", latest_tli));
 
 	/* Update shared memory with the discovered values. */
 	WalSummarizerCtl->initialized = true;
@@ -355,199 +459,6 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
 	LWLockRelease(WALSummarizerLock);
 
 	return unsummarized_lsn;
-}
-
-/*
- * Determine whether it's time to generate any WAL summaries. If it is,
- * generate as many as possible.
- *
- * As a side effect, adjusts sleep_quanta, which controls the time for which
- * the main loop will sleep before calling this function again.
- */
-static void
-ConsiderSummarizingWAL(void)
-{
-	uint64		bytes_per_summary = wal_summarize_mb * 1024 * 1024;
-	XLogRecPtr	cutoff_lsn;
-	bool		exact;
-	XLogRecPtr	latest_lsn;
-	TimeLineID	latest_tli;
-	XLogRecPtr	previous_lsn;
-	TimeLineID	previous_tli;
-	XLogRecPtr	switch_lsn = InvalidXLogRecPtr;
-	TimeLineID	switch_tli = 0;
-	XLogRecPtr	end_of_summary_lsn;
-	int			summaries_produced = 0;
-
-	/* Fetch information about previous progress from shared memory. */
-	previous_lsn = GetOldestUnsummarizedLSN(&previous_tli, &exact);
-
-	/*
-	 * If this happens, it probably means that WAL summarization has been
-	 * disabled and therefore this process should exit. It could also mean that
-	 * we couldn't figure out to begin summaring because pg_wal is all messed
-	 * up. In that case, a message will have already been logged.
-	 */
-	if (XLogRecPtrIsInvalid(previous_lsn))
-	{
-		sleep_quanta = MAX_SLEEP_QUANTA;
-		return;
-	}
-
-	/* Find the LSN and TLI up to which we can safely summarize. */
-	latest_lsn = GetLatestLSN(&latest_tli);
-
-	/*
-	 * It might be time to generate a summary, or we might be far enough
-	 * behind that we need to generate multiple summaries in quick succesion.
-	 * Loop until we've produced as many as required.
-	 */
-	while (true)
-	{
-		/* Process any signals received recently. */
-		HandleWalSummarizerInterrupts();
-
-		/*
-		 * If we're summarizing a historic timeline and we haven't yet
-		 * computed the point at which to switch to the next timeline, do
-		 * that now.
-		 *
-		 * Note that if this is a standby, what was previously the current
-		 * timeline could become historic at any time.
-		 *
-		 * latest_tli can't change during a single execution of this while
-		 * loop, but previous_tli can change multiple times, and switch_tli
-		 * needs to be recomputed each time.
-		 *
-		 * We could try to make this more efficient by caching the results
-		 * of readTimeLineHistory when latest_tli has not changed, but since
-		 * we only have to do this once per timeline switch, we probably
-		 * wouldn't save any significant amount of work in practice.
-		 */
-		if (previous_tli != latest_tli && XLogRecPtrIsInvalid(switch_lsn))
-		{
-			List   *tles = readTimeLineHistory(latest_tli);
-
-			switch_lsn = tliSwitchPoint(previous_tli, tles, &switch_tli);
-		}
-
-		/*
-		 * Figure out where we want to stop the next WAL summary. We'll
-		 * summarize until we read a record that ends after the cutoff_lsn
-		 * computed below, so the actual range of LSNs covered by the summary
-		 * will typically be a little bit greater than the cutoff (and could
-		 * be far greater if the last WAL record is really big).
-		 *
-		 * If we just established the cutoff LSN by adding bytes_per_summary
-		 * to previous_lsn, each file would cover on average a little more than
-		 * the configured number of bytes. That wouldn't be a disaster, but we
-		 * prefer to make the average number of bytes per summary equal to the
-		 * configured value. To accomplish that, we make the cutoff LSNs
-		 * multiples of bytes_per_summary. That way, the target number of bytes
-		 * for each cycle
-		 * is reduced by the overrun from the previous cycle.
-		 *
-		 * A further advantage of this is that the number of bytes per summary
-		 * will often be a multiple of the WAL segment size, so we'll tend to
-		 * align summaries with the ends of segments.
-		 *
-		 * To avoid emitting really small summary files, if this algorithm
-		 * would produce a summary file covering less than one-fifth of the
-		 * target amount of WAL, bump the cutoff LSN to the next multiple of
-		 * bytes_per_summary. This should normally only happen when first
-		 * starting WAL summarization, but could also occur if the last summary
-		 * ended with a very large record.
-		 */
-		cutoff_lsn =
-			((previous_lsn / bytes_per_summary) + 1) * bytes_per_summary;
-		if (cutoff_lsn - previous_lsn < bytes_per_summary / 5)
-			cutoff_lsn += bytes_per_summary;
-		if (!XLogRecPtrIsInvalid(switch_lsn) && cutoff_lsn > switch_lsn)
-			cutoff_lsn = switch_lsn;
-		elog(DEBUG2,
-			 "WAL summarization cutoff is TLI %d @ %X/%X, flush position is %X/%X",
-			 latest_tli, LSN_FORMAT_ARGS(cutoff_lsn), LSN_FORMAT_ARGS(latest_lsn));
-
-		/*
-		 * If we're on a historic timeline, no new WAL can ever appear, so
-		 * we may as well try to generate the summary now.
-		 *
-		 * If we're on the current timeline, we could really begin generating
-		 * the summary at any time, because if the required amount of WAL
-		 * is not on disk yet, SummarizeWAL will just wait. However, it
-		 * sleeps in very short increments, so we prefer to sleep in the main
-		 * loop when possible.
-		 *
-		 * If the amount of WAL known to be flushed to disk hasn't reached
-		 * cutoff_lsn, SumamrizeWAL will definitely have to wait, so bail
-		 * out in that case. Even if it has, there's a chance we might have
-		 * to wait anyway, if the last WAL record that would be included
-		 * in the summary continues into subsequent blocks and isn't fully
-		 * flushed yet. However, that case should be rare.
-		 */
-		if (latest_lsn < cutoff_lsn && previous_tli == latest_tli)
-			break;
-
-		/* Summarize WAL. */
-		end_of_summary_lsn = SummarizeWAL(previous_tli,
-										  previous_tli != latest_tli,
-										  previous_lsn, exact,
-										  cutoff_lsn, latest_lsn);
-		Assert(!XLogRecPtrIsInvalid(end_of_summary_lsn));
-
-		/* We have sucessfully produced a summary. */
-		ereport(LOG,
-				errmsg("summarized WAL on TLI %d from %X/%X to %X/%X",
-					   previous_tli,
-					   LSN_FORMAT_ARGS(previous_lsn),
-					   LSN_FORMAT_ARGS(end_of_summary_lsn)));
-		++summaries_produced;
-
-		/*
-		 * Update state for next loop iteration.
-		 *
-		 * Next summary file should start from exactly where this one ended.
-		 * Timeline remains unchanged unless a switch LSN was computed and
-		 * we have reached it.
-		 */
-		previous_lsn = end_of_summary_lsn;
-		exact = true;
-		if (!XLogRecPtrIsInvalid(switch_lsn) && cutoff_lsn >= switch_lsn)
-		{
-			previous_tli = switch_tli;
-			switch_lsn = InvalidXLogRecPtr;
-			switch_tli = 0;
-		}
-
-		/* Update state in shared memory. */
-		LWLockAcquire(WALSummarizerLock, LW_EXCLUSIVE);
-		WalSummarizerCtl->summarizer_lsn = end_of_summary_lsn;
-		WalSummarizerCtl->summarizer_tli = previous_tli;
-		WalSummarizerCtl->lsn_is_exact = true;
-		LWLockRelease(WALSummarizerLock);
-	}
-
-	/*
-	 * Increase the sleep time if we didn't produce any summaries, are not
-	 * close to reaching the cutoff LSN, and aren't already sleeping for the
-	 * maximum time.
-	 */
-	if (summaries_produced == 0 && sleep_quanta < MAX_SLEEP_QUANTA &&
-		latest_lsn < cutoff_lsn - bytes_per_summary / 2)
-		sleep_quanta++;
-
-	/*
-	 * Reduce the sleep time if we seem not to be keeping up, unless it's
-	 * already minimal. Reduce it more sharply if we produced multiple
-	 * summaries, since that indicates we're falling well behind.
-	 */
-	if (sleep_quanta > MIN_SLEEP_QUANTA)
-	{
-		if (summaries_produced > 1)
-			sleep_quanta = Max(sleep_quanta / 2, MIN_SLEEP_QUANTA);
-		else if (latest_lsn > cutoff_lsn + bytes_per_summary / 2)
-			sleep_quanta--;
-	}
 }
 
 /*
@@ -1033,10 +944,7 @@ summarizer_read_local_xlog_page(XLogReaderState *state,
 				 * happen.
 				 */
 				HandleWalSummarizerInterrupts();
-				(void) WaitLatch(MyLatch,
-								 WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-								 1,
-								 WAIT_EVENT_WAL_SUMMARIZER_WAL);
+				summarizer_wait_for_wal();
 
 				latest_lsn = GetLatestLSN(&latest_tli);
 				if (private_data->tli == latest_tli)
@@ -1082,6 +990,54 @@ summarizer_read_local_xlog_page(XLogReaderState *state,
 				 private_data->tli, &errinfo))
 		WALReadRaiseError(&errinfo);
 
+	/* Track that we read a page, for sleep time calculation. */
+	++pages_read_since_last_sleep;
+
 	/* number of valid bytes in the buffer */
 	return count;
+}
+
+/*
+ * Sleep for long enough that we believe it's likely that more WAL will
+ * be available afterwards.
+ */
+static void
+summarizer_wait_for_wal(void)
+{
+	if (pages_read_since_last_sleep == 0)
+	{
+		/*
+		 * No pages were read since the last sleep, so double the sleep
+		 * time, but not beyond the maximum allowable value.
+		 */
+		sleep_quanta = Min(sleep_quanta * 2, MAX_SLEEP_QUANTA);
+	}
+	else if (pages_read_since_last_sleep > 1)
+	{
+		/*
+		 * Multiple pages were read since the last sleep, so reduce the
+		 * sleep time.
+		 *
+		 * A large burst of activity should be able to quickly reduce the
+		 * sleep time to the minimum, but we don't want a handful of extra
+		 * WAL records to provoke a strong reaction. We choose to reduce the
+		 * sleep time by 1 quantum for each page read beyond the first, which
+		 * is a fairly arbitrary way of trying to be reactive without
+		 * overrreacting.
+		 */
+		if (pages_read_since_last_sleep > sleep_quanta - 1)
+			sleep_quanta = 1;
+		else
+			sleep_quanta -= pages_read_since_last_sleep;
+	}
+
+	/* OK, now sleep. */
+	(void) WaitLatch(MyLatch,
+					 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+					 sleep_quanta * MS_PER_SLEEP_QUANTUM,
+					 WAIT_EVENT_WAL_SUMMARIZER_WAL);
+	ResetLatch(MyLatch);
+
+	/* Reset count of pages read. */
+	pages_read_since_last_sleep = 0;
 }

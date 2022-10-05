@@ -59,6 +59,10 @@ typedef struct
 	bool		historic;
 	XLogRecPtr	read_upto;
 	bool		end_of_wal;
+	bool		waited;
+	XLogRecPtr	redo_pointer;
+	bool		redo_pointer_reached;
+	XLogRecPtr	redo_pointer_refresh_lsn;
 } SummarizerReadLocalXLogPrivate;
 
 /* Pointer to shared memory state. */
@@ -315,7 +319,7 @@ WalSummarizerMain(void)
 		cutoff_lsn = current_lsn + wal_summarize_mb * 1024 * 1024;
 		if (!XLogRecPtrIsInvalid(switch_lsn) && cutoff_lsn > switch_lsn)
 			cutoff_lsn = switch_lsn;
-		elog(LOG,
+		elog(DEBUG2,
 			 "WAL summarization cutoff is TLI %d @ %X/%X, flush position is %X/%X",
 				 latest_tli, LSN_FORMAT_ARGS(cutoff_lsn), LSN_FORMAT_ARGS(latest_lsn));
 
@@ -575,6 +579,10 @@ SummarizeWAL(TimeLineID tli, bool historic,
 		palloc0(sizeof(SummarizerReadLocalXLogPrivate));
 	private_data->tli = tli;
 	private_data->read_upto = maximum_lsn;
+	private_data->redo_pointer = GetRedoRecPtr();
+	private_data->redo_pointer_refresh_lsn = start_lsn;
+	private_data->redo_pointer_reached =
+		(start_lsn >= private_data->redo_pointer);
 
 	/* Create xlogreader. */
 	xlogreader = XLogReaderAllocate(wal_segment_size, NULL,
@@ -656,8 +664,17 @@ SummarizeWAL(TimeLineID tli, bool historic,
 	{
 		int		block_id;
 		char *errormsg;
-		XLogRecord *record = XLogReadRecord(xlogreader, &errormsg);
+		XLogRecord *record;
 
+		/*
+		 * This flag tracks whether the read of a particular record had to
+		 * wait for more WAL to arrive, so reset it before reading the next
+		 * record.
+		 */
+		private_data->waited = false;
+
+		/* Now read the next record. */
+		record = XLogReadRecord(xlogreader, &errormsg);
 		if (record == NULL)
 		{
 			SummarizerReadLocalXLogPrivate *private_data;
@@ -754,6 +771,38 @@ SummarizeWAL(TimeLineID tli, bool historic,
 
 		/* Update our notion of where this summary file ends. */
 		summary_end_lsn = xlogreader->EndRecPtr;
+
+		/*
+		 * We attempt, on a best effort basis only, to make WAL summary file
+		 * boundaries line up with checkpoint cycles. So, if the last redo
+		 * pointer we've seen was in the future, and we just reached it, stop
+		 * the summary file here.
+		 */
+		if (!private_data->redo_pointer_reached &&
+			xlogreader->EndRecPtr >= private_data->redo_pointer)
+			break;
+
+		/*
+		 * Periodically update our notion of the redo pointer, because it might
+		 * be changing concurrently. There's no interlocking here: we might
+		 * race past the new redo pointer before we learn about it. That's OK;
+		 * we only use the redo pointer as a heuristic for where to stop
+		 * summarizing.
+		 *
+		 * It would be nice if we could just fetch the updated redo pointer
+		 * on every pass through this loop, but that seems a bit too expensive:
+		 * GetRedoRecPtr acquires a heavily-contended spinlock. So, instead,
+		 * just fetch the updated value if we've just had to sleep, or if we've
+		 * read more than a segment's worth of WAL without sleeping.
+		 */
+		if (private_data->waited || xlogreader->EndRecPtr >
+			private_data->redo_pointer_refresh_lsn + wal_segment_size)
+		{
+			private_data->redo_pointer = GetRedoRecPtr();
+			private_data->redo_pointer_refresh_lsn = xlogreader->EndRecPtr;
+			private_data->redo_pointer_reached =
+				(xlogreader->EndRecPtr >= private_data->redo_pointer);
+		}
 	}
 
 	/* Destroy xlogreader. */
@@ -945,7 +994,9 @@ summarizer_read_local_xlog_page(XLogReaderState *state,
 				 */
 				HandleWalSummarizerInterrupts();
 				summarizer_wait_for_wal();
+				private_data->waited = true;
 
+				/* Recheck end-of-WAL. */
 				latest_lsn = GetLatestLSN(&latest_tli);
 				if (private_data->tli == latest_tli)
 				{

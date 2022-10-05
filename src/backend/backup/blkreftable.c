@@ -482,7 +482,6 @@ WriteBlockRefTable(BlockRefTable *brtab, File file)
 		qsort(sdata, i, sizeof(BlockRefTableSerializedEntry),
 			  BlockRefTableComparator);
 
-#if 0
 		/* XXX DEBUG */
 		for (i = 0; i < brtab->hash->members; ++i)
 		{
@@ -490,7 +489,7 @@ WriteBlockRefTable(BlockRefTable *brtab, File file)
 			BlockRefTableEntry *brtentry;
 			BlockRefTableKey	key;
 			unsigned	j;
-
+#if 0
 			elog(LOG, "DB %u TS %u RFN %u FORK %u LIMIT %u CHUNKS %u",
 				 sentry->rlocator.dbOid,
 				 sentry->rlocator.spcOid,
@@ -498,6 +497,7 @@ WriteBlockRefTable(BlockRefTable *brtab, File file)
 				 sentry->forknum,
 				 sentry->limit_block,
 				 sentry->nchunks);
+#endif
 
 			memcpy(&key.rlocator, &sentry->rlocator, sizeof(RelFileLocator));
 			key.forknum = sentry->forknum;
@@ -548,6 +548,7 @@ WriteBlockRefTable(BlockRefTable *brtab, File file)
 				}
 
 				{
+#if 0
 					StringInfoData str;
 					unsigned n;
 
@@ -557,12 +558,12 @@ WriteBlockRefTable(BlockRefTable *brtab, File file)
 						appendStringInfo(&str, " %u", blknum[n]);
 					appendStringInfo(&str, " (%u blocks)", blkcount);
 					elog(LOG, "%s", str.data);
+#endif
 					total_block_count += blkcount;
 					total_chunk_entries_used += brtentry->chunk_usage[j];
 				}
 			}
 		}
-#endif
 	}
 
 	elog(LOG, "END WriteBlockRefTable (total of %u blocks using %u entries)",

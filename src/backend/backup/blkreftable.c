@@ -10,7 +10,7 @@
  *
  * Portions Copyright (c) 2010-2022, PostgreSQL Global Development Group
  *
- * src/include/backup/blkreftable.h
+ * src/backend/backup/blkreftable.c
  *
  *-------------------------------------------------------------------------
  */

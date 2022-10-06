@@ -17,6 +17,7 @@
 
 #include "backup/blkreftable.h"
 #include "common/hashfn.h"
+#include "utils/wait_event.h"
 
 /*
  * A block reference table keeps track of the status of each relation
@@ -131,8 +132,29 @@ typedef struct BlockRefTableSerializedEntry
 	unsigned		nchunks;
 } BlockRefTableSerializedEntry;
 
+/*
+ * Buffer size, so that we avoid doing many small I/Os.
+ */
+#define BUFSIZE					65536
+
+/*
+ * Ad-hoc buffer for file I/O.
+ */
+typedef struct BlockRefTableBuffer
+{
+	File		file;
+	off_t		filepos;
+	char		data[BUFSIZE];
+	size_t		used;
+} BlockRefTableBuffer;
+
 /* Function prototypes. */
 static int BlockRefTableComparator(const void *a, const void *b);
+static void BlockRefTableFlush(BlockRefTableBuffer *buffer);
+static void BlockRefTableRawWrite(BlockRefTableBuffer *buffer, void *data,
+								  int length);
+static void BlockRefTableWrite(BlockRefTableBuffer *buffer, void *data,
+							   int length);
 
 /*
  * Create an empty block reference table.
@@ -455,17 +477,25 @@ void
 WriteBlockRefTable(BlockRefTable *brtab, File file)
 {
 	BlockRefTableSerializedEntry *sdata = NULL;
-	unsigned	total_block_count = 0;
-	unsigned	total_chunk_entries_used = 0;
+	BlockRefTableBuffer	buffer;
+	uint32 magic = BLOCKREFTABLE_MAGIC;
 
-	elog(LOG, "BEGIN WriteBlockRefTable (%u members)", brtab->hash->members);
+	/* Prepare buffer. */
+	buffer.file = file;
+	buffer.used = 0;
 
+	/* Write magic number and entry count. */
+	BlockRefTableWrite(&buffer, &magic, sizeof(uint32));
+	BlockRefTableWrite(&buffer, &brtab->hash->members, sizeof(uint32));
+
+	/* Assuming there are some entries, we also need to write those. */
 	if (brtab->hash->members > 0)
 	{
 		unsigned i = 0;
 		blockreftable_iterator	it;
 		BlockRefTableEntry *brtentry;
 
+		/* Extract entries into serializable format and sort them. */
 		sdata =
 			palloc(brtab->hash->members * sizeof(BlockRefTableSerializedEntry));
 		blockreftable_start_iterate(brtab->hash, &it);
@@ -482,93 +512,41 @@ WriteBlockRefTable(BlockRefTable *brtab, File file)
 		qsort(sdata, i, sizeof(BlockRefTableSerializedEntry),
 			  BlockRefTableComparator);
 
-		/* XXX DEBUG */
+		/* Loop over entries in sorted order and serialize each one. */
 		for (i = 0; i < brtab->hash->members; ++i)
 		{
 			BlockRefTableSerializedEntry *sentry = &sdata[i];
 			BlockRefTableEntry *brtentry;
 			BlockRefTableKey	key;
 			unsigned	j;
-#if 0
-			elog(LOG, "DB %u TS %u RFN %u FORK %u LIMIT %u CHUNKS %u",
-				 sentry->rlocator.dbOid,
-				 sentry->rlocator.spcOid,
-				 sentry->rlocator.relNumber,
-				 sentry->forknum,
-				 sentry->limit_block,
-				 sentry->nchunks);
-#endif
 
+			/* Write the serialized entry itself. */
+			BlockRefTableWrite(&buffer, sentry,
+							   sizeof(BlockRefTableSerializedEntry));
+
+			/* Look up the original entry so we can access the chunks. */
 			memcpy(&key.rlocator, &sentry->rlocator, sizeof(RelFileLocator));
 			key.forknum = sentry->forknum;
 			brtentry = blockreftable_lookup(brtab->hash, key);
 			Assert(brtentry != NULL);
 
+			/* Write the chunk length array. */
+			BlockRefTableWrite(&buffer, brtentry->chunk_usage,
+							   brtentry->nchunks * sizeof(uint16));
+
+			/* Write the contents of each chunk. */
 			for (j = 0; j < brtentry->nchunks; ++j)
 			{
-				BlockNumber	blknum[BLOCKS_PER_CHUNK];
-				unsigned	blkcount = 0;
-				if (brtentry->chunk_usage[j] == 0)
-				{
-					/* Chunk does not exist. */
+				if (brtentry->chunk_usage[j] > 0)
 					continue;
-				}
-				else if (brtentry->chunk_usage[j] == MAX_ENTRIES_PER_CHUNK)
-				{
-					unsigned	k;
-
-					/* Chunk is a bitmap. */
-					for (k = 0; k < MAX_ENTRIES_PER_CHUNK; ++k)
-					{
-						uint16	w = brtentry->chunk_data[j][k];
-						unsigned	b;
-
-						for (b = 0; b < BITS_PER_BYTE; ++b)
-						{
-							if ((w & (1 << b)) != 0)
-							{
-								blknum[blkcount++] = j * BLOCKS_PER_CHUNK +
-									k * BITS_PER_BYTE + b;
-							}
-						}
-					}
-				}
-				else
-				{
-					unsigned	k;
-
-					/* Chunk is an offset array. */
-					for (k = 0; k < brtentry->chunk_usage[j]; ++k)
-					{
-						uint16	w = brtentry->chunk_data[j][k];
-
-						blknum[k] = j * BLOCKS_PER_CHUNK + w;
-					}
-					blkcount = k;
-				}
-
-				{
-#if 0
-					StringInfoData str;
-					unsigned n;
-
-					initStringInfo(&str);
-					appendStringInfo(&str, "chunk %u:", j);
-					for (n = 0; n < blkcount; ++n)
-						appendStringInfo(&str, " %u", blknum[n]);
-					appendStringInfo(&str, " (%u blocks)", blkcount);
-					elog(LOG, "%s", str.data);
-#endif
-					total_block_count += blkcount;
-					total_chunk_entries_used += brtentry->chunk_usage[j];
-				}
+				BlockRefTableWrite(&buffer, brtentry->chunk_data[j],
+								   brtentry->chunk_usage[j] * sizeof(uint16));
 			}
 		}
 	}
 
-	elog(LOG, "END WriteBlockRefTable (total of %u blocks using %u entries)",
-		 total_block_count, total_chunk_entries_used);
-	/* XXX */
+	/* Flush any leftover data out of our buffer. */
+	BlockRefTableFlush(&buffer);
 }
 
 /*
@@ -601,4 +579,67 @@ BlockRefTableComparator(const void *a, const void *b)
 		return -1;
 
 	return 0;
+}
+
+/*
+ * Flush any buffered data out of a BlockRefTableBuffer.
+ */
+static void
+BlockRefTableFlush(BlockRefTableBuffer *buffer)
+{
+	BlockRefTableRawWrite(buffer, buffer->data, buffer->used);
+	buffer->used = 0;
+}
+
+/*
+ * Directly write the underlying file associated with a BlockRefTableBuffer.
+ */
+static void
+BlockRefTableRawWrite(BlockRefTableBuffer *buffer, void *data, int length)
+{
+	int		nbytes;
+
+	nbytes = FileWrite(buffer->file, data, length,
+					   buffer->filepos,
+					   PG_WAIT_EXTENSION); /* XXX FIXME */
+	if (nbytes < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not write file \"%s\": %m",
+						FilePathName(buffer->file))));
+	if (nbytes != length)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not write file \"%s\": wrote only %d of %d bytes at offset %u",
+						FilePathName(buffer->file), nbytes,
+						length, (unsigned) buffer->filepos),
+				 errhint("Check free disk space.")));
+
+	buffer->filepos += nbytes;
+}
+
+/*
+ * Supply data to a BlockRefTableBuffer for write to the underlying File.
+ */
+static void
+BlockRefTableWrite(BlockRefTableBuffer *buffer, void *data, int length)
+{
+	/* If the new data can't fit into the buffer, flush the buffer. */
+	if (buffer->used + length > BUFSIZE)
+	{
+		BlockRefTableRawWrite(buffer, buffer->data, buffer->used);
+		buffer->used = 0;
+	}
+
+	/* If the new data would fill the buffer, or more, write it directly. */
+	if (length >= BUFSIZE)
+	{
+		BlockRefTableRawWrite(buffer, data, length);
+		return;
+	}
+
+	/* Otherwise, copy the new data into the buffer. */
+	memcpy(&buffer->data[buffer->used], data, length);
+	buffer->used += length;
+	Assert(buffer->used <= BUFSIZE);
 }

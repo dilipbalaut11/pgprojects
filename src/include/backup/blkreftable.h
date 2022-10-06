@@ -29,7 +29,9 @@
 #include "storage/relfilelocator.h"
 
 struct BlockRefTable;
+struct BlockRefTableReader;
 typedef struct BlockRefTable BlockRefTable;
+typedef struct BlockRefTableReader BlockRefTableReader;
 
 extern BlockRefTable *CreateEmptyBlockRefTable(void);
 
@@ -42,7 +44,16 @@ extern void BlockRefTableMarkBlockModified(BlockRefTable *brtab,
 										   ForkNumber forknum,
 										   BlockNumber blknum);
 
-extern void ReadBlockRefTable(BlockRefTable *brtab, File file);
 extern void WriteBlockRefTable(BlockRefTable *brtab, File file);
+
+extern BlockRefTableReader *CreateBlockRefTableReader(File file);
+extern bool BlockRefTableReaderNextRelation(BlockRefTableReader *reader,
+											RelFileLocator *rlocator,
+											ForkNumber *forknum,
+											BlockNumber *limit_block);
+extern int BlockRefTableReaderGetBlocks(BlockRefTableReader *reader,
+										BlockNumber *blocks,
+										int nblocks);
+extern void DestroyBlockRefTableReader(BlockRefTableReader *reader);
 
 #endif							/* BLKREFTABLE_H */

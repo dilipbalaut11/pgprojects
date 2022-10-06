@@ -6,6 +6,8 @@
  * A block reference table is used to keep track of which blocks have
  * been modified by WAL records within a certain LSN range.
  *
+ * XXX We should add a CRC to the file format.
+ *
  * Portions Copyright (c) 2010-2022, PostgreSQL Global Development Group
  *
  * src/include/backup/blkreftable.h
@@ -86,7 +88,7 @@ typedef struct BlockRefTableEntry
 	BlockRefTableKey	key;
 	BlockNumber		limit_block;
 	char			status;
-	unsigned		nchunks;
+	uint32			nchunks;
 	uint16		   *chunk_size;
 	uint16		   *chunk_usage;
 	BlockRefTableChunk *chunk_data;
@@ -129,7 +131,7 @@ typedef struct BlockRefTableSerializedEntry
 	RelFileLocator	rlocator;
 	ForkNumber		forknum;
 	BlockNumber		limit_block;
-	unsigned		nchunks;
+	uint32			nchunks;
 } BlockRefTableSerializedEntry;
 
 /*
@@ -145,14 +147,56 @@ typedef struct BlockRefTableBuffer
 	File		file;
 	off_t		filepos;
 	char		data[BUFSIZE];
-	size_t		used;
+	int			used;
+	int			cursor;
 } BlockRefTableBuffer;
+
+/*
+ * State for keeping track of progress while incrementally reading a block
+ * table reference file from disk.
+ *
+ * buffer is an I/O buffer.
+ *
+ * total_entries means the number of RelFileLocator/ForkNumber combinations
+ * that exist in the file, and consumed_entries is the number of those that
+ * have been partially or completely read.
+ *
+ * total_chunks means the number of chunks for the RelFileLocator/ForkNumber
+ * combination that is curently being read, and consumed_chunks is the number
+ * of those that have been read. (We always read all the information for
+ * a single chunk at one time, so we don't need to be able to represent the
+ * state where a chunk has been partially read.)
+ *
+ * chunk_size is the array of chunk sizes. The length is given by total_chunks.
+ *
+ * chunk_data holds the current chunk.
+ *
+ * chunk_position helps us figure out how much progress we've made in returning
+ * the block numbers for the current chunk to the caller. If the chunk is a
+ * bitmap, it's the number of bits we've scanned; otherwise, it's the number
+ * of chunk entries we've scanned.
+ */
+struct BlockRefTableReader
+{
+	BlockRefTableBuffer	buffer;
+	uint32		total_entries;
+	uint32		consumed_entries;
+	uint32		total_chunks;
+	uint32		consumed_chunks;
+	uint16	   *chunk_size;
+	uint16		chunk_data[MAX_ENTRIES_PER_CHUNK];
+	uint32		chunk_position;
+};
 
 /* Function prototypes. */
 static int BlockRefTableComparator(const void *a, const void *b);
 static void BlockRefTableFlush(BlockRefTableBuffer *buffer);
+static int BlockRefTableRawRead(BlockRefTableBuffer *buffer, void *data,
+								int length);
 static void BlockRefTableRawWrite(BlockRefTableBuffer *buffer, void *data,
 								  int length);
+static void BlockRefTableRead(BlockRefTableBuffer *buffer, void *data,
+							  int length);
 static void BlockRefTableWrite(BlockRefTableBuffer *buffer, void *data,
 							   int length);
 
@@ -464,10 +508,187 @@ BlockRefTableMarkBlockModified(BlockRefTable *brtab,
 	brtentry->chunk_usage[chunkno]++;
 }
 
-void
-ReadBlockRefTable(BlockRefTable *brtab, File file)
+/*
+ * Prepare to incrementally read a block reference table file.
+ */
+BlockRefTableReader *
+CreateBlockRefTableReader(File file)
 {
-	/* XXX */
+	BlockRefTableReader *reader;
+	uint32 magic;
+
+	/* Initialize data structure. */
+	reader = palloc0(sizeof(BlockRefTableReader));
+	reader->buffer.file = file;
+
+	/* Verify magic number. */
+	BlockRefTableRead(&reader->buffer, &magic, sizeof(uint32));
+	if (magic != BLOCKREFTABLE_MAGIC)
+		ereport(ERROR,
+				errcode(ERRCODE_DATA_CORRUPTED),
+				errmsg("file \"%s\" has wrong magic number: expected %u, found %u",
+					   FilePathName(file),
+					   BLOCKREFTABLE_MAGIC, magic));
+
+	/* Read count of entries. */
+	BlockRefTableRead(&reader->buffer, &reader->total_entries, sizeof(uint32));
+
+	return reader;
+}
+
+/*
+ * Read next relation fork covered by this block reference table file.
+ *
+ * After calling this function, you must call BlockRefTableReaderGetBlocks
+ * until it returns 0 before calling it again.
+ */
+bool
+BlockRefTableReaderNextRelation(BlockRefTableReader *reader,
+								RelFileLocator *rlocator,
+								ForkNumber *forknum,
+								BlockNumber *limit_block)
+{
+	BlockRefTableSerializedEntry	sentry;
+
+	/*
+	 * Sanity check: caller must read all blocks from all chunks before
+	 * moving on to the next relation.
+	 */
+	if (reader->total_chunks != reader->consumed_chunks)
+		elog(ERROR, "must consume all chunks before reading next relation");
+
+	/* If we have read all of the entries, we're done. */
+	if (reader->total_entries == reader->consumed_entries)
+		return false;
+
+	/* Read serialized entry. */
+	BlockRefTableRead(&reader->buffer, &sentry,
+					  sizeof(BlockRefTableSerializedEntry));
+	++reader->consumed_entries;
+
+	/* Read chunk size array. */
+	if (reader->chunk_size != NULL)
+		pfree(reader->chunk_size);
+	reader->chunk_size = palloc(sentry.nchunks * sizeof(uint16));
+	BlockRefTableRead(&reader->buffer, reader->chunk_size,
+					  sentry.nchunks * sizeof(uint16));
+
+	/* Set up for chunk scan. */
+	reader->total_chunks = sentry.nchunks;
+	reader->consumed_chunks = 0;
+
+	/* Return data to caller. */
+	memcpy(rlocator, &sentry.rlocator, sizeof(RelFileLocator));
+	*forknum = sentry.forknum;
+	*limit_block = sentry.limit_block;
+	return true;
+}
+
+/*
+ * Get modified blocks associated with the relation fork returned by
+ * the most recent call to BlockRefTableReaderNextRelation.
+ *
+ * On return, block numbers will be written into the 'blocks' array, whose
+ * length should be passed via 'nblocks'. The return value is the number of
+ * entries actually written into the 'blocks' array, which may be less than
+ * 'nblocks' if we run out of modified blocks in tht relation fork before
+ * we run out of room in the array.
+ */
+int
+BlockRefTableReaderGetBlocks(BlockRefTableReader *reader,
+							 BlockNumber *blocks,
+							 int nblocks)
+{
+	int		blocks_found = 0;
+
+	/* Must provide space for at least one block number to be returned. */
+	Assert(nblocks > 0);
+
+	/* Must call BlockRefTableReaderNextRelation before calling this. */
+	Assert(reader->consumed_entries > 0);
+
+	/* Loop collecting blocks to return to caller. */
+	for (;;)
+	{
+		uint16	next_chunk_size;
+
+		/*
+		 * If we've read at least one chunk, maybe it contains some block
+		 * numbers that could satisfy caller's request.
+		 */
+		if (reader->consumed_chunks > 0)
+		{
+			uint32	chunkno = reader->consumed_chunks - 1;
+			uint16	chunk_size = reader->chunk_size[chunkno];
+
+			if (chunk_size == MAX_ENTRIES_PER_CHUNK)
+			{
+				/* Bitmap format, so search for bits that are set. */
+				while (reader->chunk_position < BLOCKS_PER_CHUNK &&
+					   blocks_found < nblocks)
+				{
+					uint16	chunkoffset = reader->chunk_position;
+					uint16	w;
+
+					w = reader->chunk_data[chunkoffset / BLOCKS_PER_ENTRY];
+					if ((w & (1u << (chunkoffset % BLOCKS_PER_ENTRY))) != 0)
+						blocks[blocks_found++] =
+							chunkno * BLOCKS_PER_CHUNK + chunkoffset;
+					++reader->chunk_position;
+				}
+			}
+			else
+			{
+				/* Not in bitmap format, so each entry is a 2-byte offset. */
+				while (reader->chunk_position < chunk_size &&
+					   blocks_found < nblocks)
+				{
+					blocks[blocks_found++] = chunkno * BLOCKS_PER_CHUNK
+						+ reader->chunk_data[reader->chunk_position];
+				}
+			}
+		}
+
+		/* We found enough blocks, so we're done. */
+		if (blocks_found >= nblocks)
+			break;
+
+		/*
+		 * We didn't find enough blocks, so we must need the next chunk.
+		 * If there are none left, though, then we're done anyway.
+		 */
+		if (reader->consumed_chunks == reader->total_chunks)
+			break;
+
+		/*
+		 * Read data for next chunk and reset scan position to beginning of
+		 * chunk. Note that the next chunk might be empty, in which case we
+		 * consume the chunk without actually consuming any bytes from the
+		 * underlying file.
+		 */
+		next_chunk_size = reader->chunk_size[reader->consumed_chunks];
+		if (next_chunk_size > 0)
+			BlockRefTableRead(&reader->buffer, reader->chunk_data,
+							  next_chunk_size * sizeof(uint16));
+		++reader->consumed_chunks;
+		reader->chunk_position = 0;
+	}
+
+	return blocks_found;
+}
+
+/*
+ * Release memory used while reading a block reference table from a file.
+ */
+void
+DestroyBlockRefTableReader(BlockRefTableReader *reader)
+{
+	if (reader->chunk_size != NULL)
+	{
+		pfree(reader->chunk_size);
+		reader->chunk_size = NULL;
+	}
+	pfree(reader);
 }
 
 /*
@@ -592,6 +813,27 @@ BlockRefTableFlush(BlockRefTableBuffer *buffer)
 }
 
 /*
+ * Directly read the underlying file associated with a BlockRefTableBuffer.
+ */
+static int
+BlockRefTableRawRead(BlockRefTableBuffer *buffer, void *data, int length)
+{
+	int		nbytes;
+
+	nbytes = FileWrite(buffer->file, data, length,
+					   buffer->filepos,
+					   PG_WAIT_EXTENSION); /* XXX FIXME */
+	if (nbytes < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not write file \"%s\": %m",
+						FilePathName(buffer->file))));
+
+	buffer->filepos += nbytes;
+	return nbytes;
+}
+
+/*
  * Directly write the underlying file associated with a BlockRefTableBuffer.
  */
 static void
@@ -616,6 +858,57 @@ BlockRefTableRawWrite(BlockRefTableBuffer *buffer, void *data, int length)
 				 errhint("Check free disk space.")));
 
 	buffer->filepos += nbytes;
+}
+
+/*
+ * Read data from a BlockRefTableBuffer.
+ */
+static void
+BlockRefTableRead(BlockRefTableBuffer *buffer, void *data, int length)
+{
+	/* Loop until read is fully satisfied. */
+	while (length > 0)
+	{
+		if (buffer->cursor < buffer->used)
+		{
+			/*
+			 * If any buffered data is available, use that to satisfy as much
+			 * of the request as possible.
+			 */
+			int	bytes_to_copy = Min(length, buffer->used - buffer->cursor);
+
+			memcpy(data, &buffer->data[buffer->cursor], bytes_to_copy);
+			buffer->cursor += bytes_to_copy;
+			data = ((char *) data) + bytes_to_copy;
+			length -= bytes_to_copy;
+		}
+		else if (length >= BUFSIZE)
+		{
+			/*
+			 * If the request length is long, read directly into caller's
+			 * buffer.
+			 */
+			int bytes_read;
+
+			bytes_read = BlockRefTableRawRead(buffer, data, length);
+			data = ((char *) data) + bytes_read;
+			length -= bytes_read;
+		}
+		else
+		{
+			/*
+			 * Refill our buffer.
+			 */
+			buffer->used = BlockRefTableRawRead(buffer, buffer->data, BUFSIZE);
+			buffer->cursor = 0;
+
+			/* If we didn't get anything, that's bad. */
+			if (buffer->used == 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_DATA_CORRUPTED),
+						 errmsg("unexpected end of file")));
+		}
+	}
 }
 
 /*

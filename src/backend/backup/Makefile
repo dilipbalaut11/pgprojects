@@ -26,6 +26,8 @@ OBJS = \
 	basebackup_sink.o \
 	basebackup_target.o \
 	basebackup_throttle.o \
-	blkreftable.o
+	blkreftable.o \
+	walsummary.o \
+	walsummaryfuncs.o
 
 include $(top_srcdir)/src/backend/common.mk

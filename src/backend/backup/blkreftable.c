@@ -645,6 +645,7 @@ BlockRefTableReaderGetBlocks(BlockRefTableReader *reader,
 				{
 					blocks[blocks_found++] = chunkno * BLOCKS_PER_CHUNK
 						+ reader->chunk_data[reader->chunk_position];
+					++reader->chunk_position;
 				}
 			}
 		}
@@ -741,6 +742,8 @@ WriteBlockRefTable(BlockRefTable *brtab, File file)
 			BlockRefTableKey	key;
 			unsigned	j;
 
+			/* XXX this isn't really the right thing to do--we should truncate the chunk length array -- i.e. sentry->nchunks -- if it has trailing zeroes */
+
 			/* Write the serialized entry itself. */
 			BlockRefTableWrite(&buffer, sentry,
 							   sizeof(BlockRefTableSerializedEntry));
@@ -752,13 +755,14 @@ WriteBlockRefTable(BlockRefTable *brtab, File file)
 			Assert(brtentry != NULL);
 
 			/* Write the chunk length array. */
-			BlockRefTableWrite(&buffer, brtentry->chunk_usage,
-							   brtentry->nchunks * sizeof(uint16));
+			if (brtentry->nchunks != 0)
+				BlockRefTableWrite(&buffer, brtentry->chunk_usage,
+								   brtentry->nchunks * sizeof(uint16));
 
 			/* Write the contents of each chunk. */
 			for (j = 0; j < brtentry->nchunks; ++j)
 			{
-				if (brtentry->chunk_usage[j] > 0)
+				if (brtentry->chunk_usage[j] == 0)
 					continue;
 				BlockRefTableWrite(&buffer, brtentry->chunk_data[j],
 								   brtentry->chunk_usage[j] * sizeof(uint16));
@@ -820,9 +824,9 @@ BlockRefTableRawRead(BlockRefTableBuffer *buffer, void *data, int length)
 {
 	int		nbytes;
 
-	nbytes = FileWrite(buffer->file, data, length,
-					   buffer->filepos,
-					   PG_WAIT_EXTENSION); /* XXX FIXME */
+	nbytes = FileRead(buffer->file, data, length,
+					  buffer->filepos,
+					  PG_WAIT_EXTENSION); /* XXX FIXME */
 	if (nbytes < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
@@ -893,6 +897,12 @@ BlockRefTableRead(BlockRefTableBuffer *buffer, void *data, int length)
 			bytes_read = BlockRefTableRawRead(buffer, data, length);
 			data = ((char *) data) + bytes_read;
 			length -= bytes_read;
+
+			/* If we didn't get anything, that's bad. */
+			if (bytes_read == 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_DATA_CORRUPTED),
+						 errmsg("unexpected end of file")));
 		}
 		else
 		{

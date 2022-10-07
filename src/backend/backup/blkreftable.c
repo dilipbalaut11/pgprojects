@@ -703,8 +703,8 @@ WriteBlockRefTable(BlockRefTable *brtab, File file)
 	uint32 magic = BLOCKREFTABLE_MAGIC;
 
 	/* Prepare buffer. */
+	memset(&buffer, 0, sizeof(BlockRefTableBuffer));
 	buffer.file = file;
-	buffer.used = 0;
 
 	/* Write magic number and entry count. */
 	BlockRefTableWrite(&buffer, &magic, sizeof(uint32));

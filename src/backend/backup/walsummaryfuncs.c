@@ -95,7 +95,6 @@ pg_wal_summary_contents(PG_FUNCTION_ARGS)
 		values[1] = ObjectIdGetDatum(rlocator.spcOid);
 		values[2] = ObjectIdGetDatum(rlocator.dbOid);
 		values[3] = Int16GetDatum((int16) forknum);
-		values[5] = BoolGetDatum(false);
 
 		while (true)
 		{
@@ -108,6 +107,7 @@ pg_wal_summary_contents(PG_FUNCTION_ARGS)
 			if (nblocks == 0)
 				break;
 
+			values[5] = BoolGetDatum(false);
 			for (i = 0; i < nblocks; ++i)
 			{
 				values[4] = Int64GetDatum((int64) blocks[i]);

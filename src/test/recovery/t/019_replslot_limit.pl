@@ -22,6 +22,7 @@ $node_primary->append_conf(
 min_wal_size = 2MB
 max_wal_size = 4MB
 log_checkpoints = yes
+wal_summarize_mb = 0
 ));
 $node_primary->start;
 $node_primary->safe_psql('postgres',
@@ -259,6 +260,7 @@ $node_primary2->append_conf(
 min_wal_size = 32MB
 max_wal_size = 32MB
 log_checkpoints = yes
+wal_summarize_mb = 0
 ));
 $node_primary2->start;
 $node_primary2->safe_psql('postgres',
@@ -313,6 +315,7 @@ $node_primary3->append_conf(
 	max_wal_size = 2MB
 	log_checkpoints = yes
 	max_slot_wal_keep_size = 1MB
+    wal_summarize_mb = 0
 	));
 $node_primary3->start;
 $node_primary3->safe_psql('postgres',

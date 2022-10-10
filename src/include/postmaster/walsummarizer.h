@@ -3,8 +3,8 @@
 
 #include "access/xlogdefs.h"
 
-extern int wal_summarize_mb;
-extern int wal_summarize_keep_time;
+extern int	wal_summarize_mb;
+extern int	wal_summarize_keep_time;
 
 extern Size WalSummarizerShmemSize(void);
 extern void WalSummarizerShmemInit(void);

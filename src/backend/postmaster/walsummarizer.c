@@ -19,6 +19,7 @@
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
 #include "backup/blkreftable.h"
+#include "backup/walsummary.h"
 #include "catalog/storage_xlog.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
@@ -378,10 +379,11 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
 	TimeLineID	latest_tli;
 	LWLockMode	mode = LW_SHARED;
 	int			n;
-	XLogSegNo	oldest_segno;
 	List	   *tles;
 	XLogRecPtr	unsummarized_lsn;
 	TimeLineID	unsummarized_tli = 0;
+	List	   *existing_summaries;
+	ListCell   *lc;
 
 	/* If not summarizing WAL, do nothing. */
 	if (wal_summarize_mb == 0)
@@ -423,22 +425,22 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
 	 *
 	 * So, find the oldest timeline on which WAL still exists, and the earliest
 	 * segment for which it exists.
-	 *
-	 * XXX. We should skip timelines or segments that are already summarized,
-	 * unless we instead choose to handle that elsewhere.
 	 */
 	(void) GetLatestLSN(&latest_tli);
 	tles = readTimeLineHistory(latest_tli);
 	for (n = list_length(tles) - 1; n >= 0; --n)
 	{
 		TimeLineHistoryEntry *tle = list_nth(tles, n);
+		XLogSegNo	oldest_segno;
 
 		oldest_segno = XLogGetOldestSegno(tle->tli);
 		if (oldest_segno != 0)
 		{
-			unsummarized_tli = tle->tli;
+			/* Compute oldest LSN that still exists on disk. */
 			XLogSegNoOffsetToRecPtr(oldest_segno, 0, wal_segment_size,
 									unsummarized_lsn);
+
+			unsummarized_tli = tle->tli;
 			break;
 		}
 	}
@@ -448,6 +450,21 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
 		ereport(ERROR,
 				errcode(ERRCODE_INTERNAL_ERROR),
 				errmsg_internal("no WAL found on timeline %d", latest_tli));
+
+	/*
+	 * Don't try to summarize anything older than the end LSN of the
+	 * newest summary file that exists for this timeline.
+	 */
+	existing_summaries =
+		GetWalSummaries(unsummarized_tli,
+						InvalidXLogRecPtr, InvalidXLogRecPtr);
+	foreach(lc, existing_summaries)
+	{
+		WalSummaryFile *ws = lfirst(lc);
+
+		if (ws->end_lsn > unsummarized_lsn)
+			unsummarized_lsn = ws->end_lsn;
+	}
 
 	/* Update shared memory with the discovered values. */
 	WalSummarizerCtl->initialized = true;

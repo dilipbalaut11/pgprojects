@@ -6,6 +6,13 @@
  * A block reference table is used to keep track of which blocks have
  * been modified by WAL records within a certain LSN range.
  *
+ * For each relation fork, we keep track of the "limit block", which is
+ * the block number beyond which all existing blocks must be considered
+ * to have been modified. This should be set to 0 if the relation fork
+ * is created or destroyed, and to the post-truncation length if truncated.
+ * For block numbers below the limit block, we keep track of exactly
+ * which ones have been modified.
+ *
  * XXX We should add a CRC to the file format.
  *
  * Portions Copyright (c) 2010-2022, PostgreSQL Global Development Group
@@ -32,25 +39,29 @@ typedef struct BlockRefTableKey
 } BlockRefTableKey;
 
 /*
- * We keep track of large numbers of modified blocks using an array of chunks.
- * The data for the i'th block is stored in the chunk given
- * by i / NCHUNKELEMENTS.  The chunks can be used either as arrays of offsets
- * or as bitmaps.
+ * We could need to store data either for a relation in which only a
+ * tiny fraction of the blocks have been modified or for a relation in
+ * which nearly every block has been modified, and we want a
+ * space-efficient representation in both cases. To accomplish this,
+ * we divide the relation into chunks of 2^16 blocks and choose between
+ * an array representation and a bitmap representation for each chunk.
  *
- * When used as an array of offsets, each element of the array is a 2-byte
- * offset from the first block number whose status is represented by this
- * chunk.
+ * When the number of modified blocks in a given chunk is small, we
+ * essentially store an array of block numbers, but we need not store the
+ * entire block number: instead, we store each block number as a 2-byte
+ * offset from the start of the chunk.
  *
- * When used as a bitmap, the allocated length must be PG_UINT16_MAX and
- * each array entry represents the status of 16 blocks. The least significant
- * bit of the first array element is the status of the lowest-numbered
- * block covered by this chunk.
+ * When the number of modified blocks in a given chunk is large, we switch
+ * to a bitmap representation.
  *
- * Chunks aren't self-identifying. A chunk doesn't tell you whether it's
- * being used as an array of offsets or a bitmap; and if it's being used
- * as an array of offsets, it also doesn't tell you the allocated length
- * or how many entries are being used. That information is stored in the
- * BlockRefTableEntry.
+ * These same basic representational choices are used both when a block
+ * reference table is stored in memory and when it is serialized to disk.
+ *
+ * In the in-memory representation, we initially allocate each chunk with
+ * space for a number of entries given by INITIAL_ENTRIES_PER_CHUNK and
+ * increase that as necessary until we reach MAX_ENTRIES_PER_CHUNK.
+ * Any chunk whose allocated size reaches MAX_ENTRIES_PER_CHUNK is converted
+ * to a bitmap, and thus never needs to grow further.
  */
 #define BLOCKS_PER_CHUNK		(1 << 16)
 #define BLOCKS_PER_ENTRY		(BITS_PER_BYTE * sizeof(uint16))
@@ -80,6 +91,8 @@ typedef uint16 *BlockRefTableChunk;
  * 'chunk_usage' is an array storing the number of elements used in each
  * chunk. If that value is less than MAX_ENTIRES_PER_CHUNK, the corresonding
  * chunk is used as an array; else the corresponding chunk is used as a bitmap.
+ * When used as a bitmap, the least significant bit of the first array element
+ * is the status of the lowest-numbered block covered by this chunk.
  *
  * 'chunk_data' is the array of chunks.
  */

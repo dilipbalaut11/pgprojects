@@ -23,6 +23,9 @@
 #define NUM_SUMMARY_ATTS	6
 #define MAX_BLOCKS_PER_CALL	256
 
+/*
+ * List the WAL summary files available in pg_wal/summaries.
+ */
 Datum
 pg_available_wal_summaries(PG_FUNCTION_ARGS)
 {
@@ -56,6 +59,10 @@ pg_available_wal_summaries(PG_FUNCTION_ARGS)
 	return (Datum) 0;
 }
 
+/*
+ * List the contents of a WAL summary file identified by TLI, start LSN,
+ * and end LSN.
+ */
 Datum
 pg_wal_summary_contents(PG_FUNCTION_ARGS)
 {
@@ -74,17 +81,27 @@ pg_wal_summary_contents(PG_FUNCTION_ARGS)
 	rsi = (ReturnSetInfo *) fcinfo->resultinfo;
 	memset(nulls, 0, sizeof(nulls));
 
+	/*
+	 * Since the timeline could at least in theory be more than 2^31, and
+	 * since we don't have unsigned types at the SQL level, it is passed as
+	 * a 64-bit integer. Test whether it's out of range.
+	 */
 	raw_tli = PG_GETARG_INT64(0);
 	if (raw_tli < 1 || raw_tli > PG_INT32_MAX)
-		elog(ERROR, "tli sux");
+		ereport(ERROR,
+				errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				errmsg("invalid timeline %lld", (long long) raw_tli));
 
+	/* Prepare to read the specified WAL summry file. */
 	ws.tli = (TimeLineID) raw_tli;
 	ws.start_lsn = PG_GETARG_LSN(1);
 	ws.end_lsn = PG_GETARG_LSN(2);
 	wsfile = OpenWalSummaryFile(&ws, false);
 	reader = CreateBlockRefTableReader(wsfile);
 
-	while (BlockRefTableReaderNextRelation(reader, &rlocator, &forknum, &limit_block))
+	/* Loop over relation forks. */
+	while (BlockRefTableReaderNextRelation(reader, &rlocator, &forknum,
+										   &limit_block))
 	{
 		BlockNumber	blocks[MAX_BLOCKS_PER_CALL];
 		HeapTuple	tuple;
@@ -96,6 +113,7 @@ pg_wal_summary_contents(PG_FUNCTION_ARGS)
 		values[2] = ObjectIdGetDatum(rlocator.dbOid);
 		values[3] = Int16GetDatum((int16) forknum);
 
+		/* Loop over blocks within the current relation fork. */
 		while (true)
 		{
 			int		nblocks;
@@ -103,10 +121,15 @@ pg_wal_summary_contents(PG_FUNCTION_ARGS)
 
 			CHECK_FOR_INTERRUPTS();
 
-			nblocks = BlockRefTableReaderGetBlocks(reader, blocks, MAX_BLOCKS_PER_CALL);
+			nblocks = BlockRefTableReaderGetBlocks(reader, blocks,
+												   MAX_BLOCKS_PER_CALL);
 			if (nblocks == 0)
 				break;
 
+			/*
+			 * For each block that we specifically know to have been modified,
+			 * emit a row with that block number and limit_block = false.
+			 */
 			values[5] = BoolGetDatum(false);
 			for (i = 0; i < nblocks; ++i)
 			{
@@ -116,6 +139,14 @@ pg_wal_summary_contents(PG_FUNCTION_ARGS)
 				tuplestore_puttuple(rsi->setResult, tuple);
 			}
 
+			/*
+			 * If the limit block is not InvalidBlockNumber, emit an exta
+			 * row with that block number and limit_block = true.
+			 *
+			 * There is no point in doing this when the limit_block is
+			 * InvalidBlockNumber, because no block with that number or any
+			 * higher number can ever exist.
+			 */
 			if (BlockNumberIsValid(limit_block))
 			{
 				values[4] = Int64GetDatum((int64) limit_block);
@@ -127,6 +158,7 @@ pg_wal_summary_contents(PG_FUNCTION_ARGS)
 		}
 	}
 
+	/* Cleanup */
 	DestroyBlockRefTableReader(reader);
 	FileClose(wsfile);
 

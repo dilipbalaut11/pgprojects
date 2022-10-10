@@ -77,6 +77,9 @@ GetWalSummaries(TimeLineID tli, XLogRecPtr start_lsn, XLogRecPtr end_lsn)
 	return result;
 }
 
+/*
+ * XXX
+ */
 bool
 WalSummariesAreComplete(List *wslist, TimeLineID tli, XLogRecPtr start_lsn,
 						XLogRecPtr end_lsn)

@@ -2,7 +2,16 @@
  *
  * walsummarizer.c
  *
- * XXX SUMMARIZE WHAT THE WAL SUMMARIZER DOES HERE
+ * Background process to perform WAL summarization, if it is enabled.
+ * It continuously scans the write-ahead log and periodically emits a
+ * summary file which indicates which blocks in which relation forks
+ * were modified by WAL records in the LSN range covered by the summary
+ * file. See walsummary.c and blkreftable.c for more details on the
+ * naming and contents of WAL summary files.
+ *
+ * If configured to do, this background process will also remove WAL
+ * summary files when the file timestamp is older than a configurable
+ * threshold (but only if the WAL has been removed first).
  *
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  *

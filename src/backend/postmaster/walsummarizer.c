@@ -100,6 +100,11 @@ static long sleep_quanta = 1;
 static long pages_read_since_last_sleep = 0;
 
 /*
+ * Most recent RedoRecPtr value observed by MaybeRemoveOldWalSummaries.
+ */
+static XLogRecPtr redo_pointer_at_last_summary_removal = InvalidXLogRecPtr;
+
+/*
  * GUC parameters
  */
 int			wal_summarize_mb = 256;
@@ -120,6 +125,7 @@ static int	summarizer_read_local_xlog_page(XLogReaderState *state,
 											XLogRecPtr targetRecPtr,
 											char *cur_page);
 static void summarizer_wait_for_wal(void);
+static void MaybeRemoveOldWalSummaries(void);
 
 /*
  * Amount of shared memory required for this module.
@@ -291,10 +297,14 @@ WalSummarizerMain(void)
 		XLogRecPtr	cutoff_lsn;
 		XLogRecPtr	end_of_summary_lsn;
 
+		/* Flush any leaked data in the top-level context */
+		MemoryContextResetAndDeleteChildren(context);
+
 		/* Process any signals received recently. */
 		HandleWalSummarizerInterrupts();
 
-		/* XXX also need to think about removing old WAL summaries */
+		/* If it's time to remove any old WAL summaries, do that now. */
+		MaybeRemoveOldWalSummaries();
 
 		/* Find the LSN and TLI up to which we can safely summarize. */
 		latest_lsn = GetLatestLSN(&latest_tli);
@@ -1118,4 +1128,86 @@ summarizer_wait_for_wal(void)
 
 	/* Reset count of pages read. */
 	pages_read_since_last_sleep = 0;
+}
+
+/*
+ * Most recent RedoRecPtr value observed by RemoveOldWalSummaries.
+ */
+static void
+MaybeRemoveOldWalSummaries(void)
+{
+	XLogRecPtr	redo_pointer = GetRedoRecPtr();
+	List	   *wslist;
+	time_t		cutoff_time;
+
+	/* If WAL summary removal is disabled, don't do anything. */
+	if (wal_summarize_keep_time == 0)
+		return;
+
+	/*
+	 * If the redo pointer has not advanced, don't do anything.
+	 *
+	 * This has the effect that we only try to remove old WAL summary files
+	 * once per checkpoint cycle.
+	 */
+	if (redo_pointer == redo_pointer_at_last_summary_removal)
+		return;
+	redo_pointer_at_last_summary_removal = redo_pointer;
+
+	/*
+	 * Files should only be removed if the last modification time precedes
+	 * the cutoff time we compute here.
+	 */
+	cutoff_time = time(NULL) - 60 * wal_summarize_keep_time;
+
+	/* Get all the summaries that currently exist. */
+	wslist = GetWalSummaries(0, InvalidXLogRecPtr, InvalidXLogRecPtr);
+
+	/* Loop until all summaries have been considered for removal. */
+	while (wslist != NIL)
+	{
+		ListCell   *lc;
+		XLogSegNo	oldest_segno;
+		XLogRecPtr	oldest_lsn = InvalidXLogRecPtr;
+		TimeLineID	selected_tli;
+
+		CHECK_FOR_INTERRUPTS();
+
+		/*
+		 * Pick a timeline for which some summary files still exist on disk,
+		 * and find the oldest LSN that still exists on disk for that timeline.
+		 */
+		selected_tli = ((WalSummaryFile *) linitial(wslist))->tli;
+		oldest_segno = XLogGetOldestSegno(selected_tli);
+		if (oldest_segno != 0)
+			XLogSegNoOffsetToRecPtr(oldest_segno, 0, wal_segment_size,
+									oldest_lsn);
+
+
+		/* Consider each WAL file on the selected timeline in turn. */
+		foreach(lc, wslist)
+		{
+			WalSummaryFile *ws = lfirst(lc);
+
+			CHECK_FOR_INTERRUPTS();
+
+			/* If it's not on this timeline, it's not time to consider it. */
+			if (selected_tli != ws->tli)
+				continue;
+
+			/*
+			 * If the WAL doesn't exist any more, we can remove it if the file
+			 * modification time is old enough.
+			 */
+			if (XLogRecPtrIsInvalid(oldest_lsn) || ws->end_lsn <= oldest_lsn)
+				RemoveWalSummaryIfOlderThan(ws, cutoff_time);
+
+			/*
+			 * Whether we we removed the file or not, we need not consider
+			 * it again.
+			 */
+			wslist = foreach_delete_current(wslist, lc);
+			pfree(ws);
+		}
+	}
 }

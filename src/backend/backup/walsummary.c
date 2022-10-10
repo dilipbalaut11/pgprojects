@@ -12,6 +12,9 @@
 
 #include "postgres.h"
 
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include "access/xlog_internal.h"
 #include "backup/walsummary.h"
 
@@ -113,6 +116,40 @@ OpenWalSummaryFile(WalSummaryFile *ws, bool missing_ok)
 				 errmsg("could not open file \"%s\": %m", path)));
 
 	return file;
+}
+
+/*
+ * Remove a WAL summary file if the last modification time precedes the
+ * cutoff time.
+ */
+void
+RemoveWalSummaryIfOlderThan(WalSummaryFile *ws, time_t cutoff_time)
+{
+	char	path[MAXPGPATH];
+	struct stat	statbuf;
+
+	snprintf(path, MAXPGPATH,
+			 XLOGDIR "/summaries/%08X%08X%08X%08X%08X.summary",
+			 ws->tli,
+			 LSN_FORMAT_ARGS(ws->start_lsn),
+			 LSN_FORMAT_ARGS(ws->end_lsn));
+
+	if (lstat(path, &statbuf) != 0)
+	{
+		if (errno == ENOENT)
+			return;
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not stat file \"%s\": %m", path)));
+	}
+	if (statbuf.st_mtime >= cutoff_time)
+		return;
+	if (unlink(path) != 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not stat file \"%s\": %m", path)));
+	ereport(DEBUG2,
+			(errmsg_internal("removing file \"%s\"", path)));
 }
 
 /*

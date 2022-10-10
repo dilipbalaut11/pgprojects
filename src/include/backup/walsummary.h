@@ -12,6 +12,8 @@
 #ifndef WALSUMMARY_H
 #define WALSUMMARY_H
 
+#include <time.h>
+
 #include "access/xlogdefs.h"
 #include "nodes/pg_list.h"
 #include "storage/fd.h"
@@ -28,5 +30,7 @@ extern List *GetWalSummaries(TimeLineID tli, XLogRecPtr start_lsn,
 extern bool WalSummariesAreComplete(List *wslist, TimeLineID tli,
 									XLogRecPtr start_lsn, XLogRecPtr end_lsn);
 extern File OpenWalSummaryFile(WalSummaryFile *ws, bool missing_ok);
+extern void RemoveWalSummaryIfOlderThan(WalSummaryFile *ws,
+										time_t cutoff_time);
 
 #endif							/* WALSUMMARY_H */

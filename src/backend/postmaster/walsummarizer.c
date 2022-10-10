@@ -84,7 +84,7 @@ static WalSummarizerData *WalSummarizerCtl;
  * the multiplier. It should vary between 1 and MAX_SLEEP_QUANTA, depending
  * on system activity. See summarizer_wait_for_wal() for how we adjust this.
  */
-long		sleep_quanta = 1;
+static long	sleep_quanta = 1;
 
 /*
  * The sleep time will always be a multiple of 200ms and will not exceed
@@ -97,7 +97,7 @@ long		sleep_quanta = 1;
  * This is a count of the number of pages of WAL that we've read since the
  * last time we waited for more WAL to appear.
  */
-long		pages_read_since_last_sleep = 0;
+static long	pages_read_since_last_sleep = 0;
 
 /*
  * GUC parameters

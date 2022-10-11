@@ -70,9 +70,6 @@ typedef struct
 	XLogRecPtr	read_upto;
 	bool		end_of_wal;
 	bool		waited;
-	XLogRecPtr	redo_pointer;
-	bool		redo_pointer_reached;
-	XLogRecPtr	redo_pointer_refresh_lsn;
 } SummarizerReadLocalXLogPrivate;
 
 /* Pointer to shared memory state. */
@@ -607,6 +604,7 @@ SummarizeWAL(TimeLineID tli, bool historic,
 	XLogRecPtr	summary_end_lsn = cutoff_lsn;
 	char		temp_path[MAXPGPATH];
 	char		final_path[MAXPGPATH];
+	bool		found_redo_ptr = false;
 	File		file;
 	BlockRefTable *brtab = CreateEmptyBlockRefTable();
 
@@ -615,10 +613,6 @@ SummarizeWAL(TimeLineID tli, bool historic,
 		palloc0(sizeof(SummarizerReadLocalXLogPrivate));
 	private_data->tli = tli;
 	private_data->read_upto = maximum_lsn;
-	private_data->redo_pointer = GetRedoRecPtr();
-	private_data->redo_pointer_refresh_lsn = start_lsn;
-	private_data->redo_pointer_reached =
-		(start_lsn >= private_data->redo_pointer);
 
 	/* Create xlogreader. */
 	xlogreader = XLogReaderAllocate(wal_segment_size, NULL,
@@ -781,9 +775,29 @@ SummarizeWAL(TimeLineID tli, bool historic,
 			case RM_XACT_ID:
 				SummarizeXactRecord(xlogreader, brtab);
 				break;
+			case RM_XLOG_ID:
+				/*
+				 * We will end the summary file if the checkpoint redo point or
+				 * shutdown checkpoint WAL record is found. It is not possible
+				 * to use the checkpoint record for this purpose since there
+				 * may be other WALs inserted concurrently between the redo and
+				 * checkpoint LSNs. Therefore, we insert the new special
+				 * purpose record exactly at the redo LSN. We can, however, use
+				 * the checkpoint record itself if it is a shutdown checkpoint,
+				 * as no WALs could be inserted concurrently during the
+				 * shutdown checkpoint.
+				 */
+				if (xlogreader->ReadRecPtr > summary_start_lsn &&
+					(record->xl_info == XLOG_CHECKPOINT_REDOPOINT ||
+					record->xl_info == XLOG_CHECKPOINT_SHUTDOWN))
+					found_redo_ptr = true;
+				break;
 			default:
 				break;
 		}
+
+		if (found_redo_ptr)
+			break;
 
 		/* Feed block references from xlog record to block reference table. */
 		for (block_id = 0; block_id <= XLogRecMaxBlockId(xlogreader);
@@ -808,38 +822,6 @@ SummarizeWAL(TimeLineID tli, bool historic,
 
 		/* Update our notion of where this summary file ends. */
 		summary_end_lsn = xlogreader->EndRecPtr;
-
-		/*
-		 * We attempt, on a best effort basis only, to make WAL summary file
-		 * boundaries line up with checkpoint cycles. So, if the last redo
-		 * pointer we've seen was in the future, and we just reached it, stop
-		 * the summary file here.
-		 */
-		if (!private_data->redo_pointer_reached &&
-			xlogreader->EndRecPtr >= private_data->redo_pointer)
-			break;
-
-		/*
-		 * Periodically update our notion of the redo pointer, because it
-		 * might be changing concurrently. There's no interlocking here: we
-		 * might race past the new redo pointer before we learn about it.
-		 * That's OK; we only use the redo pointer as a heuristic for where to
-		 * stop summarizing.
-		 *
-		 * It would be nice if we could just fetch the updated redo pointer on
-		 * every pass through this loop, but that seems a bit too expensive:
-		 * GetRedoRecPtr acquires a heavily-contended spinlock. So, instead,
-		 * just fetch the updated value if we've just had to sleep, or if
-		 * we've read more than a segment's worth of WAL without sleeping.
-		 */
-		if (private_data->waited || xlogreader->EndRecPtr >
-			private_data->redo_pointer_refresh_lsn + wal_segment_size)
-		{
-			private_data->redo_pointer = GetRedoRecPtr();
-			private_data->redo_pointer_refresh_lsn = xlogreader->EndRecPtr;
-			private_data->redo_pointer_reached =
-				(xlogreader->EndRecPtr >= private_data->redo_pointer);
-		}
 	}
 
 	/* Destroy xlogreader. */

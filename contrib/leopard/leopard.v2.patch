@@ -1,0 +1,2804 @@
+diff --git a/leopard/Makefile b/leopard/Makefile
+index 58674269..ea27bf55 100644
+--- a/leopard/Makefile
++++ b/leopard/Makefile
+@@ -21,6 +21,7 @@ OBJS = \
+ 	access/leopardtoast.o \
+ 	access/leopardtuple.o \
+ 	access/leopardvismap.o \
++	access/rda_heap.o \
+ 	module.o
+ 
+ SUBDIRS = \
+@@ -41,22 +42,18 @@ export with_icu
+ REGRESS_OPTS = --dlpath=$(top_builddir)/src/test/regress
+ REGRESS_OPTS += --load-extension=leopard
+ 
++# removed type_sanity
+ REGRESS_OPTS += --temp-config $(top_srcdir)/contrib/leopard/leopard.conf
+ REGRESS_OPTS += --temp-config $(top_srcdir)/contrib/leopard/testing.conf
+-REGRESS = tablespace boolean char name varchar text int2 int4 int8 oid float4 float8 bit numeric txid uuid enum money rangetypes pg_lsn regproc strings numerology point lseg line box path polygon circle date time timetz timestamp timestamptz interval inet macaddr macaddr8 multirangetypes create_function_0 geometry horology tstypes regex type_sanity opr_sanity misc_sanity comments expressions unicode xid mvcc create_function_1 create_type create_table create_function_2 copy copyselect copydml insert insert_conflict create_misc create_operator create_procedure create_index_spgist create_view index_including index_including_gist create_aggregate create_function_3 create_cast constraints triggers typed_table vacuum drop_if_exists roleattributes hash_func errors infinite_recurse select_implicit select_having case transactions random btree_index hash_index update delete namespace prepared_xacts gin gist spgist privileges init_privs collate matview lock replica_identity rowsecurity object_address tablesample drop_operator password identity generated join_hash guc bitmapops combocid tsearch tsdicts window functional_deps advisory_lock indirect_toast equivclass json jsonb json_encoding jsonpath jsonpath_encoding jsonb_jsonpath plancache plpgsql copy2 temp domain rangefuncs prepare conversion truncate reloptions hash_part indexing partition_aggregate partition_info tuplesort explain compression oidjoins fast_default
++#REGRESS = tablespace boolean char name varchar text int2 int4 int8 oid float4 float8 bit numeric txid uuid enum money rangetypes pg_lsn regproc strings numerology point lseg line box path polygon circle date time timetz timestamp timestamptz interval inet macaddr macaddr8 multirangetypes create_function_0 geometry horology tstypes regex opr_sanity misc_sanity comments expressions unicode xid mvcc create_function_1 create_type create_table create_function_2 copy copyselect copydml insert insert_conflict create_misc create_operator create_procedure create_index_spgist create_view index_including index_including_gist create_aggregate create_function_3 create_cast constraints triggers typed_table vacuum drop_if_exists roleattributes hash_func errors infinite_recurse select_implicit select_having case transactions random btree_index hash_index update delete namespace prepared_xacts gin gist spgist privileges init_privs collate matview lock replica_identity rowsecurity object_address tablesample drop_operator password identity generated join_hash guc bitmapops combocid tsearch tsdicts window functional_deps advisory_lock indirect_toast equivclass json jsonb json_encoding jsonpath jsonpath_encoding jsonb_jsonpath plancache plpgsql copy2 temp domain rangefuncs prepare conversion truncate reloptions hash_part indexing partition_aggregate partition_info tuplesort explain compression oidjoins fast_default
+ 
+ ISOLATION_OPTS = --load-extension=leopard
+ 
+ ISOLATION_OPTS += --inputdir=isolation
+ ISOLATION_OPTS += --temp-config $(top_srcdir)/contrib/leopard/leopard.conf
+ ISOLATION_OPTS += --temp-config $(top_srcdir)/contrib/leopard/testing.conf
+-ISOLATION = nowait-5 ri-trigger vacuum-reltuples lock-update-delete vacuum-conflict aborted-keyrevoke read-write-unique-2 total-cash simple-write-skew tuplelock-update insert-conflict-do-update-3 nowait partition-drop-index-locking lock-committed-update nowait-3 insert-conflict-do-nothing receipt-report temp-schema-cleanup read-write-unique-3 lock-update-traversal sequence-ddl partial-index serializable-parallel temporal-range-integrity fk-deadlock2 propagate-lock-delete alter-table-3 eval-plan-qual-trigger lock-committed-keyupdate detach-partition-concurrently-2 predicate-hash prepared-transactions predicate-lock-hot-tuple prepared-transactions-cic update-conflict-out tuplelock-upgrade-no-deadlock recently-dead partition-concurrent-attach multixact-no-forget reindex-concurrently read-only-anomaly-3 recently-dead2 update-locked-tuple horizons read-only-anomaly detach-partition-concurrently-3 multixact-no-deadlock tuplelock-conflict delete-abort-savept fk-deadlock reindex-concurrently-toast create-trigger deadlock-soft-2 delete-abort-savept-2 freeze-the-dead truncate-conflict nowait-4 serializable-parallel-2 multiple-row-versions alter-table-4 fk-partitioned predicate-gist partition-key-update-1 fk-contention alter-table-2 skip-locked-2 read-only-anomaly-2 deadlock-simple partition-key-update-2 skip-locked fk-partitioned-1 classroom-scheduling tuplelock-partition timeouts predicate-gin two-ids nowait-2 async-notify alter-table-1 inherit-temp fk-partitioned-2 skip-locked-3 deadlock-parallel vacuum-concurrent-drop project-manager read-write-unique-4 drop-index-concurrently-1 cursor-2 partition-key-update-4 detach-partition-concurrently-1 vacuum-skip-locked fk-partitioned-savepoints referential-integrity reindex-schema detach-partition-concurrently-4 cursor-1 multiple-cic deadlock-soft partition-key-update-3 deadlock-hard insert-conflict-do-update-2 skip-locked-4 eval-plan-qual read-write-unique insert-conflict-do-update index-only-scan insert-conflict-specconflict insert-conflict-do-nothing-2 plpgsql-toast
+-
+-$(OBJS): access_dir
+-
+-.PHONY: access_dir
+-access_dir:
+-	mkdir -p access
++# removed temp-schema-cleanup
++ISOLATION = leopard-rda-unit leopard-update nowait-5 ri-trigger vacuum-reltuples lock-update-delete vacuum-conflict aborted-keyrevoke read-write-unique-2 total-cash simple-write-skew tuplelock-update insert-conflict-do-update-3 nowait partition-drop-index-locking lock-committed-update nowait-3 insert-conflict-do-nothing receipt-report read-write-unique-3 lock-update-traversal sequence-ddl partial-index serializable-parallel temporal-range-integrity fk-deadlock2 propagate-lock-delete alter-table-3 eval-plan-qual-trigger lock-committed-keyupdate detach-partition-concurrently-2 predicate-hash prepared-transactions predicate-lock-hot-tuple prepared-transactions-cic update-conflict-out tuplelock-upgrade-no-deadlock recently-dead partition-concurrent-attach multixact-no-forget reindex-concurrently read-only-anomaly-3 recently-dead2 update-locked-tuple horizons read-only-anomaly detach-partition-concurrently-3 multixact-no-deadlock tuplelock-conflict delete-abort-savept fk-deadlock reindex-concurrently-toast create-trigger deadlock-soft-2 delete-abort-savept-2 freeze-the-dead truncate-conflict nowait-4 serializable-parallel-2 multiple-row-versions alter-table-4 fk-partitioned predicate-gist partition-key-update-1 fk-contention alter-table-2 skip-locked-2 read-only-anomaly-2 deadlock-simple partition-key-update-2 skip-locked fk-partitioned-1 classroom-scheduling tuplelock-partition timeouts predicate-gin two-ids nowait-2 async-notify alter-table-1 inherit-temp fk-partitioned-2 skip-locked-3 deadlock-parallel vacuum-concurrent-drop project-manager read-write-unique-4 drop-index-concurrently-1 cursor-2 partition-key-update-4 detach-partition-concurrently-1 vacuum-skip-locked fk-partitioned-savepoints referential-integrity reindex-schema detach-partition-concurrently-4 cursor-1 multiple-cic deadlock-soft partition-key-update-3 deadlock-hard insert-conflict-do-update-2 skip-locked-4 eval-plan-qual read-write-unique insert-conflict-do-update index-only-scan insert-conflict-specconflict insert-conflict-do-nothing-2 plpgsql-toast
+ 
+ TAP_TESTS = 1
+ 
+diff --git a/leopard/README.md b/leopard/README.md
+new file mode 100644
+index 00000000..42ec9eb2
+--- /dev/null
++++ b/leopard/README.md
+@@ -0,0 +1,59 @@
++= Leopard Table Access Method (TAM)
++
++Leopard is a Table Access Method (TAM) extension that is
++tuned specifically for frequently updated tables. Leopard
++tables will bloat significantly less during UPDATE workloads,
++especially when longer running scans are in progress. MVCC
++semantics are not affected.
++
++Specifically, if HOT updates are more than 90% of the workload,
++in comparison to INSERTs and DELETEd, then a table may benefit
++from using Leopard, especially in a mixed workload server.
++Temporary tables do not benefit from using Leopard.
++
++Leopard's default fillfactor is 95 (percent), but can be
++adjusted to other values as needed.
++
++Leopard will provide no benefit for these workload types
++
++* Read-mostly workloads
++* INSERT-mostly workloads
++* INSERT/DELETE (queue) workloads
++* Infrequently updated tables
++
++Thus, Leopard is not recommended as the default TAM.
++
++Leopard is designed to work with EDB Postgres Distributed.
++
++== Installing Leopard
++
++	CREATE EXTENSION leopard;
++
++== Using Leopard
++
++Tables can be created to use Leopard like this
++
++	CREATE TABLE tab (
++	 ....
++	)
++	USING leopard;
++
++There are no additional parameters to use with Leopard.
++
++== Usage details
++
++Leopard is tuned for frequently updated tables, for cases where
++an index is used to locate rows before they are updated.
++SeqScan updates may not be optimized as well.
++
++SeqScans of the table are possible with full MVCC, but they may
++be measurably slower, depending upon the update rate, the size of
++the table and the age of the snapshot used for the scan.
++
++Leopard will not throw ERRORs for old snapshots.
++
++Leopard does not support Bitmap or Tid range scans.
++
++CREATE INDEX, VACUUM, ANALYZE are unaffected for Leopard.
++
++CLUSTER and VACUUM FULL are not possible with Leopard.
+diff --git a/leopard/TODO b/leopard/TODO
+new file mode 100644
+index 00000000..2d2d3b89
+--- /dev/null
++++ b/leopard/TODO
+@@ -0,0 +1,13 @@
++= TODO
++
++* Correctly return tuples in scan from RDA, memory management
++
++* Complete leopardgetpage()
++
++* Add tests for SeqScan
++
++* Archive less than ALL recently dead tuples
++
++* Make multi-row insert work with RDA
++
++* Optimize index build scan for case of empty RDA for a table
+diff --git a/leopard/access/README_RDA.md b/leopard/access/README_RDA.md
+new file mode 100644
+index 00000000..e59400c3
+--- /dev/null
++++ b/leopard/access/README_RDA.md
+@@ -0,0 +1,78 @@
++= Leopard Recently Dead Archive (RDA) notes
++
++== Basic Overview
++
++Leopard will send recently dead rows to the RDA
++as a last resort before it needs to switch to
++another data block when doing an UPDATE.
++
++The general notes here are independent of the
++implementation details of the RDA module,
++hence why they exist in a separate README.
++
++The optimization of the RDA module is very important
++to the success of the Leopard concept, so likely
++much fine tuning will be needed over time.
++As a result, we may need specially designed
++diagnostic and cumulative statistics for RDA.
++
++== API
++
++* rda_insert() - adds a new tuple to the RDA
++* rda_get() - retrieves one visible tuple from RDA
++* rda_trim() - truncates rows from RDA, once DEAD
++
++The RDA is optimized for OLTP, rather than whole-page
++processing. Functions for multi-row insert/get
++might be added later.
++
++Repeated rda_insert() is likely to be clustered
++anyway, so not sure of the additional benefit of a
++multi-row rda_insert() other than reduction in WAL
++traffic, which might be significant.
++
++== Critical Sections
++
++Insertions into the RDA should be WAL-logged, so
++that the data is visible on read replicas/standbys.
++This is optional, but the option to SKIP_WAL is
++set at table level in Postgres heaps, so we need
++to make a big decision whether to use it or not,
++which really means we must choose WAL-logged for
++practicality.
++
++Removal of rows from data block are also WAL-logged.
++
++That gives us a general flow like this:
++
++START_CRIT_SECTION();
++
++	START_CRIT_SECTION();
++
++	WAL-log changes to RDA heap
++	Insert into RDA heap
++
++	WAL-log changes to RDA index
++	Insert into RDA index (if any)
++
++	END_CRIT_SECTION();
++
++	START_CRIT_SECTION();
++
++	(This is identical OR very similar to pruning:)
++	WAL-log removal of rows from data block
++	Remove rows from data block
++	Repair fragmentation
++
++	END_CRIT_SECTION();
++
++END_CRIT_SECTION();
++
++== Aftermath of a crash
++
++It is then important that the scan
++code doesn't request RDA rows for an update chain for which it already
++has a visible tuple, otherwise we might see multiple visible tuples in
++the aftermath of a crash. And it is also important that we only scan
++the RDA using the index, so that any crash that leaves an RDA row but
++no index row would never be found by rda_get(). 
+diff --git a/leopard/access/README_leopard.md b/leopard/access/README_leopard.md
+new file mode 100644
+index 00000000..9da7cd4e
+--- /dev/null
++++ b/leopard/access/README_leopard.md
+@@ -0,0 +1,129 @@
++= Leopard Table Access Method (TAM)
++
++Leopard adds an important capability: the ability
++to archive recently dead tuples as a mechanism
++to avoid performing an expensive multi-block non-HOT UPDATE,
++which causes heap and index bloat. PostgreSQL does
++not currently provide a mechanism to repair index bloat,
++other than a full REINDEX, so this is especially important
++to avoid.
++
++Thus, Leopard is optimized for frequently updated tables,
++or cases where the UPDATEs are much more prevalent than
++INSERTs and DELETEs.
++
++With this use case in mind, Leopard's default fillfactor
++is 95 (percent).
++
++Leopard will provide no benefit for INSERT-only workloads,
++but nor will it give an overhead either.
++
++Leopard will provide no benefit for INSERT/DELETE workloads
++such as queue tables.
++
++Leopard is designed to work with EDB Postgres Distributed.
++
++== Archiving of Recently Dead tuples
++
++Once archived, there is a higher cost to bring the
++rows back, so we want to archive as few rows as
++possible.
++
++Leopard follows a number of heuristics, which will be
++subject to some degree of further tuning.
++
++* Leopard can archive rows that are Recently Dead,
++but only ever does this as a last resort, if
++pruning is not possible. This is possible because
++archiving happens in a later transaction, so is
++not performed eagerly.
++
++* When forced to archive, Leopard aims to archive as
++many rows as needed to free enough space for 2x the
++space required for the current UPDATE, or a minimum of 2.
++This gives space in case archiving is not possible later,
++which can occur if we cannot obtain a block cleanup lock.
++These rows will be naturally clustered in the RDA, thus
++improving dearchive performance.
++
++* Leopard will preferentially try to archive rows on
++the update chain that is about to be UPDATEd, rather
++than pick recently dead rows at random.
++
++* Leopard will archive never-visible rows, such as xmin=xmax,
++but in this case will choose not to store the main tuple,
++since it will never be visible.
++
++We archive only recently dead tuples on the root end of
++the chain, always leaving the last tuple.
++
++Note that when we archive a tuple, it is removed completely
++just as if it had been pruned when dead. Thus we get the
++full benefit of removing even small rows, and the huge
++benefit of not needing to alter the block format at all to
++make Leopard work. Just to restate this: there is no pointer
++or metadata left on-block to help locate any archived rows.
++The only keys we have are the table oid and the root ItemPointer.
++
++Archiving is covered by two WAL records:
++
++* The WAL record covering the RDA
++* The prune WAL record, identical to the normal prune, except
++  that the latestRemovedXid is always InvalidTransactionId,
++  which is a valid, supported setting.
++
++Note that there is no additional WAL record type required
++for Leopard, so no separate rmgr is required either.
++
++Note also that the Leopard page format is identical to the
++standard Heap page format; yes, completely identical. As a result
++all standard utilities, such as page inspect, amcheck, etc
++will work without modification. Which also means that you
++cannot tell by looking at a block whether it was written by
++Leopard, or by Heap.
++
++== Dearchival of rows during scans
++
++If Leopard scans an all-visible block then it has nothing
++else to do since there cannot be any archived tuples from
++the block that would be visible to the current scan.
++
++If Leopard follows an index TID to the heap it will then
++follow the chain looking for visible tuples. If the chain
++starts with an updated tuple where the first tuple is in
++the future, this is taken as an indication that recently
++dead rows have been archived. In this case we scan the
++archive for a visible row, if any exist.
++
++If we attempt a page scan and find that it is not all-visible,
++we first find the root tuples on the page, then scan each chain
++individually, potentially retrieving rows for each.
++So there is no page-level scan where we treat each tuple as
++potentially visible, as we do with normal heap; the only
++access path is via HOT chains.
++
++We archive only recently dead tuples on the root end of the chain,
++always leaving the last tuple. This ensures that we have at least
++one tuple in the chain, which then allows us to judge whether that
++tuple is in the past or the future, visibility-wise. If a chain
++has a future-visible tuple that has been HOT UPDATEd, but no currently
++visible tuple, we infer that an archived tuple may exist that is
++visible to us and so choose to scan the archive for a visible tuple.
++It might be the case that this is actually just a
++recently INSERTed and then UPDATEd tuple, but that is considered
++to be less likely for the stated use-case of frequent updates,
++and so it is acceptable that we might occaisionally waste a call
++to dearchive a row when there isn't one. This choice is made
++explicitly by the user when they select the Leopard TAM.
++
++Dearchival only occurs by the supported API, which implements
++concurrent actions correctly.
++
++== Supported scans
++
++Leopard does not support Bitmap or Tid range scans, since
++these do not map easily onto the Leopard concept.
++
++Leopard index build scans work without change, though currently
++always set ii_BrokenHotChain=true, though this might be
++optimized in future if the RDA has no entries for the table.
+diff --git a/leopard/access/leopard_to_heap_map.h b/leopard/access/leopard_to_heap_map.h
+index e127a0da..651b4ccb 100644
+--- a/leopard/access/leopard_to_heap_map.h
++++ b/leopard/access/leopard_to_heap_map.h
+@@ -1,7 +1,8 @@
+ #ifndef LEOPARD_TO_HEAP_MAP_H
+ #define LEOPARD_TO_HEAP_MAP_H
+ 
+-#define LEOPARD_DEFAULT_FILLFACTOR HEAP_DEFAULT_FILLFACTOR
++/* Changed for Leopard */
++#define LEOPARD_DEFAULT_FILLFACTOR 	95
+ 
+ 
+ #define FirstLowInvalidLeopardAttributeNumber FirstLowInvalidHeapAttributeNumber
+diff --git a/leopard/access/leopardam.c b/leopard/access/leopardam.c
+index ecc9b346..e8ae7900 100644
+--- a/leopard/access/leopardam.c
++++ b/leopard/access/leopardam.c
+@@ -76,6 +76,7 @@
+ #include "utils/relcache.h"
+ #include "utils/snapmgr.h"
+ #include "utils/spccache.h"
++
+ #include "access/leopardtup.h"
+ #include "access/leopardtup_details.h"
+ #include "access/leopardvalid.h"
+@@ -83,7 +84,9 @@
+ #include "access/leopardio.h"
+ #include "access/leopardvismap.h"
+ #include "access/leopardvismapdefs.h"
++#include "access/rda_heap.h"
+ 
++bool leopard_debug = true;
+ 
+ static LeopardTuple leopard_prepare_insert(Relation relation, LeopardTuple tup,
+ 									 TransactionId xid, CommandId cid, int options);
+@@ -124,6 +127,7 @@ static XLogRecPtr log_leopard_new_cid(Relation relation, LeopardTuple tup);
+ static LeopardTuple LeopardExtractReplicaIdentity(Relation rel, LeopardTuple tup, bool key_required,
+ 										bool *copy);
+ 
++static bool LeopardRDAFetch(Relation relation, ItemPointer tid, Snapshot snapshot, LeopardTuple leopardTuple);
+ 
+ /*
+  * Each tuple lock mode has a corresponding heavyweight lock, and one or two
+@@ -1747,7 +1751,7 @@ leopard_fetch_extended(Relation relation,
+  * Unlike leopard_fetch, the caller must already have pin and (at least) share
+  * lock on the buffer; it is still pinned/locked at exit.
+  */
+-bool
++LeopardTupleResponseType
+ leopard_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
+ 					   Snapshot snapshot, LeopardTuple leopardTuple,
+ 					   bool *all_dead, bool first_call)
+@@ -1759,6 +1763,7 @@ leopard_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
+ 	bool		at_chain_start;
+ 	bool		valid;
+ 	bool		skip;
++	bool		first_tuple = true;
+ 	GlobalVisState *vistest = NULL;
+ 
+ 	/* If this is not the first call, previous call returned a (live!) tuple */
+@@ -1815,7 +1820,10 @@ leopard_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
+ 		 * Shouldn't see a LEOPARD_ONLY tuple at chain start.
+ 		 */
+ 		if (at_chain_start && LeopardTupleIsLeopardOnly(leopardTuple))
++		{
++			elog(WARNING, "LEOPARD_ONLY tuple at chain start");
+ 			break;
++		}
+ 
+ 		/*
+ 		 * The xmin should match the previous xmax value, else chain is
+@@ -1824,7 +1832,10 @@ leopard_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
+ 		if (TransactionIdIsValid(prev_xmax) &&
+ 			!TransactionIdEquals(prev_xmax,
+ 								 LeopardTupleHeaderGetXmin(leopardTuple->t_data)))
++		{
++			elog(WARNING, "break in HOT chain noted");
+ 			break;
++		}
+ 
+ 		/*
+ 		 * When first_call is true (and thus, skip is initially false) we'll
+@@ -1847,10 +1858,67 @@ leopard_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
+ 								 LeopardTupleHeaderGetXmin(leopardTuple->t_data));
+ 				if (all_dead)
+ 					*all_dead = false;
+-				return true;
++
++				return LEOPARD_TUPLE_FROM_BUFFER;
++			}
++
++			/*
++			 * The current tuple is not visible.
++			 *
++			 * If
++			 *  1) it is the first tuple in the chain, since we only archive from the root
++			 *  2) the xmin is in the future according to our snapshot, which implies there
++			 *     might be an earlier version that would be visible to our snapshot
++			 *  3) it IsMVCCSnapshot(snapshot)
++			 * then we may have a tuple in the RDA that is visible, so let's check.
++			 */
++			if (LeopardTupleSatisfiesRDA(leopardTuple, snapshot))
++			{
++				if (LEOPARD_DEBUG)
++					elog(NOTICE, "future row %u/%u snapshot %u/%u",
++									LeopardTupleHeaderGetXmin(leopardTuple->t_data),
++									LeopardTupleHeaderGetRawXmax(leopardTuple->t_data),
++									snapshot->xmin, snapshot->xmax);
++
++				/*
++				 * Reset the output tuple, ready to receive a tuple from RDA
++				 */
++				leopardTuple->t_data = NULL;
++				leopardTuple->t_len = 0;
++				leopardTuple = NULL;
++
++				/*
++				 * Do we have an archived row that matches the snapshot?
++				 * If so, return it in leopardTuple.
++				 *
++				 * Serializable may not work here, since it tracks tuples by TID,
++				 * and the ones coming back from RDA may have a TID that has been
++				 * reused, causing false positives. Maybe, not sure yet.
++				 */
++				if (LeopardRDAFetch(relation, tid, snapshot, leopardTuple))
++				{
++//					LeopardCheckForSerializableConflictOut(true, relation, leopardTuple,
++//														buffer, snapshot);
++
++					/*
++					 * This is the wrong offnum, but what is the correct one?
++					 * Should we also store original TID in the RDA? Since it
++					 * only stores recently dead rows, the offnum should not
++					 * be removed/recycled until later...
++					 */
++					ItemPointerSetOffsetNumber(tid, offnum);
++//					PredicateLockTID(relation, &leopardTuple->t_self, snapshot,
++//								 LeopardTupleHeaderGetXmin(leopardTuple->t_data));
++					if (all_dead)
++						*all_dead = false;
++
++					return LEOPARD_TUPLE_FROM_RDA;
++				}
+ 			}
++
+ 		}
+ 		skip = false;
++		first_tuple = false;
+ 
+ 		/*
+ 		 * If we can't see it, maybe no one else can either.  At caller
+@@ -1885,7 +1953,22 @@ leopard_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
+ 			break;				/* end of chain */
+ 	}
+ 
+-	return false;
++	return LEOPARD_TUPLE_NOT_FOUND;
++}
++
++/*
++ * Note that leopardTuple starts pointing to a row on disk, but if an RDA entry
++ * exists, this will be replaced by a palloc'd tuple and we return true.
++ * leopardTuple is returned untouched if we return false.
++ */
++static bool
++LeopardRDAFetch(Relation relation, ItemPointer tid, Snapshot snapshot, LeopardTuple leopardTuple)
++{
++	bool	found;
++
++	found = rda_get(relation->rd_id, *tid, snapshot, true, leopardTuple);
++
++	return found;
+ }
+ 
+ /*
+@@ -3721,6 +3804,15 @@ l2:
+ 
+ 	newtupsize = MAXALIGN(newtup->t_len);
+ 
++	if (newtupsize > pagefree && !need_toast)
++	{
++		/*
++		 * Can we make some space for the update?
++		 */
++		if (leopard_make_space_for_update(relation, buffer, newtupsize))
++			pagefree = PageGetHeapFreeSpace(page);
++	}
++
+ 	if (need_toast || newtupsize > pagefree)
+ 	{
+ 		TransactionId xmax_lock_old_tuple;
+diff --git a/leopard/access/leopardam.h b/leopard/access/leopardam.h
+index 293e9a35..8785a656 100644
+--- a/leopard/access/leopardam.h
++++ b/leopard/access/leopardam.h
+@@ -41,6 +41,8 @@
+ #include "utils/inval.h"
+ #include "utils/tuplesort.h"
+ 
++extern bool leopard_debug;
++#define LEOPARD_DEBUG   unlikely(leopard_debug)
+ 
+ /* "options" flag bits for leopard_insert */
+ #define LEOPARD_INSERT_SKIP_FSM	TABLE_INSERT_SKIP_FSM
+@@ -119,6 +121,13 @@ typedef enum
+  * ----------------
+  */
+ 
++typedef enum LeopardTupleResponseType
++{
++	LEOPARD_TUPLE_NOT_FOUND = 0,
++	LEOPARD_TUPLE_FROM_BUFFER,
++	LEOPARD_TUPLE_FROM_RDA
++} LeopardTupleResponseType;
++
+ 
+ /*
+  * LeopardScanIsValid
+@@ -149,7 +158,7 @@ extern bool leopard_fetch(Relation relation, Snapshot snapshot,
+ extern bool leopard_fetch_extended(Relation relation, Snapshot snapshot,
+ 								LeopardTuple tuple, Buffer *userbuf,
+ 								bool keep_buf);
+-extern bool leopard_hot_search_buffer(ItemPointer tid, Relation relation,
++extern LeopardTupleResponseType leopard_hot_search_buffer(ItemPointer tid, Relation relation,
+ 								   Buffer buffer, Snapshot snapshot, LeopardTuple leopardTuple,
+ 								   bool *all_dead, bool first_call);
+ 
+@@ -209,6 +218,8 @@ extern void leopard_page_prune_execute(Buffer buffer,
+ 									OffsetNumber *nowunused, int nunused, bool do_partial_cleanup);
+ extern void leopard_get_root_tuples(Page page, OffsetNumber *root_offsets);
+ 
++extern bool leopard_make_space_for_update(Relation relation, Buffer buffer, Size newtupsize);
++
+ /* in leopard/vacuumlazy.c */
+ struct VacuumParams;
+ extern void leopard_vacuum_rel(Relation rel,
+@@ -231,6 +242,8 @@ extern bool XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot);
+ extern bool LeopardTupleIsSurelyDead(LeopardTuple leopardtup,
+ 								  struct GlobalVisState *vistest);
+ 
++extern bool LeopardTupleSatisfiesRDA(LeopardTuple leopardtup, Snapshot snapshot);
++
+ /*
+  * To avoid leaking too much knowledge about reorderbuffer implementation
+  * details this is implemented in reorderbuffer.c not leopardam_visibility.c
+@@ -339,12 +352,4 @@ LeopardTupleHeaderAdjustCmax(LeopardTupleHeader tup, CommandId *cmax, bool *isco
+ 	HeapTupleHeaderAdjustCmax((HeapTupleHeader) tup, cmax, iscombo);
+ }
+ 
+-
+-
+-
+-
+-extern bool ConditionalLockBufferForPartialCleanup(Buffer buffer, bool *do_partial_cleanup);
+-
+-
+-extern bool ConditionalLockBufferForPartialCleanup(Buffer buffer, bool *do_partial_cleanup);
+ #endif							/* LEOPARDAM_H */
+diff --git a/leopard/access/leopardam_handler.c b/leopard/access/leopardam_handler.c
+index 9702c5f5..ba8e72d3 100644
+--- a/leopard/access/leopardam_handler.c
++++ b/leopard/access/leopardam_handler.c
+@@ -124,7 +124,7 @@ leopardam_index_fetch_tuple(struct IndexFetchTableData *scan,
+ {
+ 	IndexFetchLeopardData *hscan = (IndexFetchLeopardData *) scan;
+ 	BufferLeopardTupleTableSlot *bslot = (BufferLeopardTupleTableSlot *) slot;
+-	bool		got_leopard_tuple;
++	LeopardTupleResponseType	got_leopard_tuple = LEOPARD_TUPLE_NOT_FOUND;
+ 
+ 	Assert(TTS_IS_BUFFERTUPLE(slot));
+ 
+@@ -157,7 +157,7 @@ leopardam_index_fetch_tuple(struct IndexFetchTableData *scan,
+ 	bslot->base.tupdata.t_self = *tid;
+ 	LockBuffer(hscan->xs_cbuf, BUFFER_LOCK_UNLOCK);
+ 
+-	if (got_leopard_tuple)
++	if (got_leopard_tuple == LEOPARD_TUPLE_FROM_BUFFER)
+ 	{
+ 		/*
+ 		 * Only in a non-MVCC snapshot can more than one member of the HOT
+@@ -168,13 +168,31 @@ leopardam_index_fetch_tuple(struct IndexFetchTableData *scan,
+ 		slot->tts_tableOid = RelationGetRelid(scan->rel);
+ 		ExecStoreBufferLeopardTuple(&bslot->base.tupdata, slot, hscan->xs_cbuf);
+ 	}
++	else if (got_leopard_tuple == LEOPARD_TUPLE_FROM_RDA)
++	{
++		if (LEOPARD_DEBUG)
++			elog(NOTICE, "forcing RDA tuple into slot");
++		*call_again = false;
++
++		slot->tts_tableOid = RelationGetRelid(scan->rel);
++
++		/*
++		 * Force our manufactured tuple into the TTSOpsBufferHeapTuple slot,
++		 * freeing the tuple from the RDA and letting the slot own it,
++		 * to be freed later by caller.
++		 */
++//		ExecForceStoreHeapTuple((HeapTuple) &bslot->base.tupdata, slot, false);
++//		if (LEOPARD_DEBUG)
++//			elog(NOTICE, "forced RDA tuple into slot");
++	}
+ 	else
+ 	{
+ 		/* We've reached the end of the HOT chain. */
+ 		*call_again = false;
+ 	}
+ 
+-	return got_leopard_tuple;
++	return (got_leopard_tuple == LEOPARD_TUPLE_FROM_RDA ||
++			got_leopard_tuple == LEOPARD_TUPLE_FROM_BUFFER);
+ }
+ 
+ 
+@@ -1195,6 +1213,14 @@ leopardam_index_build_range_scan(Relation leopardRelation,
+ 	BlockNumber root_blkno = InvalidBlockNumber;
+ 	OffsetNumber root_offsets[MaxLeopardTuplesPerPage];
+ 
++	/*
++	 * Leopard tables may have entries in the RDA that should be indexed.
++	 * XXX add later check to see if any entries exist according the the
++	 * snapshot, but for now, just set indexInfo->ii_BrokenHotChain = true
++	 * always.
++	 */
++	indexInfo->ii_BrokenHotChain = true;
++
+ 	/*
+ 	 * sanity checks
+ 	 */
+@@ -2117,160 +2143,6 @@ leopardam_estimate_rel_size(Relation rel, int32 *attr_widths,
+  * ------------------------------------------------------------------------
+  */
+ 
+-static bool
+-leopardam_scan_bitmap_next_block(TableScanDesc scan,
+-							  TBMIterateResult *tbmres)
+-{
+-	LeopardScanDesc hscan = (LeopardScanDesc) scan;
+-	BlockNumber page = tbmres->blockno;
+-	Buffer		buffer;
+-	Snapshot	snapshot;
+-	int			ntup;
+-
+-	hscan->rs_cindex = 0;
+-	hscan->rs_ntuples = 0;
+-
+-	/*
+-	 * Ignore any claimed entries past what we think is the end of the
+-	 * relation. It may have been extended after the start of our scan (we
+-	 * only hold an AccessShareLock, and it could be inserts from this
+-	 * backend).
+-	 */
+-	if (page >= hscan->rs_nblocks)
+-		return false;
+-
+-	/*
+-	 * Acquire pin on the target leopard page, trading in any pin we held before.
+-	 */
+-	hscan->rs_cbuf = ReleaseAndReadBuffer(hscan->rs_cbuf,
+-										  scan->rs_rd,
+-										  page);
+-	hscan->rs_cblock = page;
+-	buffer = hscan->rs_cbuf;
+-	snapshot = scan->rs_snapshot;
+-
+-	ntup = 0;
+-
+-	/*
+-	 * Prune and repair fragmentation for the whole page, if possible.
+-	 */
+-	leopard_page_prune_opt(scan->rs_rd, buffer);
+-
+-	/*
+-	 * We must hold share lock on the buffer content while examining tuple
+-	 * visibility.  Afterwards, however, the tuples we have found to be
+-	 * visible are guaranteed good as long as we hold the buffer pin.
+-	 */
+-	LockBuffer(buffer, BUFFER_LOCK_SHARE);
+-
+-	/*
+-	 * We need two separate strategies for lossy and non-lossy cases.
+-	 */
+-	if (tbmres->ntuples >= 0)
+-	{
+-		/*
+-		 * Bitmap is non-lossy, so we just look through the offsets listed in
+-		 * tbmres; but we have to follow any HOT chain starting at each such
+-		 * offset.
+-		 */
+-		int			curslot;
+-
+-		for (curslot = 0; curslot < tbmres->ntuples; curslot++)
+-		{
+-			OffsetNumber offnum = tbmres->offsets[curslot];
+-			ItemPointerData tid;
+-			LeopardTupleData leopardTuple;
+-
+-			ItemPointerSet(&tid, page, offnum);
+-			if (leopard_hot_search_buffer(&tid, scan->rs_rd, buffer, snapshot,
+-									   &leopardTuple, NULL, true))
+-				hscan->rs_vistuples[ntup++] = ItemPointerGetOffsetNumber(&tid);
+-		}
+-	}
+-	else
+-	{
+-		/*
+-		 * Bitmap is lossy, so we must examine each line pointer on the page.
+-		 * But we can ignore HOT chains, since we'll check each tuple anyway.
+-		 */
+-		Page		dp = (Page) BufferGetPage(buffer);
+-		OffsetNumber maxoff = PageGetMaxOffsetNumber(dp);
+-		OffsetNumber offnum;
+-
+-		for (offnum = FirstOffsetNumber; offnum <= maxoff; offnum = OffsetNumberNext(offnum))
+-		{
+-			ItemId		lp;
+-			LeopardTupleData loctup;
+-			bool		valid;
+-
+-			lp = PageGetItemId(dp, offnum);
+-			if (!ItemIdIsNormal(lp))
+-				continue;
+-			loctup.t_data = (LeopardTupleHeader) PageGetItem((Page) dp, lp);
+-			loctup.t_len = ItemIdGetLength(lp);
+-			loctup.t_tableOid = scan->rs_rd->rd_id;
+-			ItemPointerSet(&loctup.t_self, page, offnum);
+-			valid = LeopardTupleSatisfiesVisibility(&loctup, snapshot, buffer);
+-			if (valid)
+-			{
+-				hscan->rs_vistuples[ntup++] = offnum;
+-				PredicateLockTID(scan->rs_rd, &loctup.t_self, snapshot,
+-								 LeopardTupleHeaderGetXmin(loctup.t_data));
+-			}
+-			LeopardCheckForSerializableConflictOut(valid, scan->rs_rd, &loctup,
+-												buffer, snapshot);
+-		}
+-	}
+-
+-	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+-
+-	Assert(ntup <= MaxLeopardTuplesPerPage);
+-	hscan->rs_ntuples = ntup;
+-
+-	return ntup > 0;
+-}
+-
+-static bool
+-leopardam_scan_bitmap_next_tuple(TableScanDesc scan,
+-							  TBMIterateResult *tbmres,
+-							  TupleTableSlot *slot)
+-{
+-	LeopardScanDesc hscan = (LeopardScanDesc) scan;
+-	OffsetNumber targoffset;
+-	Page		dp;
+-	ItemId		lp;
+-
+-	/*
+-	 * Out of range?  If so, nothing more to look at on this page
+-	 */
+-	if (hscan->rs_cindex < 0 || hscan->rs_cindex >= hscan->rs_ntuples)
+-		return false;
+-
+-	targoffset = hscan->rs_vistuples[hscan->rs_cindex];
+-	dp = (Page) BufferGetPage(hscan->rs_cbuf);
+-	lp = PageGetItemId(dp, targoffset);
+-	Assert(ItemIdIsNormal(lp));
+-
+-	hscan->rs_ctup.t_data = (LeopardTupleHeader) PageGetItem((Page) dp, lp);
+-	hscan->rs_ctup.t_len = ItemIdGetLength(lp);
+-	hscan->rs_ctup.t_tableOid = scan->rs_rd->rd_id;
+-	ItemPointerSet(&hscan->rs_ctup.t_self, hscan->rs_cblock, targoffset);
+-
+-	pgstat_count_leopard_fetch(scan->rs_rd);
+-
+-	/*
+-	 * Set up the result slot to point to this tuple.  Note that the slot
+-	 * acquires a pin on the buffer.
+-	 */
+-	ExecStoreBufferLeopardTuple(&hscan->rs_ctup,
+-							 slot,
+-							 hscan->rs_cbuf);
+-
+-	hscan->rs_cindex++;
+-
+-	return true;
+-}
+-
+ static bool
+ leopardam_scan_sample_next_block(TableScanDesc scan, SampleScanState *scanstate)
+ {
+@@ -2552,8 +2424,8 @@ static const TableAmRoutine leopardam_methods = {
+ 	.scan_rescan = leopard_rescan,
+ 	.scan_getnextslot = leopard_getnextslot,
+ 
+-	.scan_set_tidrange = leopard_set_tidrange,
+-	.scan_getnextslot_tidrange = leopard_getnextslot_tidrange,
++	.scan_set_tidrange = NULL,
++	.scan_getnextslot_tidrange = NULL,
+ 
+ 	.parallelscan_estimate = table_block_parallelscan_estimate,
+ 	.parallelscan_initialize = table_block_parallelscan_initialize,
+@@ -2595,8 +2467,8 @@ static const TableAmRoutine leopardam_methods = {
+ 
+ 	.relation_estimate_size = leopardam_estimate_rel_size,
+ 
+-	.scan_bitmap_next_block = leopardam_scan_bitmap_next_block,
+-	.scan_bitmap_next_tuple = leopardam_scan_bitmap_next_tuple,
++	.scan_bitmap_next_block = NULL,
++	.scan_bitmap_next_tuple = NULL,
+ 	.scan_sample_next_block = leopardam_scan_sample_next_block,
+ 	.scan_sample_next_tuple = leopardam_scan_sample_next_tuple
+ };
+diff --git a/leopard/access/leopardam_visibility.c b/leopard/access/leopardam_visibility.c
+index aafc385c..c090778d 100644
+--- a/leopard/access/leopardam_visibility.c
++++ b/leopard/access/leopardam_visibility.c
+@@ -1558,3 +1558,27 @@ LeopardTupleSatisfiesVisibility(LeopardTuple tup, Snapshot snapshot, Buffer buff
+ 
+ 	return false;				/* keep compiler quiet */
+ }
++
++bool
++LeopardTupleSatisfiesRDA(LeopardTuple leopardtup, Snapshot snapshot)
++{
++	LeopardTupleHeader tuple = leopardtup->t_data;
++
++	if (snapshot->snapshot_type != SNAPSHOT_MVCC)
++		return false;
++
++	Assert(ItemPointerIsValid(&leopardtup->t_self));
++
++	if (!LeopardTupleHeaderXminCommitted(tuple))
++		return false;
++
++	if (!XidInMVCCSnapshot(LeopardTupleHeaderGetRawXmin(tuple), snapshot))
++		return false;
++
++	/*
++	 * There might be some other conditions we can use to filter
++	 * away wasted lookups of the RDA. If so, put them here.
++	 */
++
++	return true;
++}
+diff --git a/leopard/access/leopardprune.c b/leopard/access/leopardprune.c
+index 0d9d9712..6bc082c3 100644
+--- a/leopard/access/leopardprune.c
++++ b/leopard/access/leopardprune.c
+@@ -23,6 +23,8 @@
+ #include "access/leopardam.h"
+ #include "access/leopardam_xlog.h"
+ #include "access/leopardtup_details.h"
++#include "access/rda_heap.h"
++
+ #include "access/transam.h"
+ #include "access/xlog.h"
+ #include "catalog/catalog.h"
+@@ -82,6 +84,17 @@ typedef struct
+ 	 * Same indexing as ->marked.
+ 	 */
+ 	int8		htsv[MaxLeopardTuplesPerPage + 1];
++
++	/*
++	 * Leopard additions
++	 */
++	bool		leopard_archive;	/* do we consider recently dead as well? */
++	Size		dead_size;
++	Size		recently_dead_size;
++
++	int			narchive;		/* number of tuples that can be archived */
++	OffsetNumber	archive[MaxLeopardTuplesPerPage + 1];		/* tuple */
++	OffsetNumber	archive_root[MaxLeopardTuplesPerPage + 1];	/* root of tuple */
+ } PruneState;
+ 
+ /* Local functions */
+@@ -257,6 +270,11 @@ leopard_page_prune(Relation relation, Buffer buffer,
+ 	PruneState	prstate;
+ 	LeopardTupleData tup;
+ 
++	prstate.leopard_archive = false;
++	prstate.narchive = 0;
++	memset(prstate.archive, InvalidOffsetNumber, sizeof(prstate.archive));
++	memset(prstate.archive_root, InvalidOffsetNumber, sizeof(prstate.archive_root));
++
+ 	/*
+ 	 * Our strategy is to scan the page and make lists of items to change,
+ 	 * then apply the changes within a critical section.  This keeps as much
+@@ -710,9 +728,30 @@ leopard_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
+ 		{
+ 			case LEOPARDTUPLE_DEAD:
+ 				tupdead = true;
++
++				/* Leopard: keep track of dead tuple lengths */
++				prstate->dead_size += ItemIdGetLength(lp);
++
+ 				break;
+ 
+ 			case LEOPARDTUPLE_RECENTLY_DEAD:
++				/*
++				 * Is the tuple archivable? Needs to be an UPDATEd tuple,
++				 * so that we don't remove the last tuple in a chain, if it
++				 * was deleted since we need it there to allow us to judge
++				 * if the chain contains an archived tuple.
++				 */
++				if (prstate->leopard_archive &&
++					LeopardTupleHeaderIsHotUpdated(leopardtup))
++				{
++					prstate->recently_dead_size += ItemIdGetLength(lp);
++					prstate->archive[prstate->narchive] = offnum;
++					prstate->archive_root[prstate->narchive] = rootoffnum;
++					prstate->narchive++;
++					tupdead = true;
++					break;
++				}
++
+ 				recent_dead = true;
+ 
+ 				/*
+@@ -834,6 +873,15 @@ leopard_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
+ 		leopard_prune_record_dead(prstate, rootoffnum);
+ 	}
+ 
++	if (LEOPARD_DEBUG && nchain > 1 && prstate->leopard_archive)
++	{
++		elog(NOTICE, "rootoffnum %u latestdead %u", rootoffnum, latestdead);
++		for (i = 0; i < nchain; i++)
++		{
++			elog(NOTICE, " offset %u", chainitems[i]);
++		}
++	}
++
+ 	return ndeleted;
+ }
+ 
+@@ -1059,72 +1107,337 @@ leopard_get_root_tuples(Page page, OffsetNumber *root_offsets)
+ 	}
+ }
+ 
+-
++/*
++ * leopard_make_space_for_update
++ *
++ * Just as we do with RelationGetBufferForTuple(), if we return true,
++ * returns pinned and exclusive-locked buffer.
++ *
++ * Returns true if enough space in the buffer now exists for the supplied tuple,
++ * or false if there is still insufficient space.
++ *
++ * First, we see if we can get a valid cleanup lock, if not return false.
++ *
++ * Next, scan the buffer and see if we can prune normally to make space. If so,
++ * do that and then return true.
++ *
++ * Lastly, we try to archive recently dead rows. If that is possible, do it,
++ * and if it works then return true.
++ *
++ * Or if none of that works, return false.
++ */
+ bool
+-ConditionalLockBufferForPartialCleanup(Buffer buffer, bool *do_partial_cleanup)
++leopard_make_space_for_update(Relation relation, Buffer buffer, Size newtupsize)
+ {
+-	/*
+-	 * Try to get an exclusive buffer lock, but not the full cleanup lock.  The
+-	 * exclusive lock is not by itself sufficient for doing any cleanup, but it
+-	 * is the first step in determining if we can do a full cleanup, a partial
+-	 * cleanup, or none.
+-	 */
+-	if (!ConditionalLockBuffer(buffer))
+-		return false;							/* No cleanup possible */
++	GlobalVisState *vistest;
++	int			ndeleted = 0;
++	Page		page = BufferGetPage(buffer);
++	OffsetNumber offnum,
++				maxoff;
++	PruneState	prstate;
++	LeopardTupleData tup;
+ 
+ 	/*
+-	 * If we're the only backend with a pin on the page, and we only have one
+-	 * pin, then we can do a full cleanup operation.
++	 * We are called with an Exclusive buffer lock
+ 	 *
+-	 * Note that this step, plus the one above, is the same as requesting the
+-	 * cleanup lock, except that it doesn't despair and release the lock if
+-	 * other pins are found to be on the buffer.
++	 * Check that we have a valid cleanup lock.
++	 *
++	 * Don't use the RDA for rows from temporary tables
+ 	 */
+-	if (IsBufferCleanupOK(buffer))
++	if (BufferIsLocal(buffer))
++		return false;
++	else
+ 	{
+-		do_partial_cleanup = false;		/* Do the full cleanup */
+-		return true;
++		BufferDesc *bufHdr = GetBufferDescriptor(buffer - 1);
++		uint32		buf_state = LockBufHdr(bufHdr);
++		bool		cleanup_ok = false;
++
++		/*
++		 * If the buffer is pinned only by us, partial cleanup is ok.
++		 *
++		 * This assumes that the executor scan for this UPDATE already
++		 * pinned the buffer before we execute leopard_update().
++		 * As a result, we don't bother to call IsBufferCleanupOK()
++		 */
++		Assert(BUF_STATE_GET_REFCOUNT(buf_state) > 0);
++		if (BUF_STATE_GET_REFCOUNT(buf_state) == 1)
++			cleanup_ok = true;
++
++		UnlockBufHdr(bufHdr, buf_state);
++
++		if (!cleanup_ok)
++		{
++			if (LEOPARD_DEBUG)
++				elog(NOTICE, "cleanup not ok");
++			return false;
++		}
+ 	}
+ 
++	vistest = GlobalVisTestFor(relation);
++
++	prstate.dead_size = prstate.recently_dead_size = 0;
++	prstate.leopard_archive = true;
++	prstate.narchive = 0;
++	memset(prstate.archive, InvalidOffsetNumber, sizeof(prstate.archive));
++	memset(prstate.archive_root, InvalidOffsetNumber, sizeof(prstate.archive_root));
++
++	/* From here, much of this function is identical to heap_page_prune() */
++
+ 	/*
+-	 * Otherwise, if this is a local buffer, then no other backends can
+-	 * have a pin on it, though we can infer that our own backend has more
+-	 * than one pin.  (If this were not so, IsBufferCleanupOK, above, would
+-	 * have returned true.)  We'll do only partial cleanup.
++	 * Our strategy is to scan the page and make lists of items to change,
++	 * then apply the changes within a critical section.  This keeps as much
++	 * logic as possible out of the critical section, and also ensures that
++	 * WAL replay will work the same as the normal case.
++	 *
++	 * First, initialize the new pd_prune_xid value to zero (indicating no
++	 * prunable tuples).  If we find any tuples which may soon become
++	 * prunable, we will save the lowest relevant XID in new_prune_xid. Also
++	 * initialize the rest of our working state.
+ 	 */
+-	else if (BufferIsLocal(buffer))
++	prstate.new_prune_xid = InvalidTransactionId;
++	prstate.rel = relation;
++	prstate.vistest = vistest;
++	prstate.old_snap_xmin = InvalidTransactionId;
++	prstate.old_snap_ts = 0;
++	prstate.old_snap_used = false;
++	prstate.latestRemovedXid = InvalidTransactionId;
++	prstate.nredirected = prstate.ndead = prstate.nunused = 0;
++	memset(prstate.marked, 0, sizeof(prstate.marked));
++
++	maxoff = PageGetMaxOffsetNumber(page);
++	tup.t_tableOid = RelationGetRelid(prstate.rel);
++
++	/*
++	 * Determine HTSV for all tuples.
++	 *
++	 * This is required for correctness to deal with cases where running HTSV
++	 * twice could result in different results (e.g. RECENTLY_DEAD can turn to
++	 * DEAD if another checked item causes GlobalVisTestIsRemovableFullXid()
++	 * to update the horizon, INSERT_IN_PROGRESS can change to DEAD if the
++	 * inserting transaction aborts, ...). That in turn could cause
++	 * leopard_prune_chain() to behave incorrectly if a tuple is reached twice,
++	 * once directly via a leopard_prune_chain() and once following a HOT chain.
++	 *
++	 * It's also good for performance. Most commonly tuples within a page are
++	 * stored at decreasing offsets (while the items are stored at increasing
++	 * offsets). When processing all tuples on a page this leads to reading
++	 * memory at decreasing offsets within a page, with a variable stride.
++	 * That's hard for CPU prefetchers to deal with. Processing the items in
++	 * reverse order (and thus the tuples in increasing order) increases
++	 * prefetching efficiency significantly / decreases the number of cache
++	 * misses.
++	 */
++	for (offnum = maxoff;
++		 offnum >= FirstOffsetNumber;
++		 offnum = OffsetNumberPrev(offnum))
+ 	{
+-		*do_partial_cleanup = true;		/* Partial cleanup possible */
+-		return true;
++		ItemId		itemid = PageGetItemId(page, offnum);
++		LeopardTupleHeader leopardtup;
++
++		/* Nothing to do if slot doesn't contain a tuple */
++		if (!ItemIdIsNormal(itemid))
++		{
++			prstate.htsv[offnum] = -1;
++			continue;
++		}
++
++		leopardtup = (LeopardTupleHeader) PageGetItem(page, itemid);
++		tup.t_data = leopardtup;
++		tup.t_len = ItemIdGetLength(itemid);
++		ItemPointerSet(&(tup.t_self), BufferGetBlockNumber(buffer), offnum);
++
++		prstate.htsv[offnum] = leopard_prune_satisfies_vacuum(&prstate, &tup,
++														   buffer);
++	}
++
++	/* Scan the page */
++	for (offnum = FirstOffsetNumber;
++		 offnum <= maxoff;
++		 offnum = OffsetNumberNext(offnum))
++	{
++		ItemId		itemid;
++
++		/* Ignore items already processed as part of an earlier chain */
++		if (prstate.marked[offnum])
++			continue;
++
++		/* Nothing to do if slot is empty or already dead */
++		itemid = PageGetItemId(page, offnum);
++		if (!ItemIdIsUsed(itemid) || ItemIdIsDead(itemid))
++			continue;
++
++		/* Process this item or chain of items */
++		ndeleted += leopard_prune_chain(buffer, offnum, &prstate);
++	}
++
++	if (LEOPARD_DEBUG && prstate.dead_size > 0 && prstate.recently_dead_size > 0)
++	{
++		elog(NOTICE, "dead space %zu  recently dead space %zu", prstate.dead_size, prstate.recently_dead_size);
++		elog(NOTICE, "narchive %u nredirected %u ndead %u nunused %u", prstate.narchive, prstate.nredirected, prstate.ndead, prstate.nunused);
+ 	}
+ 
+ 	/*
+-	 * Otherwise, this buffer is visible to other backends, but it is still
+-	 * possible that all the pins are held only by our own backend.  Check
+-	 * for that.
++	 * Decide whether to prune to make space.
+ 	 */
+-	else
++	if (prstate.dead_size < newtupsize)
+ 	{
+-		BufferDesc *bufHdr = GetBufferDescriptor(buffer - 1);
+-		uint32		buf_state = LockBufHdr(bufHdr);
++		Oid	toid = relation->rd_id;
++		int i = 0;
+ 
+ 		/*
+-		 * If the buffer is pinned only by us, partial cleanup is ok.
++		 * Is there enough recently dead space that we can archive to make space?
+ 		 */
+-		Assert(BUF_STATE_GET_REFCOUNT(buf_state) > 0);
+-		if (BUF_STATE_GET_REFCOUNT(buf_state) == 1)
++		if (prstate.recently_dead_size < newtupsize)
++			return false;
++
++		/*
++		 * XXX archiving everything may be counter productive, so consider whether
++		 * we should archive just a couple of rows to make space. If we do less
++		 * than all tuples it would make sense to pick the earliest rows, by
++		 * doing some kind of limit sort on xmax.
++		 * XXX potentially we could archive just from the chain being updated,
++		 * rather than randomly selected tuples.
++		 */
++		while (OffsetNumberIsValid(prstate.archive[i]))
+ 		{
+-			UnlockBufHdr(bufHdr, buf_state);
+-			*do_partial_cleanup = true;
+-			return true;		/* We still hold an exclusive lock */
++			OffsetNumber	offnum = prstate.archive[i];
++			OffsetNumber	rootoffnum = prstate.archive_root[i];
++			ItemId			itemid = PageGetItemId(page, offnum);
++			ItemPointerData	roottid;
++			LeopardTupleHeader leopardtup;
++
++			if (LEOPARD_DEBUG)
++				elog(NOTICE, "archive offnum %u root %u", offnum, rootoffnum);
++
++				/* Nothing to do if slot doesn't contain a tuple */
++			if (!ItemIdIsNormal(itemid))
++			{
++				if (LEOPARD_DEBUG)
++					elog(ERROR, "item is not normal");
++				continue;
++			}
++
++			leopardtup = (LeopardTupleHeader) PageGetItem(page, itemid);
++			tup.t_data = leopardtup;
++			tup.t_len = ItemIdGetLength(itemid);
++			ItemPointerSet(&(tup.t_self), BufferGetBlockNumber(buffer), offnum);
++			ItemPointerSet(&roottid, BufferGetBlockNumber(buffer), rootoffnum);
++
++			rda_insert(toid, (HeapTuple) &tup, roottid);
++
++			i++;
+ 		}
++	}
+ 
++	/* Any error while applying the changes is critical */
++	START_CRIT_SECTION();
++
++	/* Have we found any prunable items? */
++	if (prstate.nredirected > 0 || prstate.ndead > 0 || prstate.nunused > 0)
++	{
+ 		/*
+-		 * The buffer is pinned by other backends, therefore cleanup is not
+-		 * allowed.
++		 * Apply the planned item changes, then repair page fragmentation, and
++		 * update the page's hint bit about whether it has free line pointers.
+ 		 */
+-		UnlockBufHdr(bufHdr, buf_state);
+-		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
++		leopard_page_prune_execute(buffer,
++								prstate.redirected, prstate.nredirected,
++								prstate.nowdead, prstate.ndead,
++								prstate.nowunused, prstate.nunused, true /* do_partial_cleanup */);
++
++		/*
++		 * Update the page's pd_prune_xid field to either zero, or the lowest
++		 * XID of any soon-prunable tuple.
++		 */
++		((PageHeader) page)->pd_prune_xid = prstate.new_prune_xid;
++
++		/*
++		 * Also clear the "page is full" flag, since there's no point in
++		 * repeating the prune/defrag process until something else happens to
++		 * the page.
++		 */
++		PageClearFull(page);
++
++		MarkBufferDirty(buffer);
++
++		/*
++		 * Emit a WAL XLOG_LEOPARD2_PRUNE record showing what we did
++		 */
++		if (RelationNeedsWAL(relation))
++		{
++			xl_leopard_prune xlrec;
++			XLogRecPtr	recptr;
++
++			/*
++			 * Don't set latestRemovedXid if we are archiving, because the rows
++			 * will still be accessible on a standby, so there is no need to
++			 * cause a recovery conflict. InvalidTransactionId is a valid value
++			 * to send, see ResolveRecoveryConflictWithSnapshot().
++			 */
++			if (prstate.leopard_archive)
++				xlrec.latestRemovedXid = InvalidTransactionId;
++			else
++				xlrec.latestRemovedXid = prstate.latestRemovedXid;
++			xlrec.nredirected = prstate.nredirected;
++			xlrec.ndead = prstate.ndead;
++
++			XLogBeginInsert();
++			XLogRegisterData((char *) &xlrec, SizeOfLeopardPrune);
++
++			XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
++
++			/*
++			 * The OffsetNumber arrays are not actually in the buffer, but we
++			 * pretend that they are.  When XLogInsert stores the whole
++			 * buffer, the offset arrays need not be stored too.
++			 */
++			if (prstate.nredirected > 0)
++				XLogRegisterBufData(0, (char *) prstate.redirected,
++									prstate.nredirected *
++									sizeof(OffsetNumber) * 2);
++
++			if (prstate.ndead > 0)
++				XLogRegisterBufData(0, (char *) prstate.nowdead,
++									prstate.ndead * sizeof(OffsetNumber));
++
++			if (prstate.nunused > 0)
++				XLogRegisterBufData(0, (char *) prstate.nowunused,
++									prstate.nunused * sizeof(OffsetNumber));
++
++			recptr = XLogInsert(RM_LEOPARD2_ID, XLOG_LEOPARD2_PRUNE);
++
++			PageSetLSN(BufferGetPage(buffer), recptr);
++		}
+ 	}
+-	return false;
++	else if (!prstate.leopard_archive)
++	{
++		/*
++		 * If we didn't prune anything, but have found a new value for the
++		 * pd_prune_xid field, update it and mark the buffer dirty. This is
++		 * treated as a non-WAL-logged hint.
++		 *
++		 * Also clear the "page is full" flag if it is set, since there's no
++		 * point in repeating the prune/defrag process until something else
++		 * happens to the page.
++		 */
++		if (((PageHeader) page)->pd_prune_xid != prstate.new_prune_xid ||
++			PageIsFull(page))
++		{
++			((PageHeader) page)->pd_prune_xid = prstate.new_prune_xid;
++			PageClearFull(page);
++			MarkBufferDirtyHint(buffer, true);
++		}
++	}
++
++	END_CRIT_SECTION();
++
++	/*
++	 * If requested, report the number of tuples reclaimed to pgstats. This is
++	 * ndeleted minus ndead, because we don't want to count a now-DEAD root
++	 * item as a deletion for this purpose.
++	 */
++	if (!prstate.leopard_archive && ndeleted > prstate.ndead)
++		pgstat_update_leopard_dead_tuples(relation, ndeleted - prstate.ndead);
++
++	/* Don't release buffer lock or pin */
++	return true;
+ }
+diff --git a/leopard/access/rda_heap.c b/leopard/access/rda_heap.c
+new file mode 100644
+index 00000000..799df4c4
+--- /dev/null
++++ b/leopard/access/rda_heap.c
+@@ -0,0 +1,968 @@
++/*-------------------------------------------------------------------------
++ *
++ * rda_heap.c
++ *        Recently Dead Archive (RDA) implemented as a HEAP
++ *
++ * Portions Copyright (c) 2022, EnterpriseDB Corporation. All Rights Reserved.
++ *
++ * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
++ * Portions Copyright (c) 1994, Regents of the University of California
++ *
++ *-------------------------------------------------------------------------
++ *
++ * API
++ *     rda_insert() - adds a new tuple to the RDA
++ *     rda_get() - retrieves a visible tuple from RDA
++ *     rda_trim() - removes DEAD rows from RDA
++ *
++ *-------------------------------------------------------------------------
++ * Various implementations are possible; this refers to the RDA_heap.
++ * Alternate implementations would use same API, different file name.
++ *
++ * RDA Heap
++ *
++ * RDA is a HEAP table, logged normally, with RDA_NUM_PARTITIONS partitions.
++ * RDA is partitioned by range on the xmax value, so while data normally
++ * goes into one main table, this might also go into 2 or more tables in
++ * various scenarios. Note that RDA data is never normally updated.
++ *
++ * No SQL is executed, so partition routing is performed here based
++ * on mod(xmax) from the data, so it is predictable. We use that to match
++ * against the regularised partition names to identity the partition.
++ *
++ * Only the final change to a row is stored for each transaction. If a
++ * transaction updates a row multiple times, the earlier, never-visible
++ * tuples will have entries here, but row_data will be NULL. This allows
++ * the chain of entries to be maintained within the RDA, though this is
++ * not re-checked at run-time.
++ *
++ * Note that xmin, xmax values are stored using OID datatype, since this
++ * supports 32-bit unsigned integer values AND also supports btree ops,
++ * whereas XID datatype does not.
++ *
++ * Partition pruning for rda_get() is also performed within this module.
++ *
++ * Rows are inserted by rda_insert() as TABLE_INSERT_FROZEN, making them
++ * non-transactional, as is required for the RDA. This avoids MVCC
++ * problems if rda_insert() is called from a xact that subsequently aborts.
++ * Tuples have already been toasted, so the data stored won't benefit
++ * from further toasting, so we set a high toast target to avoid that.
++ * RDA is insert-only, never update or delete, so we pack both heap and
++ * index with fillfactor=100 on the assumption that rollbacks are rare.
++ * Also, we never use the FSM, since we expect append-only usage.
++ * autovacuums are disabled, since all rows are already frozen and there
++ * is nothing to clean up.
++ *
++ * To avoid race conditions between rda_insert() and rda_get() we hold
++ * the main heap buffer lock until we have inserted both the rda tuple
++ * and the rda index entry.
++ *
++ * rda_trim() will truncate partitions that are wholly invisible to all
++ * users, so no deletion takes place. This is designed to be executed from
++ * a background worker, by admin user or by foreground processes.
++ *-------------------------------------------------------------------------
++ */
++#include "postgres.h"
++#include "miscadmin.h"
++
++#include "access/genam.h"
++#include "access/htup_details.h"
++#include "access/nbtree.h"
++#include "access/sysattr.h"
++#include "access/table.h"
++#include "access/tableam.h"
++#include "access/xact.h"
++#include "catalog/catalog.h"
++#include "catalog/pg_collation_d.h"
++#include "catalog/dependency.h"
++#include "catalog/index.h"
++#include "catalog/indexing.h"
++#include "catalog/objectaccess.h"
++#include "catalog/pg_constraint.h"
++#include "catalog/pg_operator.h"
++#include "catalog/pg_type.h"
++#include "commands/defrem.h"
++#include "commands/tablecmds.h"
++#include "nodes/makefuncs.h"
++#include "storage/bufmgr.h"
++#include "storage/procarray.h"
++#include "utils/array.h"
++#include "utils/builtins.h"
++#include "utils/fmgroids.h"
++#include "utils/lsyscache.h"
++#include "utils/memutils.h"
++#include "utils/rel.h"
++#include "utils/snapmgr.h"
++#include "utils/syscache.h"
++
++#include "leopardam.h"
++#include "rda_heap.h"
++
++/*--------------------------------------------------------------------------*/
++/*
++ * All definitions below must match the tables created by leopard--X.Y.sql
++ */
++#define RDA_PARTITION_BITS	5
++
++/* should be 2 ^ RDA_PARTITION_BITS */
++#define RDA_NUM_PARTITIONS	32
++
++/* should be 32bits - RDA_PARTITION_BITS */
++#define RDA_PARTITION_SHIFT	(32 - RDA_PARTITION_BITS)
++
++#define RDA_xmax_get_partition_num(x) \
++	(((uint32) x) >> RDA_PARTITION_SHIFT)
++
++/* Partition names are "rda_pNNNN" */
++#define RDA_NAME_LENGTH		10
++
++#define RDA_NUM_ATTRS		6
++
++/* AttrNums */
++#define RDA_COLUMN_TOID		1
++#define RDA_COLUMN_ROOT_TID	2
++#define RDA_COLUMN_ROW_XMIN	3
++#define RDA_COLUMN_ROW_XMAX	4
++#define RDA_COLUMN_NEXT_TID	5
++#define RDA_COLUMN_ROW_DATA	6
++
++#define RDA_NUM_SCANKEYS	4
++
++#define RDA_SCHEMA_NAME	"rda"
++
++/*--------------------------------------------------------------------------*/
++
++static Oid		cached_partition_oid = InvalidOid;
++static uint32	cached_partition_num = 0;
++
++/*--------------------------------------------------------------------------*/
++/* Unit test support */
++
++static	Oid				toid;
++static ItemPointerData	root;
++
++/*--------------------------------------------------------------------------*/
++/* Private routines */
++
++static int64
++ItemPointerGetInt64(ItemPointer ip)
++{
++	BlockNumber bn = ItemPointerGetBlockNumber(ip);
++	OffsetNumber on = ItemPointerGetOffsetNumber(ip);
++	int64 bn64 = ((int64) bn) << 16;
++	int64 on64 = (int64) on;
++
++	/*
++	 * Merge the blkid and offset into a single BIGINT value,
++	 * so that all offsets on same block form a tight range.
++	 */
++	return bn64 + on64;
++}
++
++/*--------------------------------------------------------------------------*/
++/* Unit tests */
++
++PG_FUNCTION_INFO_V1(rda_unit_test_rda_insert);
++
++Datum
++rda_unit_test_rda_insert(PG_FUNCTION_ARGS)
++{
++	RangeVar   		*rv = makeRangeVar("public", "foo", -1);
++	Relation 		test_heap;
++	BufferHeapTupleTableSlot *hslot;
++	TupleTableSlot 	*slot;
++	TableScanDesc 	tableScan;
++	HeapTuple		tuple;
++	Buffer			buf;
++	Page			page;
++	OffsetNumber	root_offsets[MaxHeapTuplesPerPage];
++
++	test_heap = table_openrv(rv, AccessShareLock);
++	if (test_heap == NULL)
++		elog(ERROR, "table not found");
++	tableScan = table_beginscan(test_heap, SnapshotAny, 0, (ScanKey) NULL);
++	slot = table_slot_create(test_heap, NULL);
++	hslot = (BufferHeapTupleTableSlot *) slot;
++
++	for (;;)
++	{
++		if (!table_scan_getnextslot(tableScan, ForwardScanDirection, slot))
++			break;
++
++		tuple = ExecFetchSlotHeapTuple(slot, false, NULL);
++		buf = hslot->buffer;
++
++		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
++
++		if (TransactionIdIsValid(HeapTupleHeaderGetRawXmax(tuple->t_data)))
++		{
++			ItemPointerCopy(&tuple->t_self, &root);
++			if (HeapTupleIsHotUpdated(tuple) ||
++				HeapTupleIsHeapOnly(tuple))
++			{
++				page = BufferGetPage(buf);
++				leopard_get_root_tuples(page, root_offsets);
++				ItemPointerSetOffsetNumber(&root, root_offsets[ItemPointerGetOffsetNumber(&tuple->t_self) - 1]);
++			}
++			toid = test_heap->rd_id;
++			rda_insert(toid, tuple, root);
++			/* Always emit this, because it is for unit test */
++			elog(NOTICE, "inserted 1 row into RDA");
++		}
++
++		LockBuffer(buf, BUFFER_LOCK_UNLOCK);
++	}
++
++	table_endscan(tableScan);
++	ExecDropSingleTupleTableSlot(slot);
++	table_close(test_heap, AccessShareLock);
++
++	PG_RETURN_VOID();
++}
++
++PG_FUNCTION_INFO_V1(rda_unit_test_rda_get);
++
++Datum
++rda_unit_test_rda_get(PG_FUNCTION_ARGS)
++{
++	Snapshot snapshot = GetLatestSnapshot();
++	LeopardTuple	tup = NULL;
++	bool	found = false;
++
++	/*
++	 * We overwrite the snapshot values, so we're
++	 * just using it as a scratchpad.
++	 *
++	 * This assumes that the toid and root variables
++	 * are already set by prior execution of the
++	 * rda_insert() unit test. Not pretty, but it works.
++	 */
++
++	snapshot->xmin = 500;
++	snapshot->xmax = 700;
++	found = rda_get(toid, root, snapshot, true, tup);
++
++	snapshot->xmin = 500;
++	snapshot->xmax = 741;
++	found = rda_get(toid, root, snapshot, true, tup);
++
++	snapshot->xmin = 741;
++	snapshot->xmax = 741;
++	found = rda_get(toid, root, snapshot, true, tup);
++
++	snapshot->xmin = 741;
++	snapshot->xmax = 742;
++	found = rda_get(toid, root, snapshot, true, tup);
++
++	snapshot->xmin = 741;
++	snapshot->xmax = 800;
++	found = rda_get(toid, root, snapshot, true, tup);
++
++	snapshot->xmin = 500;
++	snapshot->xmax = 800;
++	found = rda_get(toid, root, snapshot, true, tup);
++
++	snapshot->xmin = 800;
++	snapshot->xmax = 800;
++	found = rda_get(toid, root, snapshot, true, tup);
++
++	snapshot->xmin = 800;
++	snapshot->xmax = 268455456;
++	found = rda_get(toid, root, snapshot, true, tup);
++
++	PG_RETURN_VOID();
++}
++
++PG_FUNCTION_INFO_V1(rda_unit_test_rda_trim);
++
++Datum
++rda_unit_test_rda_trim(PG_FUNCTION_ARGS)
++{
++	rda_trim();
++
++	PG_RETURN_VOID();
++}
++
++/*--------------------------------------------------------------------------*/
++/* Public routines */
++
++/*
++ * rda_insert
++ *
++ * Inserts data into the RDA and also inserts into the rda_index, intended
++ * to allow a tuple to be moved from another heap into the RDA. It is assumed
++ * that any rows inserted are both HEAPTUPLE_RECENTLY_DEAD and HEAP_HOT_UPDATED,
++ * so we don't expect to see any locked or deleted rows here, though this is
++ * tested in the caller.
++ *
++ * Insert is performed using table_tuple_insert() with option TABLE_INSERT_FROZEN,
++ * so that the changes to the table are effectively non-transactional, allowing
++ * them to be visible by other transactions as soon as the rda buffer lock is
++ * released. Partition routing is conducted based upon the tuple's xmax.
++ *
++ * It is assumed the caller holds an exclusive buffer lock on the heap block,
++ * ensuring that the inserts into RDA and rda_index appear atomic for the intended
++ * users. Note that admin users inspecting the RDA would not see these changes
++ * as atomic, so be careful with tests/diagnostics that might give different results.
++ *
++ * This is the only supported mechanism for inserting rows into the RDA. Other
++ * possible mechanisms such as INSERT SELECT and COPY should be used only as a matter
++ * of last resort and could easily corrupt data, as would UPDATE or DELETE.
++ * Old data is removed from the RDA by rda_trim(), see later.
++ */
++void
++rda_insert(Oid toid, HeapTuple tuple, ItemPointerData root_tid)
++{
++	RangeVar   	*rv;
++	Relation	rda_rel = NULL;
++	Relation	rda_idx = NULL;
++	IndexInfo	*rda_idx_info = NULL;
++	HeapTuple   rda_tuple = NULL;
++	TupleTableSlot *slot = NULL;
++	TransactionId	row_xmax;
++	List       *indexoidlist;
++	ListCell   *l;
++	char       *tuptxt = NULL;
++	char        rda_partition_name[RDA_NAME_LENGTH];
++	Datum		values[RDA_NUM_ATTRS];
++	bool		isnull[RDA_NUM_ATTRS];
++	uint32		partition_num;
++
++	if (!ItemPointerIsValid(&root_tid) ||
++		!OidIsValid(toid))
++		elog(ERROR, "invalid input");
++
++	/*
++	 * Work out the partition to route this insert to, open it directly.
++	 */
++	row_xmax = HeapTupleHeaderGetRawXmax(tuple->t_data);
++	partition_num = RDA_xmax_get_partition_num(row_xmax);
++
++	if (OidIsValid(cached_partition_oid) &&
++		partition_num == cached_partition_num)
++	{
++		rda_rel = table_open(cached_partition_oid, RowExclusiveLock);
++	}
++	else
++	{
++		snprintf(rda_partition_name, RDA_NAME_LENGTH, "rda_p%04d", partition_num);
++		rv = makeRangeVar(RDA_SCHEMA_NAME, rda_partition_name, -1);
++
++		rda_rel = table_openrv(rv, RowExclusiveLock);
++	}
++
++	if (rda_rel == NULL)
++		elog(ERROR, "RDA table not opened");
++
++	cached_partition_oid = rda_rel->rd_id;
++	cached_partition_num = partition_num;
++
++	/*
++	 * Collect column values one by one, in the correct sequence.
++	 *
++	 * xids aren't indexable, so we use OID instead, rather than xid8.
++	 * TIDs aren't indexable, so we pack them into a BIGINT for ease of access.
++	 */
++
++	/* tableoid OID */
++	values[RDA_COLUMN_TOID - 1] = ObjectIdGetDatum(toid);
++	isnull[RDA_COLUMN_TOID - 1] = false;
++
++	/* root_tid BIGINT */
++	values[RDA_COLUMN_ROOT_TID - 1] = Int64GetDatum(ItemPointerGetInt64(&root_tid));
++	isnull[RDA_COLUMN_ROOT_TID - 1] = false;
++
++	/* row_xmin OID */
++	values[RDA_COLUMN_ROW_XMIN - 1] = ObjectIdGetDatum((Oid) HeapTupleHeaderGetXmin(tuple->t_data));
++	isnull[RDA_COLUMN_ROW_XMIN - 1] = false;
++
++	/* row_xmax OID */
++	values[RDA_COLUMN_ROW_XMAX - 1] = ObjectIdGetDatum((Oid) row_xmax);
++	isnull[RDA_COLUMN_ROW_XMAX - 1] = false;
++
++	/* next_tid BIGINT - just for sanity checks */
++	values[RDA_COLUMN_NEXT_TID - 1] = Int64GetDatum(ItemPointerGetInt64(&((tuple->t_data)->t_ctid)));
++	isnull[RDA_COLUMN_NEXT_TID - 1] = false;
++
++	/* Put the source tuple header into a Datum for insertion into an RDA col */
++	tuptxt = palloc(VARHDRSZ + tuple->t_len + 1);
++	SET_VARSIZE(tuptxt, VARHDRSZ + tuple->t_len + 1);
++	memcpy(VARDATA(tuptxt), tuple->t_data, tuple->t_len);
++	values[RDA_COLUMN_ROW_DATA - 1] = PointerGetDatum(tuptxt);
++	isnull[RDA_COLUMN_ROW_DATA - 1] = false;
++
++	rda_tuple = heap_form_tuple(rda_rel->rd_att, values, isnull);
++	slot = MakeSingleTupleTableSlot(RelationGetDescr(rda_rel),
++									&TTSOpsHeapTuple);
++	ExecStoreHeapTuple(rda_tuple, slot, false);
++
++	/*
++	 * Perform the insert, one row at a time. BulkInsertState is NULL.
++	 * Notice that we don't re-validate partition bounds, for performance.
++	 *
++	 * We use the current CommandId because we have to use something. This
++	 * shouldn't make any difference, since we aren't using portals against
++	 * RDA, nor doing updates or deletes.
++	 */
++	table_tuple_insert(rda_rel, slot, GetCurrentCommandId(true),
++						TABLE_INSERT_SKIP_FSM | TABLE_INSERT_FROZEN, NULL);
++	pfree(tuptxt);
++
++	/* Find the index id for this partition */
++	indexoidlist = RelationGetIndexList(rda_rel);
++
++	/*
++	 * RDA should have one valid index.
++	 *
++	 * Since we only do inserts and we regularly drop partitions, the
++	 * index will never need a REINDEX, but we can't actually prevent
++	 * someone from reindexing it. So take the last index entry.
++	 */
++	foreach(l, indexoidlist)
++	{
++		Oid			rda_partition_idx_oid;
++		Relation	rel;
++
++		rda_partition_idx_oid = lfirst_oid(l);
++		rel = index_open(rda_partition_idx_oid, RowExclusiveLock);
++
++		/*
++		 * Use index only if it is fully ready.
++		 */
++		if (!rel->rd_index->indisready)
++		{
++			index_close(rel, RowExclusiveLock);
++			continue;
++		}
++		if (rda_idx)
++			index_close(rda_idx, RowExclusiveLock);
++		rda_idx = rel;
++
++		if (rda_idx_info)
++			pfree(rda_idx_info);
++		rda_idx_info = palloc(sizeof(IndexInfo *));
++		rda_idx_info = BuildIndexInfo(rda_idx);
++
++		/*
++		 * Check the index for validity
++		 */
++		if (rda_idx_info->ii_NumIndexKeyAttrs != RDA_NUM_SCANKEYS ||
++			rda_idx_info->ii_Expressions != NIL)
++			continue;
++
++		/* Note that we don't need speculative index info */
++
++		/* Keep rda_idx_info for later use */
++	}
++	if (rda_idx == NULL)
++		elog(ERROR, "could not open valid RDA index");
++	list_free(indexoidlist);
++
++	Assert(ItemPointerIsValid(&slot->tts_tid));
++
++	/*
++	 * Form the index tuple using the same array of values, since the leading
++	 * columns of the table match the index columns.
++	 */
++	FormIndexDatum(rda_idx_info,
++					slot,
++					NULL, /* estate can be NULL since no expressions on index */
++					values,
++					isnull);
++
++	/*
++	 * Kluge, since RDA index is not a normal user index, so we don't want to
++	 * throw serializable errors if people read data touched by others.
++	 */
++	rda_idx->rd_indam->ampredlocks = false;
++
++	/*
++	 * Insert into the rda_idx. Note that any other indexes added will not be
++	 * automatically maintained by this low level code.
++	 */
++	index_insert(rda_idx,
++				 values,
++				 isnull,
++				 &slot->tts_tid,
++				 rda_rel,
++				 UNIQUE_CHECK_NO,	/* No uniqueness check */
++				 false,
++				 rda_idx_info);
++
++	ExecDropSingleTupleTableSlot(slot);
++
++	if (rda_tuple)
++		heap_freetuple(rda_tuple);
++	if (rda_idx_info)
++		pfree(rda_idx_info);
++
++	/*
++	 * Close and we're done
++	 */
++	index_close(rda_idx, RowExclusiveLock);
++	table_close(rda_rel, RowExclusiveLock);
++}
++
++/*
++ * rda_get
++ *
++ * Retrieves a visible tuple from the RDA for a specific Snapshot, using rda_index,
++ * for a specific Relation and root TID. This is optimised for OLTP, which tends to
++ * follow single tuples. A similar routine might be optimized for page-based access.
++ *
++ * Performs an index scan using rda_index, which will retrieve 0, 1 or many rows.
++ * The RDA contains a portion of the update chain for tuple with the given root TID,
++ * though the chain is not stored in any specific ordering in the heap.
++ * The index scan is constrained by relation Oid, root TID, the Snapshot xmin, xmax values.
++ * Rows are retrieved in index order, then further qualified against the Snapshot.
++ * The scan completes when we identify a single visible row, or we run out of candidates.
++ *
++ * This is more complex because of partitioning. We start the search with the most recent
++ * partition and move backwards in time over all partitions that cover the range
++ * from partition_of(Snapshot->xmin) to partition_of(Snapshot->xmax). Since we partition
++ * by xmax, you might think the lower bound seems wrong, but by definition any xmax
++ * earlier than Snapshot->xmin would be visible, meaning any deleted row would be
++ * invisible to the current snapshot.
++ */
++bool
++rda_get(Oid toid, ItemPointerData root_tid, Snapshot snapshot, bool debug, LeopardTuple leopardTuple)
++{
++	ScanKeyData skey[RDA_NUM_SCANKEYS];
++	HeapTuple	rda_tuple = NULL;
++	int64		rtid = ItemPointerGetInt64(&root_tid);
++	uint32		partition_min;
++	uint32		partition_num;
++	char        rda_partition_name[RDA_NAME_LENGTH];
++
++	if (!IsMVCCSnapshot(snapshot) ||
++		!TransactionIdIsValid(snapshot->xmin) ||
++		!TransactionIdIsValid(snapshot->xmax))
++		elog(ERROR, "rda_get() uses MVCC snapshots");
++
++	if (!ItemPointerIsValid(&root_tid) ||
++		!OidIsValid(toid))
++		elog(ERROR, "invalid input");
++
++	/*
++	 * We search on RDA_NUM_SCANKEYS, all of which are non-NULL.
++	 * Scan keys are marked as if _bt_preprocess_keys() had been run on them.
++	 * C_COLLATION_OID is irrelevant, but is required.
++	 */
++	ScanKeyEntryInitialize(&skey[0],
++				SK_BT_REQFWD | SK_BT_REQBKWD,
++				RDA_COLUMN_TOID,
++				BTEqualStrategyNumber,
++				InvalidOid,
++				C_COLLATION_OID,
++				F_OIDEQ,
++				ObjectIdGetDatum(toid));
++	ScanKeyEntryInitialize(&skey[1],
++				SK_BT_REQFWD | SK_BT_REQBKWD,
++				RDA_COLUMN_ROOT_TID,
++				BTEqualStrategyNumber,
++				InvalidOid,
++				C_COLLATION_OID,
++				F_INT8EQ,
++				Int64GetDatum(rtid));
++	/*
++	 * Notice that these next two scankeys do not use equality, which
++	 * explains why RDA uses a btree, not a hash index. These extra
++	 * scan keys don't do much until the xmin to xmax gap is large,
++	 * when we might get 1000s of tuples. In that case, this is intended
++	 * to avoid scanning the rda heap for all of those rows.
++	 */
++	ScanKeyEntryInitialize(&skey[2],
++				SK_BT_REQFWD,
++				RDA_COLUMN_ROW_XMIN,
++				BTLessStrategyNumber,			/* < */
++				InvalidOid,
++				C_COLLATION_OID,
++				F_OIDLT,
++				ObjectIdGetDatum(snapshot->xmax));
++	ScanKeyEntryInitialize(&skey[3],
++				SK_BT_REQBKWD,
++				RDA_COLUMN_ROW_XMAX,
++				BTGreaterEqualStrategyNumber,	/* >= */
++				InvalidOid,
++				C_COLLATION_OID,
++				F_OIDGE,
++				ObjectIdGetDatum(snapshot->xmin));
++
++#ifdef MAKE_VISIBILITY_INDEXABLE
++
++	/*
++	 * We could make the tests for XidInMVCCSnapshot() indexable, which
++	 * would require us to pass the snapshot as a parameter for the
++	 * indexscan. If there are none or few rows in the RDA index for the
++	 * snapshot then this will be a loss, but if there are many rows in
++	 * the RDA index for the snapshot it could be a good win. The critical
++	 * factor is the number of transactions between snap->xmin and
++	 * snap->xmax, and how many of those generate RDA entries.
++	 *
++	 * XXX Not yet sure whether to optimize this one way or the other, or
++	 * invent some flexible scheme. For now, just accept visibility is
++	 * not indexable because it is more work, which means the cost of
++	 * retrieving data for older snapshots will increase with the age
++	 * of the snapshot and the frequency of update of the table.
++	 *
++	 * Set up scan keys for XidInMVCCSnapshot tests, as yet unfinished.
++	 *
++	 * These would require a lot of pushups to get them to be accepted
++	 * as indexable conditions by the optimizer, so just hardwire them.
++	 */
++	if (!OidIsValid(f4oid))
++	{
++		ftup = SearchSysCache3(PROCNAMEARGSNSP,
++								PointerGetDatum(procedureName),
++								PointerGetDatum(parameterTypes),
++								ObjectIdGetDatum(procNamespace));
++		if (HeapTupleIsValid(ftup))
++		{
++			Form_pg_proc fproc = (Form_pg_proc) GETSTRUCT(ftup);
++			f4oid = fproc->oid;
++		}
++		else
++			elog(ERROR, "function unavailable");
++	}
++	ScanKeyEntryInitialize(&skey[4],
++				0,								/* doesnt start/stop scan */
++				RDA_COLUMN_ROW_XMIN,
++				BTEqalStrategyNumber,
++				InvalidOid,
++				C_COLLATION_OID,
++				f4oid,
++				ObjectIdGetDatum(snapshot));
++
++	if (!OidIsValid(f5oid))
++	{
++		ftup = SearchSysCache3(PROCNAMEARGSNSP,
++								PointerGetDatum(procedureName),
++								PointerGetDatum(parameterTypes),
++								ObjectIdGetDatum(procNamespace));
++		if (HeapTupleIsValid(ftup))
++		{
++			fForm_pg_proc fproc = (Form_pg_proc) GETSTRUCT(ftup);
++			f5oid = fproc->oid;
++		}
++		else
++			elog(ERROR, "function unavailable");
++	}
++	ScanKeyEntryInitialize(&skey[5],
++				0,								/* doesnt start/stop scan */
++				RDA_COLUMN_ROW_XMAX,
++				BTEqualStrategyNumber,
++				InvalidOid,
++				C_COLLATION_OID,
++				f5oid,
++				ObjectIdGetDatum(snapshot));
++#endif
++
++	/*
++	 * Start searching for a visible row in the most recent partition,
++	 * then work backwards. Better ideas welcome, but partitioning is
++	 * critical to being able to release space from RDA regularly
++	 * and using the simple mechanism of truncation.
++	 */
++	partition_num = RDA_xmax_get_partition_num(snapshot->xmax);
++	partition_min = RDA_xmax_get_partition_num(snapshot->xmin);
++
++	if (unlikely(debug))
++		elog(NOTICE, "rda_get() snap->xmin %u snap->xmax %u",
++						snapshot->xmin, snapshot->xmax);
++
++	for (;;)
++	{
++		Relation	rda_rel = NULL;
++		Relation	rda_idx = NULL;
++		IndexInfo	*rda_idx_info = NULL;
++		IndexScanDesc rda_scan;
++		TupleTableSlot *slot = NULL;
++		TupleDesc	rda_desc = NULL;
++		RangeVar   	*rv;
++		bool		shouldFree = false;
++		bool		isnull = false;
++		MemoryContext tmpcontext;
++		MemoryContext oldcontext;
++		uint32		ncandidates = 0;
++		List       *indexoidlist;
++		ListCell   *l;
++		bool		found = false;
++		bool		tuple_has_data = false;
++
++		tmpcontext = AllocSetContextCreate(CurrentMemoryContext,
++											"rda_get workspace",
++											ALLOCSET_DEFAULT_SIZES);
++		oldcontext = MemoryContextSwitchTo(tmpcontext);
++
++		/* open partition */
++		snprintf(rda_partition_name, RDA_NAME_LENGTH, "rda_p%04d", partition_num);
++		rv = makeRangeVar(RDA_SCHEMA_NAME, rda_partition_name, -1);
++
++		rda_rel = table_openrv(rv, AccessShareLock);
++
++		/* Find the index id for this partition */
++		indexoidlist = RelationGetIndexList(rda_rel);
++
++		/*
++		 * RDA should have one valid index.
++		 *
++		 * Since we only do inserts and we regularly drop partitions, the
++		 * index will never need a REINDEX, but we can't actually prevent
++		 * someone from reindexing it. So take the last index entry.
++		 */
++		foreach(l, indexoidlist)
++		{
++			Oid			rda_partition_idx_oid;
++			Relation	rel;
++
++			rda_partition_idx_oid = lfirst_oid(l);
++			rel = index_open(rda_partition_idx_oid, AccessShareLock);
++
++			/*
++			 * Use index only if it is fully ready.
++			 */
++			if (!rel->rd_index->indisready)
++			{
++				index_close(rel, AccessShareLock);
++				continue;
++			}
++			if (rda_idx)
++				index_close(rda_idx, AccessShareLock);
++			rda_idx = rel;
++
++			if (rda_idx_info)
++				pfree(rda_idx_info);
++			rda_idx_info = palloc(sizeof(IndexInfo *));
++			rda_idx_info = BuildIndexInfo(rda_idx);
++
++			/*
++			 * Check the index for validity
++			 */
++			if (rda_idx_info->ii_NumIndexKeyAttrs != RDA_NUM_SCANKEYS ||
++				rda_idx_info->ii_Expressions != NIL)
++				continue;
++
++			/* Note that we don't need speculative index info */
++
++			pfree(rda_idx_info);
++		}
++		if (rda_idx == NULL)
++			elog(ERROR, "could not open valid RDA index");
++		list_free(indexoidlist);
++
++		/*
++		 * Kluge, since RDA index is not a normal user index, so we don't want to
++		 * throw serializable errors if people read data touched by others.
++		 */
++		rda_idx->rd_indam->ampredlocks = false;
++
++		slot = table_slot_create(rda_rel, NULL);
++
++		rda_scan = index_beginscan(rda_rel, rda_idx, snapshot, RDA_NUM_SCANKEYS, 0);
++		rda_scan->xs_want_itup = true;
++		index_rescan(rda_scan, skey, RDA_NUM_SCANKEYS, NULL, 0);
++
++		rda_desc = RelationGetDescr(rda_rel);
++
++		/* Scan until we find a row that matches scankeys */
++		while (index_getnext_slot(rda_scan, ForwardScanDirection, slot))
++		{
++			TransactionId	row_xmin;
++			TransactionId	row_xmax;
++			Datum			d;
++
++			rda_tuple = ExecFetchSlotHeapTuple(slot, false, NULL);
++
++			/*
++			 * Don't deform the whole RDA tuple because it might be large
++			 * and we don't yet know if this candidate tuple is visible.
++			 */
++			d = heap_getattr(rda_tuple,
++								RDA_COLUMN_ROW_XMIN,
++								rda_desc,
++								&isnull);
++			Assert(!isnull);
++			row_xmin = (TransactionId) DatumGetObjectId(d);
++
++			d = heap_getattr(rda_tuple,
++								RDA_COLUMN_ROW_XMAX,
++								rda_desc,
++								&isnull);
++			Assert(!isnull);
++			row_xmax = (TransactionId) DatumGetObjectId(d);
++
++			ncandidates++;
++
++			if (unlikely(debug))
++				elog(NOTICE, " candidate row with row_xmin %u and row_xmax %u", row_xmin, row_xmax);
++
++			/*
++			 * Each row in the RDA represents a tuple in a source table.
++			 * The RDA rows retrieved here are visible to this scan,
++			 * but the source table's row_xmin/row_xmax, stored as RDA columns,
++			 * need to be tested for visibility. Confused??
++			 */
++			if (XidInMVCCSnapshot(row_xmax, snapshot) &&
++				!XidInMVCCSnapshot(row_xmin, snapshot))
++			{
++				rda_tuple = ExecFetchSlotHeapTuple(slot, true, &shouldFree);
++				found = true;
++				break;
++			}
++			else
++				rda_tuple = NULL;	/* Not sure if this leaks? */
++
++			/*
++			 * When a snapshot is in use for hours, xmin to xmax could
++			 * be very wide, so potentially the number of rows archived
++			 * could be large. Make sure we don't do a tight loop.
++			 */
++			CHECK_FOR_INTERRUPTS();
++		}
++
++		/*
++		 * If we found a tuple, let's unpack it and return victorious.
++		 */
++		if (rda_tuple)
++		{
++			bool		isnull;
++			Datum		d;
++
++			if (unlikely(debug))
++				elog(NOTICE, "  rda_get() found visible row");
++
++			/*
++			 * Copy the data from the RDA row_data column into a tuple that can
++			 * be returned directly to the caller.
++			 */
++			d = heap_getattr(rda_tuple,
++								RDA_COLUMN_ROW_DATA,
++								rda_desc,
++								&isnull);
++
++			/*
++			 * This shouldn't happen, but we don't want to ERROR here
++			 */
++			if (!isnull)
++			{
++				Size len, tlen;
++
++				len = MAXALIGN(sizeof(LeopardTupleHeader));
++				tlen = VARSIZE_ANY_EXHDR(DatumGetPointer(d));
++				len += MAXALIGN(tlen);
++
++				/*
++				 * Assemble the result tuple, copying the original row back from RDA
++				 */
++				leopardTuple = MemoryContextAllocZero(oldcontext, (uint32) len);
++				leopardTuple->t_data = (LeopardTupleHeader) (leopardTuple + MAXALIGN(sizeof(LeopardTupleHeader)));
++				memcpy(leopardTuple->t_data, VARDATA(d), tlen);
++				leopardTuple->t_len = MAXALIGN(tlen);
++
++				/*
++				 * Set the tuple fields
++				 */
++				leopardTuple->t_tableOid = toid;
++				ItemPointerSetInvalid(&leopardTuple->t_self);
++
++				tuple_has_data = true;
++			}
++		}
++		else if (ncandidates > 0 && unlikely(debug))
++			elog(NOTICE, "  scan of %s found %u candidates, none visible",
++							rda_partition_name,
++							ncandidates);
++		else if (unlikely(debug))
++			elog(NOTICE, "  scan of %s found 0 candidates",
++							rda_partition_name);
++
++		/* end scan */
++		index_endscan(rda_scan);
++		ExecDropSingleTupleTableSlot(slot);
++
++		/* close and release locks */
++		index_close(rda_idx, AccessShareLock);
++		table_close(rda_rel, AccessShareLock);
++
++		MemoryContextSwitchTo(oldcontext);
++		MemoryContextDelete(tmpcontext);
++
++		if (found)
++			return tuple_has_data;
++
++		/*
++		 * If we've searched the lowest partition and still not found a row
++		 * then we're done. Hopefully, most searches end after just one partition.
++		 */
++		if (partition_num == partition_min)
++			break;
++
++		/*
++		 * Move backwards in time until we hit the earliest partition, since we
++		 * don't have any more intelligent way of searching.
++		 *
++		 * xids are circular so wrap correctly at 0 back to highest partition num
++		 */
++		if (partition_num == 0)
++			partition_num  = RDA_NUM_PARTITIONS - 1;
++		else
++			partition_num--;
++
++		CHECK_FOR_INTERRUPTS();
++	}
++
++	return false;
++}
++
++/*
++ * rda_trim
++ *
++ * Examines all partitions of the RDA and truncates any partitions where
++ * all rows are now DEAD (as opposed to RECENTLY_DEAD, as they are at insert).
++ *
++ * Intended for use by regular or occasional administrative users to allow
++ * disk space to be recovered, or as a last resort by foreground processes
++ * that need to clear space for further inserts into the RDA.
++ */
++void
++rda_trim(void)
++{
++	Relation	rda_rel;
++	TransactionId xmin;
++	RangeVar   	*rv;
++	char        rda_partition_name[RDA_NAME_LENGTH];
++	uint32		i;
++
++	/*
++	 * Find the Oldest Xmin to use for removing rows from RDA, by
++	 * looking at the first partition.
++	 */
++	rv = makeRangeVar(RDA_SCHEMA_NAME, "rda_p0000", -1);
++	rda_rel = table_openrv(rv, AccessShareLock);
++	xmin = GetOldestNonRemovableTransactionId(rda_rel);
++	table_close(rda_rel, AccessShareLock);
++
++	for (i=0; i < RDA_NUM_PARTITIONS; i++)
++	{
++		TransactionId lobound = (i << RDA_PARTITION_SHIFT);
++		TransactionId hibound = (i << RDA_PARTITION_SHIFT) + ((1 << RDA_PARTITION_SHIFT) - 1);
++
++		if (TransactionIdPrecedes(lobound, xmin) &&
++			TransactionIdPrecedes(hibound, xmin))
++		{
++
++			snprintf(rda_partition_name, RDA_NAME_LENGTH, "rda_p%04d", i);
++			rv = makeRangeVar(RDA_SCHEMA_NAME, rda_partition_name, -1);
++			rda_rel = table_openrv(rv, AccessShareLock);
++
++			/* check if table has any blocks, if so, truncate it */
++			if (RelationGetNumberOfBlocks(rda_rel) > 0)
++			{
++				elog(LOG, "truncating %s (%u, %u) because xmin=%u", rda_partition_name, lobound, hibound, xmin);
++				table_relation_nontransactional_truncate(rda_rel);
++			}
++
++			table_close(rda_rel, AccessShareLock);
++		}
++	}
++}
+diff --git a/leopard/access/rda_heap.h b/leopard/access/rda_heap.h
+new file mode 100644
+index 00000000..589b2553
+--- /dev/null
++++ b/leopard/access/rda_heap.h
+@@ -0,0 +1,23 @@
++/*-------------------------------------------------------------------------
++ *
++ * rda_heap.h
++ *
++ * Portions Copyright (c) 2022, EnterpriseDB Corporation. All Rights Reserved.
++ *
++ * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
++ * Portions Copyright (c) 1994, Regents of the University of California
++ *
++ *-------------------------------------------------------------------------
++ */
++#ifndef LEOPARD_RDA_HEAP_H
++#define LEOPARD_RDA_HEAP_H
++
++extern void rda_insert(Oid toid, HeapTuple tuple, ItemPointerData root_tid);
++extern bool rda_get(Oid toid, ItemPointerData root_tid, Snapshot snapshot, bool debug, LeopardTuple leopardTuple);
++extern void rda_trim(void);
++
++extern Datum rda_unit_test_rda_insert(PG_FUNCTION_ARGS);
++extern Datum rda_unit_test_rda_get(PG_FUNCTION_ARGS);
++extern Datum rda_unit_test_rda_trim(PG_FUNCTION_ARGS);
++
++#endif							/* LEOPARD_RDA_HEAP_H */
+diff --git a/leopard/isolation/expected/leopard-rda-unit.out b/leopard/isolation/expected/leopard-rda-unit.out
+new file mode 100644
+index 00000000..916bc010
+--- /dev/null
++++ b/leopard/isolation/expected/leopard-rda-unit.out
+@@ -0,0 +1,106 @@
++Parsed test spec with 3 sessions
++
++starting permutation: i1 i2 i3 s1s u1 u2 u3 rdaif rdai srda s2c s1c srdai1 srdai2 srdai3 rdagf rdag
++step i1: INSERT INTO foo VALUES (1, 'x');
++step i2: INSERT INTO foo VALUES (2, 'y');
++step i3: INSERT INTO foo VALUES (3, 'z');
++step s1s: SELECT * FROM foo WHERE id < 100;
++id|data
++--+----
++ 1|x   
++ 2|y   
++ 3|z   
++(3 rows)
++
++step u1: UPDATE foo SET data = 'a' WHERE id = 2;
++step u2: UPDATE foo SET data = 'b' WHERE id = 2;
++step u3: UPDATE foo SET data = 'c' WHERE id = 2;
++step rdaif: 
++  CREATE FUNCTION rda_unit_test_rda_insert(int) RETURNS VOID
++	AS '/Users/sriggs/pg/pg-git/pgREL_14_STABLE/contrib/leopard/leopard.so', 'rda_unit_test_rda_insert'
++	LANGUAGE C;
++
++step rdai: BEGIN; SELECT rda_unit_test_rda_insert(0);
++s2: NOTICE:  inserted 1 row into RDA
++s2: NOTICE:  inserted 1 row into RDA
++s2: NOTICE:  inserted 1 row into RDA
++rda_unit_test_rda_insert
++------------------------
++                        
++(1 row)
++
++step srda: SELECT root_tid, next_tid FROM rda.rda;
++root_tid|next_tid
++--------+--------
++  196733|  196735
++  196733|  196736
++  196733|  196737
++(3 rows)
++
++step s2c: COMMIT;
++step s1c: COMMIT;
++step srdai1: SET enable_seqscan = off;
++step srdai2: EXPLAIN (COSTS OFF) SELECT * FROM rda.rda_p0000 WHERE toid = 16585 AND root_tid = 196733 AND row_xmin < 741 AND row_xmax >= 741 ORDER BY row_xmin DESC LIMIT 1;
++QUERY PLAN                                                                                                                  
++----------------------------------------------------------------------------------------------------------------------------
++Limit                                                                                                                       
++  ->  Index Scan using rda_p0000_idx on rda_p0000                                                                           
++        Index Cond: ((toid = '16585'::oid) AND (root_tid = 196733) AND (row_xmin < '741'::oid) AND (row_xmax >= '741'::oid))
++(3 rows)
++
++step srdai3: SELECT 1 FROM rda.rda_p0000 WHERE toid = 16585 AND root_tid = 196733 AND row_xmin < 741 AND row_xmax >= 741 ORDER BY row_xmin DESC LIMIT 1;
++?column?
++--------
++(0 rows)
++
++step rdagf: 
++  CREATE FUNCTION rda_unit_test_rda_get(int) RETURNS VOID
++	AS '/Users/sriggs/pg/pg-git/pgREL_14_STABLE/contrib/leopard/leopard.so', 'rda_unit_test_rda_get'
++	LANGUAGE C;
++
++s2: NOTICE:  rda_get() snap->xmin 500 snap->xmax 700
++s2: NOTICE:    scan of rda_p0000 found 0 candidates
++s2: NOTICE:  rda_get() snap->xmin 500 snap->xmax 741
++s2: NOTICE:   candidate row with row_xmin 740 and row_xmax 741
++s2: NOTICE:    rda_get() found visible row
++s2: NOTICE:  rda_get() snap->xmin 741 snap->xmax 741
++s2: NOTICE:   candidate row with row_xmin 740 and row_xmax 741
++s2: NOTICE:    rda_get() found visible row
++s2: NOTICE:  rda_get() snap->xmin 741 snap->xmax 742
++s2: NOTICE:   candidate row with row_xmin 741 and row_xmax 742
++s2: NOTICE:    rda_get() found visible row
++s2: NOTICE:  rda_get() snap->xmin 741 snap->xmax 800
++s2: NOTICE:   candidate row with row_xmin 741 and row_xmax 742
++s2: NOTICE:   candidate row with row_xmin 740 and row_xmax 741
++s2: NOTICE:    scan of rda_p0000 found 2 candidates, none visible
++s2: NOTICE:  rda_get() snap->xmin 500 snap->xmax 800
++s2: NOTICE:   candidate row with row_xmin 741 and row_xmax 742
++s2: NOTICE:   candidate row with row_xmin 740 and row_xmax 741
++s2: NOTICE:   candidate row with row_xmin 738 and row_xmax 740
++s2: NOTICE:    scan of rda_p0000 found 3 candidates, none visible
++s2: NOTICE:  rda_get() snap->xmin 800 snap->xmax 800
++s2: NOTICE:    scan of rda_p0000 found 0 candidates
++s2: NOTICE:  rda_get() snap->xmin 800 snap->xmax 268455456
++s2: NOTICE:    scan of rda_p0002 found 0 candidates
++s2: NOTICE:    scan of rda_p0001 found 0 candidates
++s2: NOTICE:    scan of rda_p0000 found 0 candidates
++step rdag: SELECT rda_unit_test_rda_get(0);
++rda_unit_test_rda_get
++---------------------
++                     
++(1 row)
++
++
++starting permutation: rdatf rdat s2c
++step rdatf: 
++  CREATE FUNCTION rda_unit_test_rda_trim(int) RETURNS VOID
++	AS '/Users/sriggs/pg/pg-git/pgREL_14_STABLE/contrib/leopard/leopard.so', 'rda_unit_test_rda_trim'
++	LANGUAGE C;
++
++step rdat: BEGIN; SELECT rda_unit_test_rda_trim(0);
++rda_unit_test_rda_trim
++----------------------
++                      
++(1 row)
++
++step s2c: COMMIT;
+diff --git a/leopard/isolation/expected/leopard-update.out b/leopard/isolation/expected/leopard-update.out
+new file mode 100644
+index 00000000..46b853c1
+--- /dev/null
++++ b/leopard/isolation/expected/leopard-update.out
+@@ -0,0 +1,134 @@
++Parsed test spec with 2 sessions
++
++starting permutation: s1b u3 u3 s u1 s u1 s s1s u1 s s1c
++step s1b: BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM ltest;
++count
++-----
++  182
++(1 row)
++
++step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
++step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
++step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
++id|val
++--+---
++ 1|  0
++ 3|  2
++(2 rows)
++
++step u1: UPDATE ltest SET val = val + 1 WHERE id = 1;
++step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
++id|val
++--+---
++ 1|  1
++ 3|  2
++(2 rows)
++
++step u1: UPDATE ltest SET val = val + 1 WHERE id = 1;
++step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
++id|val
++--+---
++ 1|  2
++ 3|  2
++(2 rows)
++
++step s1s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
++id|val
++--+---
++ 1|  0
++ 3|  0
++(2 rows)
++
++step u1: UPDATE ltest SET val = val + 1 WHERE id = 1;
++step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
++id|val
++--+---
++ 1|  3
++ 3|  2
++(2 rows)
++
++step s1c: COMMIT;
++
++starting permutation: s1b u3 u3 s u3 s u1 s s1s u1 s s1c
++step s1b: BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM ltest;
++count
++-----
++  182
++(1 row)
++
++step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
++step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
++step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
++id|val
++--+---
++ 1|  0
++ 3|  2
++(2 rows)
++
++step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
++step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
++id|val
++--+---
++ 1|  0
++ 3|  3
++(2 rows)
++
++step u1: UPDATE ltest SET val = val + 1 WHERE id = 1;
++step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
++id|val
++--+---
++ 1|  1
++ 3|  3
++(2 rows)
++
++step s1s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
++id|val
++--+---
++ 1|  0
++ 3|  0
++(2 rows)
++
++step u1: UPDATE ltest SET val = val + 1 WHERE id = 1;
++step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
++id|val
++--+---
++ 1|  2
++ 3|  3
++(2 rows)
++
++step s1c: COMMIT;
++
++starting permutation: u3 u3 s u3 s u3 s u3 s
++step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
++step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
++step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
++id|val
++--+---
++ 1|  0
++ 3|  2
++(2 rows)
++
++step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
++step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
++id|val
++--+---
++ 1|  0
++ 3|  3
++(2 rows)
++
++step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
++step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
++id|val
++--+---
++ 1|  0
++ 3|  4
++(2 rows)
++
++step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
++step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
++id|val
++--+---
++ 1|  0
++ 3|  5
++(2 rows)
++
+diff --git a/leopard/isolation/specs/leopard-rda-unit.spec b/leopard/isolation/specs/leopard-rda-unit.spec
+new file mode 100644
+index 00000000..a3f7aff9
+--- /dev/null
++++ b/leopard/isolation/specs/leopard-rda-unit.spec
+@@ -0,0 +1,59 @@
++# Unit tests for RDA heap
++
++setup
++{
++  CREATE TABLE foo (
++	id int PRIMARY KEY,
++	data text NOT NULL
++  );
++  INSERT INTO foo SELECT generate_series(100,900), 'o';
++}
++
++teardown
++{
++  DROP TABLE foo;
++  TRUNCATE rda.rda;
++}
++
++session s1
++setup		{ BEGIN; }
++step s1s	{ SELECT * FROM foo WHERE id < 100; }
++step s1c	{ COMMIT; }
++
++session s2
++step i1		{ INSERT INTO foo VALUES (1, 'x'); }
++step i2		{ INSERT INTO foo VALUES (2, 'y'); }
++step i3		{ INSERT INTO foo VALUES (3, 'z'); }
++step u1		{ UPDATE foo SET data = 'a' WHERE id = 2; }
++step u2		{ UPDATE foo SET data = 'b' WHERE id = 2; }
++step u3		{ UPDATE foo SET data = 'c' WHERE id = 2; }
++
++step rdaif	{
++  CREATE FUNCTION rda_unit_test_rda_insert(int) RETURNS VOID
++	AS '/Users/sriggs/pg/pg-git/pgREL_14_STABLE/contrib/leopard/leopard.so', 'rda_unit_test_rda_insert'
++	LANGUAGE C;
++}
++step rdai	{ BEGIN; SELECT rda_unit_test_rda_insert(0); }
++step rdagf	{
++  CREATE FUNCTION rda_unit_test_rda_get(int) RETURNS VOID
++	AS '/Users/sriggs/pg/pg-git/pgREL_14_STABLE/contrib/leopard/leopard.so', 'rda_unit_test_rda_get'
++	LANGUAGE C;
++}
++step rdag	{ SELECT rda_unit_test_rda_get(0); }
++step rdatf	{
++  CREATE FUNCTION rda_unit_test_rda_trim(int) RETURNS VOID
++	AS '/Users/sriggs/pg/pg-git/pgREL_14_STABLE/contrib/leopard/leopard.so', 'rda_unit_test_rda_trim'
++	LANGUAGE C;
++}
++step rdat	{ BEGIN; SELECT rda_unit_test_rda_trim(0); }
++step s2c	{ COMMIT; }
++
++session s3
++step srda	{ SELECT root_tid, next_tid FROM rda.rda; }
++
++step srdai1	{ SET enable_seqscan = off; }
++step srdai2	{ EXPLAIN (COSTS OFF) SELECT * FROM rda.rda_p0000 WHERE toid = 16585 AND root_tid = 196733 AND row_xmin < 741 AND row_xmax >= 741 ORDER BY row_xmin DESC LIMIT 1; }
++step srdai3	{ SELECT 1 FROM rda.rda_p0000 WHERE toid = 16585 AND root_tid = 196733 AND row_xmin < 741 AND row_xmax >= 741 ORDER BY row_xmin DESC LIMIT 1; }
++
++permutation i1 i2 i3 s1s u1 u2 u3 rdaif rdai srda s2c s1c srdai1 srdai2 srdai3 rdagf rdag
++permutation rdatf rdat s2c
+diff --git a/leopard/isolation/specs/leopard-update.spec b/leopard/isolation/specs/leopard-update.spec
+new file mode 100644
+index 00000000..c373fccb
+--- /dev/null
++++ b/leopard/isolation/specs/leopard-update.spec
+@@ -0,0 +1,36 @@
++# Update tests for Leopard
++
++setup
++{
++ CREATE TABLE ltest
++ (   id  bigint not null primary key 
++ ,   val bigint not null
++ ) WITH (autovacuum_enabled = off);
++ INSERT INTO ltest SELECT generate_series(1,182), 0;
++}
++
++teardown
++{
++  DROP TABLE ltest;
++}
++
++session s1
++setup		{ SET enable_seqscan = off; }
++step s1b	{ BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM ltest; }
++step s1s	{ SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id; }
++step s1c	{ COMMIT; }
++
++session s2
++setup		{ SET enable_seqscan = off; }
++step s		{ SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id; }
++step u1		{ UPDATE ltest SET val = val + 1 WHERE id = 1; }
++step u3		{ UPDATE ltest SET val = val + 1 WHERE id = 3; }
++step srda	{ SELECT toid, root_tid, row_xmin, row_xmax, next_tid FROM rda.rda; }
++
++# earlier updates have left space that can be cleared
++permutation s1b u3 u3 s u1 s u1 s srda s1s u1 s s1c
++
++# earlier updates in same chain may be cleared
++permutation s1b u3 u3 s u3 s u1 s srda s1s u1 s s1c
++
++permutation     u3 u3 s u3 s u3 s u3 s
+diff --git a/leopard/leopard--1.0.sql b/leopard/leopard--1.0.sql
+index 3cbcea4e..11624095 100644
+--- a/leopard/leopard--1.0.sql
++++ b/leopard/leopard--1.0.sql
+@@ -11,3 +11,81 @@ LANGUAGE C;
+ -- Access method
+ CREATE ACCESS METHOD leopard TYPE TABLE HANDLER leopard_tableam_handler;
+ COMMENT ON ACCESS METHOD leopard IS 'leopard Table Access Method';
++
++--
++-- Recently Dead Archive (RDA) using a Heap
++--
++-- Note that changing the order or datatype of columns, or adding/changing
++-- indexes will cause ERRORs in the hardcoded table access paths.
++--
++DROP SCHEMA IF EXISTS rda;
++CREATE SCHEMA rda;
++DROP TABLE IF EXISTS rda.rda;
++CREATE TABLE rda.rda
++(toid       OID NOT NULL    /* reloid */
++,root_tid   BIGINT NOT NULL /* only 6 bytes */
++,row_xmin   OID NOT NULL    /* xid is 32-bit unsigned int, so not INT4 */
++,row_xmax   OID NOT NULL    /* xid is 32-bit unsigned int, so not INT4 */
++,next_tid   BIGINT NOT NULL /* only updated rows are stored, so always set */
++,row_data   BYTEA           /* NULL if row_xmin == row_xmax */
++)
++PARTITION BY RANGE (row_xmax)
++;
++
++REVOKE ALL ON rda.rda FROM PUBLIC;
++GRANT SELECT, INSERT ON rda.rda TO PUBLIC;
++
++-- generate partitions using pattern
++--  CREATE TABLE rda_pNNNN PARTITION OF rda FOR VALUES FROM (START) TO (END) WITH (...)
++--  CREATE INDEX ON <table> (toid, root_tid, row_xmin, row_xmax) WITH (...)
++-- since parameters cannot be added directly to partitioned tables
++DO LANGUAGE PLPGSQL
++$$
++DECLARE
++    i   integer;
++    s   integer;
++    n   integer;
++    sql text;
++	name text;
++	qname text;
++	hibound	text;
++BEGIN
++ /*
++  * n is the Number of Partitions
++  *
++  * n is configurable, but if you change this value you must also change the
++  * constants defined in access/rda_heap.c to match this.
++  * This is not intended for user configuration.
++  * Current assumptions is this will be configured in the range 1-8192, since
++  * names are generated/searched for using 4 zero-padded digits.
++  */
++ n := 32;  /* Number of partitions */
++
++ s := (2^31) / n;
++ FOR i IN 0..(n-1) LOOP
++	name:= 'rda_p' || to_char(i, 'FM0000');
++	qname:= 'rda.' || name;
++	IF i = (n-1) THEN
++		hibound:= 'MAXVALUE';
++	ELSE
++		hibound:= ((s * i)+(s))::text;
++	END IF;
++    sql :=  'CREATE TABLE ' || qname ||
++            ' PARTITION OF rda.rda FOR VALUES FROM (' ||
++            (s * i)::text ||
++            ') TO (' ||
++			hibound ||
++            ') WITH (' ||
++			' autovacuum_enabled=off, toast.autovacuum_enabled=off' ||
++			',log_autovacuum_min_duration=0, toast.log_autovacuum_min_duration=0' ||
++			',vacuum_truncate=off,toast.vacuum_truncate=off' ||
++			',fillfactor=100' ||
++			',toast_tuple_target=8160' ||
++			'); CREATE INDEX ' || name || '_idx ON ' || qname ||
++			' (toid, root_tid, row_xmin DESC, row_xmax)' ||
++			' WITH (fillfactor=100);';
++
++    EXECUTE sql;
++ END LOOP;
++END;
++$$;

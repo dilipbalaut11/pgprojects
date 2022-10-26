@@ -1,0 +1,164 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s2b s1b s1m2 s2m2 s1c s2c
+step s2b: begin isolation level serializable;
+step s1b: begin isolation level serializable;
+step s1m2: update tst set id = id+1 where id % 2 = 1;
+step s2m2: select md5(array_agg(id order by id)::text) from tst where id % 2 = 1;
+md5                             
+--------------------------------
+56a5e7f4a8c070faa067d6707d484b5f
+(1 row)
+
+step s1c: commit;
+step s2c: commit;
+
+starting permutation: s3b s2b s1b s1m2 s2m2 s1m3 s2m3 s3m3 s1c s2c s3c
+step s3b: begin isolation level serializable;
+step s2b: begin isolation level serializable;
+step s1b: begin isolation level serializable;
+step s1m2: update tst set id = id+1 where id % 2 = 1;
+step s2m2: select md5(array_agg(id order by id)::text) from tst where id % 2 = 1;
+md5                             
+--------------------------------
+56a5e7f4a8c070faa067d6707d484b5f
+(1 row)
+
+step s1m3: update tst set id = id+1 where id % 3 = 1;
+step s2m3: select md5(array_agg(id order by id)::text) from tst where id % 3 = 1;
+md5                             
+--------------------------------
+aaae4c83e0d68398e175227855528518
+(1 row)
+
+step s3m3: select md5(array_agg(id order by id)::text) from tst where id % 3 = 1;
+md5                             
+--------------------------------
+aaae4c83e0d68398e175227855528518
+(1 row)
+
+step s1c: commit;
+step s2c: commit;
+step s3c: commit;
+
+starting permutation: s4b s3b s2b s1b s1m2 s2m2 s1m3 s2m3 s3m3 s1m5 s2m5 s3m5 s4m5 s1c s2c s3c s4c
+step s4b: begin isolation level serializable;
+step s3b: begin isolation level serializable;
+step s2b: begin isolation level serializable;
+step s1b: begin isolation level serializable;
+step s1m2: update tst set id = id+1 where id % 2 = 1;
+step s2m2: select md5(array_agg(id order by id)::text) from tst where id % 2 = 1;
+md5                             
+--------------------------------
+56a5e7f4a8c070faa067d6707d484b5f
+(1 row)
+
+step s1m3: update tst set id = id+1 where id % 3 = 1;
+step s2m3: select md5(array_agg(id order by id)::text) from tst where id % 3 = 1;
+md5                             
+--------------------------------
+aaae4c83e0d68398e175227855528518
+(1 row)
+
+step s3m3: select md5(array_agg(id order by id)::text) from tst where id % 3 = 1;
+md5                             
+--------------------------------
+aaae4c83e0d68398e175227855528518
+(1 row)
+
+step s1m5: update tst set id = id+1 where id % 5 = 1;
+step s2m5: select md5(array_agg(id order by id)::text) from tst where id % 5 = 1;
+md5                             
+--------------------------------
+f2ac2e6f787a3869efbee3180830b402
+(1 row)
+
+step s3m5: select md5(array_agg(id order by id)::text) from tst where id % 5 = 1;
+md5                             
+--------------------------------
+f2ac2e6f787a3869efbee3180830b402
+(1 row)
+
+step s4m5: select md5(array_agg(id order by id)::text) from tst where id % 5 = 1;
+md5                             
+--------------------------------
+f2ac2e6f787a3869efbee3180830b402
+(1 row)
+
+step s1c: commit;
+step s2c: commit;
+step s3c: commit;
+step s4c: commit;
+
+starting permutation: s4b s3b s2b s1b s1m2 s1m3 s1m5 s1c s2m2 s2m3 s2m5 s1b s1m2 s1c s2c s3m2 s3m3 s3m5 s3c s1b s1m5 s1c s4m2 s4m3 s4m5 s4c
+step s4b: begin isolation level serializable;
+step s3b: begin isolation level serializable;
+step s2b: begin isolation level serializable;
+step s1b: begin isolation level serializable;
+step s1m2: update tst set id = id+1 where id % 2 = 1;
+step s1m3: update tst set id = id+1 where id % 3 = 1;
+step s1m5: update tst set id = id+1 where id % 5 = 1;
+step s1c: commit;
+step s2m2: select md5(array_agg(id order by id)::text) from tst where id % 2 = 1;
+md5                             
+--------------------------------
+deeacf14656deae814c88bd5c77f5b48
+(1 row)
+
+step s2m3: select md5(array_agg(id order by id)::text) from tst where id % 3 = 1;
+md5                             
+--------------------------------
+65b0f1becf65cebc2aa37cb4075436ca
+(1 row)
+
+step s2m5: select md5(array_agg(id order by id)::text) from tst where id % 5 = 1;
+md5
+---
+   
+(1 row)
+
+step s1b: begin isolation level serializable;
+step s1m2: update tst set id = id+1 where id % 2 = 1;
+step s1c: commit;
+step s2c: commit;
+step s3m2: select md5(array_agg(id order by id)::text) from tst where id % 2 = 1;
+md5
+---
+   
+(1 row)
+
+step s3m3: select md5(array_agg(id order by id)::text) from tst where id % 3 = 1;
+md5                             
+--------------------------------
+9adec538b1750330e0132268b5b4218a
+(1 row)
+
+step s3m5: select md5(array_agg(id order by id)::text) from tst where id % 5 = 1;
+md5                             
+--------------------------------
+98832af49da2eac2e339068f0f7b7d6e
+(1 row)
+
+step s3c: commit;
+step s1b: begin isolation level serializable;
+step s1m5: update tst set id = id+1 where id % 5 = 1;
+step s1c: commit;
+step s4m2: select md5(array_agg(id order by id)::text) from tst where id % 2 = 1;
+md5                             
+--------------------------------
+65b0f1becf65cebc2aa37cb4075436ca
+(1 row)
+
+step s4m3: select md5(array_agg(id order by id)::text) from tst where id % 3 = 1;
+md5                             
+--------------------------------
+b188050204dcc70afbcdc421171765d5
+(1 row)
+
+step s4m5: select md5(array_agg(id order by id)::text) from tst where id % 5 = 1;
+md5
+---
+   
+(1 row)
+
+step s4c: commit;

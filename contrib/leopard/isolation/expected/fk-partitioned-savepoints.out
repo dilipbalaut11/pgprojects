@@ -1,0 +1,316 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1b s1eng s1tec s1mgr s1c s2b s2e1 s2e2 s2t1 s2t2 s2m1 s2m2 s2c s3b s3e1 s3e2 s3t1 s3t2 s3m1 s3m2 s3c
+step s1b: begin;
+step s1eng: insert into dep values (1, 'Engineering');
+step s1tec: insert into dep values (2, 'Repairs');
+step s1mgr: insert into dep values (3, 'Management');
+step s1c: commit;
+step s2b: begin;
+step s2e1: insert into emp values (1, 1, 'Surface Warfare Engineer');
+step s2e2: insert into emp values (2, 1, 'Torpedo Engineer');
+step s2t1: insert into emp values (3, 2, 'Aegis Technician');
+step s2t2: insert into emp values (4, 2, 'Combat Radar Technician');
+step s2m1: insert into emp values (5, 3, 'Admiral');
+step s2m2: insert into emp values (6, 3, 'Admiral');
+step s2c: commit;
+step s3b: begin;
+step s3e1: insert into emp values (7, 1, 'Propulsion Engineer');
+step s3e2: insert into emp values (8, 1, 'Nuclear Engineer');
+step s3t1: insert into emp values (9, 2, 'Sonabouy Technician');
+step s3t2: insert into emp values (10, 2, 'Sonar Technician');
+step s3m1: insert into emp values (11, 3, 'Flight Operations Officer');
+step s3m2: insert into emp values (12, 3, 'Petty Pay Officer');
+step s3c: commit;
+
+starting permutation: s1b s2b s3b s1eng s1tec s1mgr s2e1 s2e2 s2t1 s2t2 s2m1 s2m2 s3e1 s3e2 s3t1 s3t2 s3m1 s3m2 s1c s2c s3c
+step s1b: begin;
+step s2b: begin;
+step s3b: begin;
+step s1eng: insert into dep values (1, 'Engineering');
+step s1tec: insert into dep values (2, 'Repairs');
+step s1mgr: insert into dep values (3, 'Management');
+step s2e1: insert into emp values (1, 1, 'Surface Warfare Engineer');
+ERROR:  insert or update on table "emp2eng" violates foreign key constraint "emp_depid_fkey"
+step s2e2: insert into emp values (2, 1, 'Torpedo Engineer');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2t1: insert into emp values (3, 2, 'Aegis Technician');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2t2: insert into emp values (4, 2, 'Combat Radar Technician');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2m1: insert into emp values (5, 3, 'Admiral');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2m2: insert into emp values (6, 3, 'Admiral');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3e1: insert into emp values (7, 1, 'Propulsion Engineer');
+ERROR:  insert or update on table "emp1pos" violates foreign key constraint "emp_depid_fkey"
+step s3e2: insert into emp values (8, 1, 'Nuclear Engineer');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3t1: insert into emp values (9, 2, 'Sonabouy Technician');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3t2: insert into emp values (10, 2, 'Sonar Technician');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3m1: insert into emp values (11, 3, 'Flight Operations Officer');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3m2: insert into emp values (12, 3, 'Petty Pay Officer');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s1c: commit;
+step s2c: commit;
+step s3c: commit;
+
+starting permutation: s1b s2b s3b s1eng s2e1 s2e2 s3e1 s3e2 s1tec s2t1 s2t2 s3t1 s3t2 s1mgr s2m1 s2m2 s3m1 s3m2 s1c s2c s3c
+step s1b: begin;
+step s2b: begin;
+step s3b: begin;
+step s1eng: insert into dep values (1, 'Engineering');
+step s2e1: insert into emp values (1, 1, 'Surface Warfare Engineer');
+ERROR:  insert or update on table "emp2eng" violates foreign key constraint "emp_depid_fkey"
+step s2e2: insert into emp values (2, 1, 'Torpedo Engineer');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3e1: insert into emp values (7, 1, 'Propulsion Engineer');
+ERROR:  insert or update on table "emp1pos" violates foreign key constraint "emp_depid_fkey"
+step s3e2: insert into emp values (8, 1, 'Nuclear Engineer');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s1tec: insert into dep values (2, 'Repairs');
+step s2t1: insert into emp values (3, 2, 'Aegis Technician');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2t2: insert into emp values (4, 2, 'Combat Radar Technician');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3t1: insert into emp values (9, 2, 'Sonabouy Technician');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3t2: insert into emp values (10, 2, 'Sonar Technician');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s1mgr: insert into dep values (3, 'Management');
+step s2m1: insert into emp values (5, 3, 'Admiral');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2m2: insert into emp values (6, 3, 'Admiral');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3m1: insert into emp values (11, 3, 'Flight Operations Officer');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3m2: insert into emp values (12, 3, 'Petty Pay Officer');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s1c: commit;
+step s2c: commit;
+step s3c: commit;
+
+starting permutation: s1b s1eng s1tec s1mgr s1c s2b s3b s2e1 s2e2 s3e1 s3e2 s2t1 s2t2 s3t1 s3t2 s2m1 s2m2 s3m1 s3m2 s2c s3c
+step s1b: begin;
+step s1eng: insert into dep values (1, 'Engineering');
+step s1tec: insert into dep values (2, 'Repairs');
+step s1mgr: insert into dep values (3, 'Management');
+step s1c: commit;
+step s2b: begin;
+step s3b: begin;
+step s2e1: insert into emp values (1, 1, 'Surface Warfare Engineer');
+step s2e2: insert into emp values (2, 1, 'Torpedo Engineer');
+step s3e1: insert into emp values (7, 1, 'Propulsion Engineer');
+step s3e2: insert into emp values (8, 1, 'Nuclear Engineer');
+step s2t1: insert into emp values (3, 2, 'Aegis Technician');
+step s2t2: insert into emp values (4, 2, 'Combat Radar Technician');
+step s3t1: insert into emp values (9, 2, 'Sonabouy Technician');
+step s3t2: insert into emp values (10, 2, 'Sonar Technician');
+step s2m1: insert into emp values (5, 3, 'Admiral');
+step s2m2: insert into emp values (6, 3, 'Admiral');
+step s3m1: insert into emp values (11, 3, 'Flight Operations Officer');
+step s3m2: insert into emp values (12, 3, 'Petty Pay Officer');
+step s2c: commit;
+step s3c: commit;
+
+starting permutation: s1b s1s s1eng s1s s1tec s1s s1mgr s1s s1c s2b s2s s2e1 s2s s2e2 s2s s2t1 s2s s2t2 s2s s2m1 s2s s2m2 s2s s2c s3b s3s s3e1 s3s s3e2 s3s s3t1 s3s s3t2 s3s s3m1 s3s s3m2 s3s s3c
+step s1b: begin;
+step s1s: savepoint s1;
+step s1eng: insert into dep values (1, 'Engineering');
+step s1s: savepoint s1;
+step s1tec: insert into dep values (2, 'Repairs');
+step s1s: savepoint s1;
+step s1mgr: insert into dep values (3, 'Management');
+step s1s: savepoint s1;
+step s1c: commit;
+step s2b: begin;
+step s2s: savepoint s2;
+step s2e1: insert into emp values (1, 1, 'Surface Warfare Engineer');
+step s2s: savepoint s2;
+step s2e2: insert into emp values (2, 1, 'Torpedo Engineer');
+step s2s: savepoint s2;
+step s2t1: insert into emp values (3, 2, 'Aegis Technician');
+step s2s: savepoint s2;
+step s2t2: insert into emp values (4, 2, 'Combat Radar Technician');
+step s2s: savepoint s2;
+step s2m1: insert into emp values (5, 3, 'Admiral');
+step s2s: savepoint s2;
+step s2m2: insert into emp values (6, 3, 'Admiral');
+step s2s: savepoint s2;
+step s2c: commit;
+step s3b: begin;
+step s3s: savepoint s3;
+step s3e1: insert into emp values (7, 1, 'Propulsion Engineer');
+step s3s: savepoint s3;
+step s3e2: insert into emp values (8, 1, 'Nuclear Engineer');
+step s3s: savepoint s3;
+step s3t1: insert into emp values (9, 2, 'Sonabouy Technician');
+step s3s: savepoint s3;
+step s3t2: insert into emp values (10, 2, 'Sonar Technician');
+step s3s: savepoint s3;
+step s3m1: insert into emp values (11, 3, 'Flight Operations Officer');
+step s3s: savepoint s3;
+step s3m2: insert into emp values (12, 3, 'Petty Pay Officer');
+step s3s: savepoint s3;
+step s3c: commit;
+
+starting permutation: s1b s2b s3b s1s s1eng s1s s1tec s1s s1mgr s2s s2e1 s2s s2e2 s2s s2t1 s2s s2t2 s2s s2m1 s2s s2m2 s3s s3e1 s3s s3e2 s3s s3t1 s3s s3t2 s3s s3m1 s3s s3m2 s1s s1c s2c s3c
+step s1b: begin;
+step s2b: begin;
+step s3b: begin;
+step s1s: savepoint s1;
+step s1eng: insert into dep values (1, 'Engineering');
+step s1s: savepoint s1;
+step s1tec: insert into dep values (2, 'Repairs');
+step s1s: savepoint s1;
+step s1mgr: insert into dep values (3, 'Management');
+step s2s: savepoint s2;
+step s2e1: insert into emp values (1, 1, 'Surface Warfare Engineer');
+ERROR:  insert or update on table "emp2eng" violates foreign key constraint "emp_depid_fkey"
+step s2s: savepoint s2;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2e2: insert into emp values (2, 1, 'Torpedo Engineer');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2s: savepoint s2;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2t1: insert into emp values (3, 2, 'Aegis Technician');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2s: savepoint s2;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2t2: insert into emp values (4, 2, 'Combat Radar Technician');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2s: savepoint s2;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2m1: insert into emp values (5, 3, 'Admiral');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2s: savepoint s2;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2m2: insert into emp values (6, 3, 'Admiral');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3s: savepoint s3;
+step s3e1: insert into emp values (7, 1, 'Propulsion Engineer');
+ERROR:  insert or update on table "emp1pos" violates foreign key constraint "emp_depid_fkey"
+step s3s: savepoint s3;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3e2: insert into emp values (8, 1, 'Nuclear Engineer');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3s: savepoint s3;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3t1: insert into emp values (9, 2, 'Sonabouy Technician');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3s: savepoint s3;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3t2: insert into emp values (10, 2, 'Sonar Technician');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3s: savepoint s3;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3m1: insert into emp values (11, 3, 'Flight Operations Officer');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3s: savepoint s3;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3m2: insert into emp values (12, 3, 'Petty Pay Officer');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s1s: savepoint s1;
+step s1c: commit;
+step s2c: commit;
+step s3c: commit;
+
+starting permutation: s1b s2b s3b s1s s1eng s2s s2e1 s2s s2e2 s3s s3e1 s3s s3e2 s1s s1tec s2s s2t1 s2s s2t2 s3s s3t1 s3s s3t2 s1s s1mgr s2s s2m1 s2s s2m2 s3s s3m1 s3s s3m2 s1s s1c s2c s3c
+step s1b: begin;
+step s2b: begin;
+step s3b: begin;
+step s1s: savepoint s1;
+step s1eng: insert into dep values (1, 'Engineering');
+step s2s: savepoint s2;
+step s2e1: insert into emp values (1, 1, 'Surface Warfare Engineer');
+ERROR:  insert or update on table "emp2eng" violates foreign key constraint "emp_depid_fkey"
+step s2s: savepoint s2;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2e2: insert into emp values (2, 1, 'Torpedo Engineer');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3s: savepoint s3;
+step s3e1: insert into emp values (7, 1, 'Propulsion Engineer');
+ERROR:  insert or update on table "emp1pos" violates foreign key constraint "emp_depid_fkey"
+step s3s: savepoint s3;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3e2: insert into emp values (8, 1, 'Nuclear Engineer');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s1s: savepoint s1;
+step s1tec: insert into dep values (2, 'Repairs');
+step s2s: savepoint s2;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2t1: insert into emp values (3, 2, 'Aegis Technician');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2s: savepoint s2;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2t2: insert into emp values (4, 2, 'Combat Radar Technician');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3s: savepoint s3;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3t1: insert into emp values (9, 2, 'Sonabouy Technician');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3s: savepoint s3;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3t2: insert into emp values (10, 2, 'Sonar Technician');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s1s: savepoint s1;
+step s1mgr: insert into dep values (3, 'Management');
+step s2s: savepoint s2;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2m1: insert into emp values (5, 3, 'Admiral');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2s: savepoint s2;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2m2: insert into emp values (6, 3, 'Admiral');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3s: savepoint s3;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3m1: insert into emp values (11, 3, 'Flight Operations Officer');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3s: savepoint s3;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3m2: insert into emp values (12, 3, 'Petty Pay Officer');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s1s: savepoint s1;
+step s1c: commit;
+step s2c: commit;
+step s3c: commit;
+
+starting permutation: s1b s1s s1eng s1s s1tec s1s s1mgr s1s s1c s2b s3b s2e1 s2s s2e2 s2s s3e1 s2s s3e2 s2t1 s2s s2t2 s2s s3t1 s2s s3t2 s2m1 s2s s2m2 s2s s3m1 s2s s3m2 s2c s3c
+step s1b: begin;
+step s1s: savepoint s1;
+step s1eng: insert into dep values (1, 'Engineering');
+step s1s: savepoint s1;
+step s1tec: insert into dep values (2, 'Repairs');
+step s1s: savepoint s1;
+step s1mgr: insert into dep values (3, 'Management');
+step s1s: savepoint s1;
+step s1c: commit;
+step s2b: begin;
+step s3b: begin;
+step s2e1: insert into emp values (1, 1, 'Surface Warfare Engineer');
+step s2s: savepoint s2;
+step s2e2: insert into emp values (2, 1, 'Torpedo Engineer');
+step s2s: savepoint s2;
+step s3e1: insert into emp values (7, 1, 'Propulsion Engineer');
+step s2s: savepoint s2;
+step s3e2: insert into emp values (8, 1, 'Nuclear Engineer');
+step s2t1: insert into emp values (3, 2, 'Aegis Technician');
+step s2s: savepoint s2;
+step s2t2: insert into emp values (4, 2, 'Combat Radar Technician');
+step s2s: savepoint s2;
+step s3t1: insert into emp values (9, 2, 'Sonabouy Technician');
+step s2s: savepoint s2;
+step s3t2: insert into emp values (10, 2, 'Sonar Technician');
+step s2m1: insert into emp values (5, 3, 'Admiral');
+step s2s: savepoint s2;
+step s2m2: insert into emp values (6, 3, 'Admiral');
+step s2s: savepoint s2;
+step s3m1: insert into emp values (11, 3, 'Flight Operations Officer');
+step s2s: savepoint s2;
+step s3m2: insert into emp values (12, 3, 'Petty Pay Officer');
+step s2c: commit;
+step s3c: commit;

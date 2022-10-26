@@ -1,0 +1,13 @@
+= TODO
+
+* Correctly return tuples in scan from RDA, memory management
+
+* Complete leopardgetpage()
+
+* Add tests for SeqScan
+
+* Archive less than ALL recently dead tuples
+
+* Make multi-row insert work with RDA
+
+* Optimize index build scan for case of empty RDA for a table

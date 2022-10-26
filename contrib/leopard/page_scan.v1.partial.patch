@@ -1,0 +1,89 @@
+diff --git a/leopard/access/leopardam.c b/leopard/access/leopardam.c
+index e8ae7900..af89aa9b 100644
+--- a/leopard/access/leopardam.c
++++ b/leopard/access/leopardam.c
+@@ -465,6 +465,58 @@ leopardgetpage(TableScanDesc sscan, BlockNumber page)
+ 	 */
+ 	all_visible = PageIsAllVisible(dp) && !snapshot->takenDuringRecovery;
+ 
++	/*
++	 * Leopard-specific page-level visibility, when not all_visible
++	 *
++	 * The RDA may contain recently dead yet visible tuples that relate to
++	 * this page. We could search for any for each page, but that is inefficient,
++	 * so we scan the page to see if the page has archived tuples for any chain.
++	 * If it does, we remember that do we can scan them AFTER all on-block
++	 * tuples.
++	 */
++	if (!all_visible)
++	{
++		OffsetNumber    root_offsets[MaxHeapTuplesPerPage];
++		bool			scanned[MaxHeapTuplesPerPage];
++		bool			valid;
++
++		/*
++		 * Scan the page via HOT chains
++		 */
++		leopard_get_root_tuples(page, root_offsets);
++
++		for (lineoff = FirstOffsetNumber;
++			 lineoff <= lines;
++			 lineoff = OffsetNumberNext(offnum))
++		{
++			root = root_offsets[offnum];
++			if (scanned[root])
++				continue;
++
++			if (ItemIdIsNormal(lpp))
++			{
++				loctup.t_tableOid = RelationGetRelid(scan->rs_base.rs_rd);
++				loctup.t_data = (LeopardTupleHeader) PageGetItem((Page) dp, lpp);
++				loctup.t_len = ItemIdGetLength(lpp);
++
++				valid = LeopardTupleSatisfiesVisibility(&loctup, snapshot, buffer);
++
++				if (valid)
++					scanned[root] = true;
++			}
++		}
++
++		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
++
++		Assert(ntup <= MaxLeopardTuplesPerPage);
++		scan->rs_ntuples = ntup;
++
++		return;
++	}
++
++	/*
++	 * If all_visible, do exactly as we would with Heap
++	 */
+ 	for (lineoff = FirstOffsetNumber, lpp = PageGetItemId(dp, lineoff);
+ 		 lineoff <= lines;
+ 		 lineoff++, lpp++)
+@@ -472,23 +524,16 @@ leopardgetpage(TableScanDesc sscan, BlockNumber page)
+ 		if (ItemIdIsNormal(lpp))
+ 		{
+ 			LeopardTupleData loctup;
+-			bool		valid;
+ 
+ 			loctup.t_tableOid = RelationGetRelid(scan->rs_base.rs_rd);
+ 			loctup.t_data = (LeopardTupleHeader) PageGetItem((Page) dp, lpp);
+ 			loctup.t_len = ItemIdGetLength(lpp);
+ 			ItemPointerSet(&(loctup.t_self), page, lineoff);
+ 
+-			if (all_visible)
+-				valid = true;
+-			else
+-				valid = LeopardTupleSatisfiesVisibility(&loctup, snapshot, buffer);
+-
+-			LeopardCheckForSerializableConflictOut(valid, scan->rs_base.rs_rd,
++			LeopardCheckForSerializableConflictOut(true, scan->rs_base.rs_rd,
+ 												&loctup, buffer, snapshot);
+ 
+-			if (valid)
+-				scan->rs_vistuples[ntup++] = lineoff;
++			scan->rs_vistuples[ntup++] = lineoff;
+ 		}
+ 	}
+ 

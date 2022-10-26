@@ -1,0 +1,106 @@
+Parsed test spec with 3 sessions
+
+starting permutation: i1 i2 i3 s1s u1 u2 u3 rdaif rdai srda s2c s1c srdai1 srdai2 srdai3 rdagf rdag
+step i1: INSERT INTO foo VALUES (1, 'x');
+step i2: INSERT INTO foo VALUES (2, 'y');
+step i3: INSERT INTO foo VALUES (3, 'z');
+step s1s: SELECT * FROM foo WHERE id < 100;
+id|data
+--+----
+ 1|x   
+ 2|y   
+ 3|z   
+(3 rows)
+
+step u1: UPDATE foo SET data = 'a' WHERE id = 2;
+step u2: UPDATE foo SET data = 'b' WHERE id = 2;
+step u3: UPDATE foo SET data = 'c' WHERE id = 2;
+step rdaif: 
+  CREATE FUNCTION rda_unit_test_rda_insert(int) RETURNS VOID
+	AS '/Users/sriggs/pg/pg-git/pgREL_14_STABLE/contrib/leopard/leopard.so', 'rda_unit_test_rda_insert'
+	LANGUAGE C;
+
+step rdai: BEGIN; SELECT rda_unit_test_rda_insert(0);
+s2: NOTICE:  inserted 1 row into RDA
+s2: NOTICE:  inserted 1 row into RDA
+s2: NOTICE:  inserted 1 row into RDA
+rda_unit_test_rda_insert
+------------------------
+                        
+(1 row)
+
+step srda: SELECT root_tid, next_tid FROM rda.rda;
+root_tid|next_tid
+--------+--------
+  196733|  196735
+  196733|  196736
+  196733|  196737
+(3 rows)
+
+step s2c: COMMIT;
+step s1c: COMMIT;
+step srdai1: SET enable_seqscan = off;
+step srdai2: EXPLAIN (COSTS OFF) SELECT * FROM rda.rda_p0000 WHERE toid = 16585 AND root_tid = 196733 AND row_xmin < 741 AND row_xmax >= 741 ORDER BY row_xmin DESC LIMIT 1;
+QUERY PLAN                                                                                                                  
+----------------------------------------------------------------------------------------------------------------------------
+Limit                                                                                                                       
+  ->  Index Scan using rda_p0000_idx on rda_p0000                                                                           
+        Index Cond: ((toid = '16585'::oid) AND (root_tid = 196733) AND (row_xmin < '741'::oid) AND (row_xmax >= '741'::oid))
+(3 rows)
+
+step srdai3: SELECT 1 FROM rda.rda_p0000 WHERE toid = 16585 AND root_tid = 196733 AND row_xmin < 741 AND row_xmax >= 741 ORDER BY row_xmin DESC LIMIT 1;
+?column?
+--------
+(0 rows)
+
+step rdagf: 
+  CREATE FUNCTION rda_unit_test_rda_get(int) RETURNS VOID
+	AS '/Users/sriggs/pg/pg-git/pgREL_14_STABLE/contrib/leopard/leopard.so', 'rda_unit_test_rda_get'
+	LANGUAGE C;
+
+s2: NOTICE:  rda_get() snap->xmin 500 snap->xmax 700
+s2: NOTICE:    scan of rda_p0000 found 0 candidates
+s2: NOTICE:  rda_get() snap->xmin 500 snap->xmax 741
+s2: NOTICE:   candidate row with row_xmin 740 and row_xmax 741
+s2: NOTICE:    rda_get() found visible row
+s2: NOTICE:  rda_get() snap->xmin 741 snap->xmax 741
+s2: NOTICE:   candidate row with row_xmin 740 and row_xmax 741
+s2: NOTICE:    rda_get() found visible row
+s2: NOTICE:  rda_get() snap->xmin 741 snap->xmax 742
+s2: NOTICE:   candidate row with row_xmin 741 and row_xmax 742
+s2: NOTICE:    rda_get() found visible row
+s2: NOTICE:  rda_get() snap->xmin 741 snap->xmax 800
+s2: NOTICE:   candidate row with row_xmin 741 and row_xmax 742
+s2: NOTICE:   candidate row with row_xmin 740 and row_xmax 741
+s2: NOTICE:    scan of rda_p0000 found 2 candidates, none visible
+s2: NOTICE:  rda_get() snap->xmin 500 snap->xmax 800
+s2: NOTICE:   candidate row with row_xmin 741 and row_xmax 742
+s2: NOTICE:   candidate row with row_xmin 740 and row_xmax 741
+s2: NOTICE:   candidate row with row_xmin 738 and row_xmax 740
+s2: NOTICE:    scan of rda_p0000 found 3 candidates, none visible
+s2: NOTICE:  rda_get() snap->xmin 800 snap->xmax 800
+s2: NOTICE:    scan of rda_p0000 found 0 candidates
+s2: NOTICE:  rda_get() snap->xmin 800 snap->xmax 268455456
+s2: NOTICE:    scan of rda_p0002 found 0 candidates
+s2: NOTICE:    scan of rda_p0001 found 0 candidates
+s2: NOTICE:    scan of rda_p0000 found 0 candidates
+step rdag: SELECT rda_unit_test_rda_get(0);
+rda_unit_test_rda_get
+---------------------
+                     
+(1 row)
+
+
+starting permutation: rdatf rdat s2c
+step rdatf: 
+  CREATE FUNCTION rda_unit_test_rda_trim(int) RETURNS VOID
+	AS '/Users/sriggs/pg/pg-git/pgREL_14_STABLE/contrib/leopard/leopard.so', 'rda_unit_test_rda_trim'
+	LANGUAGE C;
+
+step rdat: BEGIN; SELECT rda_unit_test_rda_trim(0);
+rda_unit_test_rda_trim
+----------------------
+                      
+(1 row)
+
+step s2c: COMMIT;

@@ -1,0 +1,134 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1b u3 u3 s u1 s u1 s s1s u1 s s1c
+step s1b: BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM ltest;
+count
+-----
+  182
+(1 row)
+
+step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
+step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
+step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
+id|val
+--+---
+ 1|  0
+ 3|  2
+(2 rows)
+
+step u1: UPDATE ltest SET val = val + 1 WHERE id = 1;
+step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
+id|val
+--+---
+ 1|  1
+ 3|  2
+(2 rows)
+
+step u1: UPDATE ltest SET val = val + 1 WHERE id = 1;
+step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
+id|val
+--+---
+ 1|  2
+ 3|  2
+(2 rows)
+
+step s1s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
+id|val
+--+---
+ 1|  0
+ 3|  0
+(2 rows)
+
+step u1: UPDATE ltest SET val = val + 1 WHERE id = 1;
+step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
+id|val
+--+---
+ 1|  3
+ 3|  2
+(2 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s1b u3 u3 s u3 s u1 s s1s u1 s s1c
+step s1b: BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM ltest;
+count
+-----
+  182
+(1 row)
+
+step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
+step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
+step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
+id|val
+--+---
+ 1|  0
+ 3|  2
+(2 rows)
+
+step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
+step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
+id|val
+--+---
+ 1|  0
+ 3|  3
+(2 rows)
+
+step u1: UPDATE ltest SET val = val + 1 WHERE id = 1;
+step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
+id|val
+--+---
+ 1|  1
+ 3|  3
+(2 rows)
+
+step s1s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
+id|val
+--+---
+ 1|  0
+ 3|  0
+(2 rows)
+
+step u1: UPDATE ltest SET val = val + 1 WHERE id = 1;
+step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
+id|val
+--+---
+ 1|  2
+ 3|  3
+(2 rows)
+
+step s1c: COMMIT;
+
+starting permutation: u3 u3 s u3 s u3 s u3 s
+step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
+step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
+step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
+id|val
+--+---
+ 1|  0
+ 3|  2
+(2 rows)
+
+step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
+step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
+id|val
+--+---
+ 1|  0
+ 3|  3
+(2 rows)
+
+step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
+step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
+id|val
+--+---
+ 1|  0
+ 3|  4
+(2 rows)
+
+step u3: UPDATE ltest SET val = val + 1 WHERE id = 3;
+step s: SELECT * FROM ltest WHERE id IN (1,3) ORDER BY id;
+id|val
+--+---
+ 1|  0
+ 3|  5
+(2 rows)
+

@@ -1,0 +1,80 @@
+mkdir -p access
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Werror=unguarded-availability-new -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -Wno-unused-command-line-argument -g -O2  -I. -I./ -I/usr/local/pgsql/PG14/include/server -I/usr/local/pgsql/PG14/include/internal  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk  -I/opt/local/include/libxml2   -c -o access/leopardam.o access/leopardam.c -MMD -MP -MF .deps/leopardam.Po
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Werror=unguarded-availability-new -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -Wno-unused-command-line-argument -g -O2  -I. -I./ -I/usr/local/pgsql/PG14/include/server -I/usr/local/pgsql/PG14/include/internal  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk  -I/opt/local/include/libxml2   -c -o access/leopardam_handler.o access/leopardam_handler.c -MMD -MP -MF .deps/leopardam_handler.Po
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Werror=unguarded-availability-new -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -Wno-unused-command-line-argument -g -O2  -I. -I./ -I/usr/local/pgsql/PG14/include/server -I/usr/local/pgsql/PG14/include/internal  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk  -I/opt/local/include/libxml2   -c -o access/leoparddecode.o access/leoparddecode.c -MMD -MP -MF .deps/leoparddecode.Po
+access/leoparddecode.c:192:20: warning: implicit declaration of function 'FilterPrepare' is invalid in C99 [-Wimplicit-function-declaration]
+                                        two_phase = !(FilterPrepare(ctx, xid,
+                                                      ^
+access/leoparddecode.c:195:5: warning: implicit declaration of function 'DecodeCommit' is invalid in C99 [-Wimplicit-function-declaration]
+                                DecodeCommit(ctx, buf, &parsed, xid, two_phase);
+                                ^
+access/leoparddecode.c:220:20: warning: implicit declaration of function 'FilterPrepare' is invalid in C99 [-Wimplicit-function-declaration]
+                                        two_phase = !(FilterPrepare(ctx, xid,
+                                                      ^
+access/leoparddecode.c:223:5: warning: implicit declaration of function 'DecodeAbort' is invalid in C99 [-Wimplicit-function-declaration]
+                                DecodeAbort(ctx, buf, &parsed, xid, two_phase);
+                                ^
+access/leoparddecode.c:278:9: warning: implicit declaration of function 'FilterPrepare' is invalid in C99 [-Wimplicit-function-declaration]
+                                if (FilterPrepare(ctx, parsed.twophase_xid,
+                                    ^
+access/leoparddecode.c:300:5: warning: implicit declaration of function 'DecodePrepare' is invalid in C99 [-Wimplicit-function-declaration]
+                                DecodePrepare(ctx, buf, &parsed);
+                                ^
+access/leoparddecode.c:883:10: warning: incompatible pointer types assigning to 'LeopardTupleHeader' (aka 'struct LeopardTupleHeaderData *') from 'HeapTupleHeader'
+      (aka 'struct HeapTupleHeaderData *') [-Wincompatible-pointer-types]
+                header = tuple->tuple.t_data;
+                       ^ ~~~~~~~~~~~~~~~~~~~
+access/leoparddecode.c:976:9: warning: incompatible pointer types assigning to 'LeopardTupleHeader' (aka 'struct LeopardTupleHeaderData *') from 'HeapTupleHeader'
+      (aka 'struct HeapTupleHeaderData *') [-Wincompatible-pointer-types]
+        header = tuple->tuple.t_data;
+               ^ ~~~~~~~~~~~~~~~~~~~
+access/leoparddecode.c:111:1: warning: unused function 'DecodeXLogOp' [-Wunused-function]
+DecodeXLogOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+^
+access/leoparddecode.c:418:1: warning: unused function 'DecodeHeapOp' [-Wunused-function]
+DecodeHeapOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+^
+access/leoparddecode.c:358:1: warning: unused function 'DecodeHeap2Op' [-Wunused-function]
+DecodeHeap2Op(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+^
+access/leoparddecode.c:154:1: warning: unused function 'DecodeXactOp' [-Wunused-function]
+DecodeXactOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+^
+access/leoparddecode.c:312:1: warning: unused function 'DecodeStandbyOp' [-Wunused-function]
+DecodeStandbyOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+^
+access/leoparddecode.c:519:1: warning: unused function 'DecodeLogicalMsgOp' [-Wunused-function]
+DecodeLogicalMsgOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+^
+14 warnings generated.
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Werror=unguarded-availability-new -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -Wno-unused-command-line-argument -g -O2  -I. -I./ -I/usr/local/pgsql/PG14/include/server -I/usr/local/pgsql/PG14/include/internal  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk  -I/opt/local/include/libxml2   -c -o access/leoparddesc.o access/leoparddesc.c -MMD -MP -MF .deps/leoparddesc.Po
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Werror=unguarded-availability-new -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -Wno-unused-command-line-argument -g -O2  -I. -I./ -I/usr/local/pgsql/PG14/include/server -I/usr/local/pgsql/PG14/include/internal  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk  -I/opt/local/include/libxml2   -c -o access/leopardio.o access/leopardio.c -MMD -MP -MF .deps/leopardio.Po
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Werror=unguarded-availability-new -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -Wno-unused-command-line-argument -g -O2  -I. -I./ -I/usr/local/pgsql/PG14/include/server -I/usr/local/pgsql/PG14/include/internal  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk  -I/opt/local/include/libxml2   -c -o access/leopardsnapbuild.o access/leopardsnapbuild.c -MMD -MP -MF .deps/leopardsnapbuild.Po
+access/leopardsnapbuild.c:257:22: warning: unused variable 'SavedResourceOwnerDuringExport' [-Wunused-variable]
+static ResourceOwner SavedResourceOwnerDuringExport = NULL;
+                     ^
+access/leopardsnapbuild.c:258:13: warning: unused variable 'ExportInProgress' [-Wunused-variable]
+static bool ExportInProgress = false;
+            ^
+access/leopardsnapbuild.c:556:1: warning: unused function 'SnapBuildPurgeOlderTxn' [-Wunused-function]
+SnapBuildPurgeOlderTxn(SnapBuild *builder)
+^
+access/leopardsnapbuild.c:665:1: warning: unused function 'SnapBuildFindSnapshot' [-Wunused-function]
+SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *running)
+^
+4 warnings generated.
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Werror=unguarded-availability-new -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -Wno-unused-command-line-argument -g -O2  -I. -I./ -I/usr/local/pgsql/PG14/include/server -I/usr/local/pgsql/PG14/include/internal  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk  -I/opt/local/include/libxml2   -c -o access/leopardvacuum.o access/leopardvacuum.c -MMD -MP -MF .deps/leopardvacuum.Po
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Werror=unguarded-availability-new -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -Wno-unused-command-line-argument -g -O2  -I. -I./ -I/usr/local/pgsql/PG14/include/server -I/usr/local/pgsql/PG14/include/internal  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk  -I/opt/local/include/libxml2   -c -o access/leopardam_visibility.o access/leopardam_visibility.c -MMD -MP -MF .deps/leopardam_visibility.Po
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Werror=unguarded-availability-new -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -Wno-unused-command-line-argument -g -O2  -I. -I./ -I/usr/local/pgsql/PG14/include/server -I/usr/local/pgsql/PG14/include/internal  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk  -I/opt/local/include/libxml2   -c -o access/leopardrewrite.o access/leopardrewrite.c -MMD -MP -MF .deps/leopardrewrite.Po
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Werror=unguarded-availability-new -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -Wno-unused-command-line-argument -g -O2  -I. -I./ -I/usr/local/pgsql/PG14/include/server -I/usr/local/pgsql/PG14/include/internal  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk  -I/opt/local/include/libxml2   -c -o access/leopardprune.o access/leopardprune.c -MMD -MP -MF .deps/leopardprune.Po
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Werror=unguarded-availability-new -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -Wno-unused-command-line-argument -g -O2  -I. -I./ -I/usr/local/pgsql/PG14/include/server -I/usr/local/pgsql/PG14/include/internal  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk  -I/opt/local/include/libxml2   -c -o access/leopardtoast.o access/leopardtoast.c -MMD -MP -MF .deps/leopardtoast.Po
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Werror=unguarded-availability-new -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -Wno-unused-command-line-argument -g -O2  -I. -I./ -I/usr/local/pgsql/PG14/include/server -I/usr/local/pgsql/PG14/include/internal  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk  -I/opt/local/include/libxml2   -c -o access/leopardtuple.o access/leopardtuple.c -MMD -MP -MF .deps/leopardtuple.Po
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Werror=unguarded-availability-new -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -Wno-unused-command-line-argument -g -O2  -I. -I./ -I/usr/local/pgsql/PG14/include/server -I/usr/local/pgsql/PG14/include/internal  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk  -I/opt/local/include/libxml2   -c -o access/leopardvismap.o access/leopardvismap.c -MMD -MP -MF .deps/leopardvismap.Po
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Werror=unguarded-availability-new -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -Wno-unused-command-line-argument -g -O2  -I. -I./ -I/usr/local/pgsql/PG14/include/server -I/usr/local/pgsql/PG14/include/internal  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk  -I/opt/local/include/libxml2   -c -o module.o module.c -MMD -MP -MF .deps/module.Po
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Werror=unguarded-availability-new -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -Wno-unused-command-line-argument -g -O2  -bundle -multiply_defined suppress -o leopard.so  access/leopardam.o access/leopardam_handler.o access/leoparddecode.o access/leoparddesc.o access/leopardio.o access/leopardsnapbuild.o access/leopardvacuum.o access/leopardam_visibility.o access/leopardrewrite.o access/leopardprune.o access/leopardtoast.o access/leopardtuple.o access/leopardvismap.o module.o -L/usr/local/pgsql/PG14/lib  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk  -L/opt/local/lib -L/opt/local/lib -L/opt/local/lib  -Wl,-dead_strip_dylibs  -lm  -bundle_loader /usr/local/pgsql/PG14/bin/postgres
+/bin/sh /usr/local/pgsql/PG14/lib/pgxs/src/makefiles/../../config/install-sh -c -d '/usr/local/pgsql/PG14/lib'
+/bin/sh /usr/local/pgsql/PG14/lib/pgxs/src/makefiles/../../config/install-sh -c -d '/usr/local/pgsql/PG14/share/extension'
+/bin/sh /usr/local/pgsql/PG14/lib/pgxs/src/makefiles/../../config/install-sh -c -d '/usr/local/pgsql/PG14/share/extension'
+/usr/bin/install -c -m 755  leopard.so '/usr/local/pgsql/PG14/lib/leopard.so'
+/usr/bin/install -c -m 644 .//leopard.control '/usr/local/pgsql/PG14/share/extension/'
+/usr/bin/install -c -m 644 .//leopard--1.0.sql  '/usr/local/pgsql/PG14/share/extension/'

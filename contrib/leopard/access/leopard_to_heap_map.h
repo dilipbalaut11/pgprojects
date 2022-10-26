@@ -1,0 +1,74 @@
+#ifndef LEOPARD_TO_HEAP_MAP_H
+#define LEOPARD_TO_HEAP_MAP_H
+
+/* Changed for Leopard */
+#define LEOPARD_DEFAULT_FILLFACTOR 	95
+
+
+#define FirstLowInvalidLeopardAttributeNumber FirstLowInvalidHeapAttributeNumber
+
+
+#define PROGRESS_CLUSTER_LEOPARD_BLKS_SCANNED PROGRESS_CLUSTER_HEAP_BLKS_SCANNED
+
+
+#define PROGRESS_CLUSTER_LEOPARD_TUPLES_SCANNED PROGRESS_CLUSTER_HEAP_TUPLES_SCANNED
+
+
+#define PROGRESS_CLUSTER_LEOPARD_TUPLES_WRITTEN PROGRESS_CLUSTER_HEAP_TUPLES_WRITTEN
+
+
+#define PROGRESS_CLUSTER_PHASE_INDEX_SCAN_LEOPARD PROGRESS_CLUSTER_PHASE_INDEX_SCAN_HEAP
+
+
+#define PROGRESS_CLUSTER_PHASE_SEQ_SCAN_LEOPARD PROGRESS_CLUSTER_PHASE_SEQ_SCAN_HEAP
+
+
+#define PROGRESS_CLUSTER_PHASE_WRITE_NEW_LEOPARD PROGRESS_CLUSTER_PHASE_WRITE_NEW_HEAP
+
+
+#define PROGRESS_CLUSTER_TOTAL_LEOPARD_BLKS PROGRESS_CLUSTER_TOTAL_HEAP_BLKS
+
+
+#define PROGRESS_VACUUM_LEOPARD_BLKS_SCANNED PROGRESS_VACUUM_HEAP_BLKS_SCANNED
+
+
+#define PROGRESS_VACUUM_LEOPARD_BLKS_VACUUMED PROGRESS_VACUUM_HEAP_BLKS_VACUUMED
+
+
+#define PROGRESS_VACUUM_PHASE_SCAN_LEOPARD PROGRESS_VACUUM_PHASE_SCAN_HEAP
+
+
+#define PROGRESS_VACUUM_PHASE_VACUUM_LEOPARD PROGRESS_VACUUM_PHASE_VACUUM_HEAP
+
+
+#define PROGRESS_VACUUM_TOTAL_LEOPARD_BLKS PROGRESS_VACUUM_TOTAL_HEAP_BLKS
+
+
+#define TTSOpsLeopardTuple TTSOpsHeapTuple
+
+
+#define TTSOpsBufferLeopardTuple TTSOpsBufferHeapTuple
+
+
+#define pgstat_count_leopard_delete pgstat_count_heap_delete
+
+
+#define pgstat_count_leopard_fetch pgstat_count_heap_fetch
+
+
+#define pgstat_count_leopard_getnext pgstat_count_heap_getnext
+
+
+#define pgstat_count_leopard_insert pgstat_count_heap_insert
+
+
+#define pgstat_count_leopard_scan pgstat_count_heap_scan
+
+
+#define pgstat_count_leopard_update pgstat_count_heap_update
+
+
+#define pgstat_update_leopard_dead_tuples pgstat_update_heap_dead_tuples
+
+
+#endif			/* LEOPARD_TO_HEAP_MAP_H */

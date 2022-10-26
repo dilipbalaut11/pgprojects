@@ -1,0 +1,5 @@
+# leopard extension
+comment = 'leopard Table Access Method'
+default_version = '1.0'
+module_pathname = '$libdir/leopard'
+relocatable = true

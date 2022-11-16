@@ -1,0 +1,5 @@
+# proc_info extension
+comment = 'functions for geting backend proc information'
+default_version = '1.0'
+module_pathname = '$libdir/procinfo'
+relocatable = true

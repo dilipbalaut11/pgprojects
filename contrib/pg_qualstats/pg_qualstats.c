@@ -126,6 +126,8 @@ static Datum pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
 								 bool include_names);
 extern PGDLLEXPORT Datum pg_qualstats_example_query(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_example_queries(PG_FUNCTION_ARGS);
+extern PGDLLEXPORT Datum pg_qualstats_start_cost_track(PG_FUNCTION_ARGS);
+extern PGDLLEXPORT Datum pg_qualstats_get_total_cost(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(pg_qualstats_reset);
 PG_FUNCTION_INFO_V1(pg_qualstats);
@@ -134,6 +136,8 @@ PG_FUNCTION_INFO_V1(pg_qualstats_names);
 PG_FUNCTION_INFO_V1(pg_qualstats_names_2_0);
 PG_FUNCTION_INFO_V1(pg_qualstats_example_query);
 PG_FUNCTION_INFO_V1(pg_qualstats_example_queries);
+PG_FUNCTION_INFO_V1(pg_qualstats_start_cost_track);
+PG_FUNCTION_INFO_V1(pg_qualstats_get_total_cost);
 
 static void pgqs_backend_mode_startup(void);
 #if PG_VERSION_NUM >= 150000
@@ -2611,3 +2615,22 @@ pgqs_uint32_hashfn(const void *key, Size keysize)
 	return ((pgqsQueryStringHashKey *) key)->queryid;
 }
 #endif
+
+static float total_cost = 0.0;
+static bool enable = false;
+
+Datum
+pg_qualstats_start_cost_track(PG_FUNCTION_ARGS)
+{
+	enable = true;
+	total_cost = 0;
+
+	PG_RETURN_VOID();
+}
+
+Datum
+pg_qualstats_get_total_cost(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_FLOAT4(total_cost);
+}
+

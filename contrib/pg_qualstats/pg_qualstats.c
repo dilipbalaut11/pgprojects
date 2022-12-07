@@ -45,6 +45,7 @@
 #if PG_VERSION_NUM >= 150000
 #include "common/pg_prng.h"
 #endif
+#include "executor/spi.h"
 #include "fmgr.h"
 #include "funcapi.h"
 #include "mb/pg_wchar.h"
@@ -105,6 +106,30 @@ PG_MODULE_MAGIC;
 #endif
 
 /*
+ * TODO: some random value to add an overhead of each index this need to be
+ * changed once the overhead tracking logic is implemented.
+ */
+#define INDEX_OVERHEAD 1000
+
+/* 
+ * If 'pgqs_cost_track_enable' is set then the planner will start tracking the
+ * cost of queries being planned and compute total cost in
+ * 'pgqs_plan_total_cost'
+ */
+static bool pgqs_cost_track_enable = false;
+static float pgqs_plan_total_cost = 0.0;
+
+/*
+ * Track cost for current combination of the indices.
+ */
+typedef struct pgqsIndexCombination
+{
+	float	cost;
+	int		nindices;
+	int		indices[FLEXIBLE_ARRAY_MEMBER];
+} pgqsIndexCombination;
+
+/*
  * Extension version number, for supporting older extension versions' objects
  */
 typedef enum pgqsVersion
@@ -126,8 +151,7 @@ static Datum pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
 								 bool include_names);
 extern PGDLLEXPORT Datum pg_qualstats_example_query(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_example_queries(PG_FUNCTION_ARGS);
-extern PGDLLEXPORT Datum pg_qualstats_start_cost_track(PG_FUNCTION_ARGS);
-extern PGDLLEXPORT Datum pg_qualstats_get_total_cost(PG_FUNCTION_ARGS);
+extern PGDLLEXPORT Datum pg_qualstats_generate_advise(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(pg_qualstats_reset);
 PG_FUNCTION_INFO_V1(pg_qualstats);
@@ -136,9 +160,12 @@ PG_FUNCTION_INFO_V1(pg_qualstats_names);
 PG_FUNCTION_INFO_V1(pg_qualstats_names_2_0);
 PG_FUNCTION_INFO_V1(pg_qualstats_example_query);
 PG_FUNCTION_INFO_V1(pg_qualstats_example_queries);
-PG_FUNCTION_INFO_V1(pg_qualstats_start_cost_track);
-PG_FUNCTION_INFO_V1(pg_qualstats_get_total_cost);
+PG_FUNCTION_INFO_V1(pg_qualstats_generate_advise);
 
+static PlannedStmt *pgqs_planner(Query *parse,
+								 const char *query_string,
+								 int cursorOptions,
+								 ParamListInfo boundParams);
 static void pgqs_backend_mode_startup(void);
 #if PG_VERSION_NUM >= 150000
 static void pgqs_shmem_request(void);
@@ -159,6 +186,7 @@ static void pgqs_ExecutorRun(QueryDesc *queryDesc,
 static void pgqs_ExecutorFinish(QueryDesc *queryDesc);
 static void pgqs_ExecutorEnd(QueryDesc *queryDesc);
 
+static planner_hook_type prev_planner_hook = NULL;
 static ExecutorStart_hook_type prev_ExecutorStart = NULL;
 static ExecutorRun_hook_type prev_ExecutorRun = NULL;
 static ExecutorFinish_hook_type prev_ExecutorFinish = NULL;
@@ -375,6 +403,8 @@ _PG_init(void)
 		shmem_startup_hook = pgqs_shmem_startup;
 	}
 
+	prev_planner_hook = planner_hook;
+	planner_hook = pgqs_planner;
 	prev_ExecutorStart = ExecutorStart_hook;
 	ExecutorStart_hook = pgqs_ExecutorStart;
 	prev_ExecutorRun = ExecutorRun_hook;
@@ -2616,21 +2646,224 @@ pgqs_uint32_hashfn(const void *key, Size keysize)
 }
 #endif
 
-static float total_cost = 0.0;
-static bool enable = false;
 
-Datum
-pg_qualstats_start_cost_track(PG_FUNCTION_ARGS)
+/* planner hook */
+static PlannedStmt *
+pgqs_planner(Query *parse, const char *query_string,
+						int cursorOptions, ParamListInfo boundParams)
 {
-	enable = true;
-	total_cost = 0;
+	PlannedStmt *result;
 
-	PG_RETURN_VOID();
+	/* Invoke the planner, possibly via a previous hook user */
+	if (prev_planner_hook)
+		result = prev_planner_hook(parse, query_string, cursorOptions,
+								   boundParams);
+	else
+		result = standard_planner(parse, query_string, cursorOptions,
+								  boundParams);
+
+	/* If enabled, delay by taking and releasing the specified lock */
+	if (pgqs_cost_track_enable)
+	{
+		pgqs_plan_total_cost += result->planTree->total_cost;
+	}
+
+	return result;
 }
 
-Datum
-pg_qualstats_get_total_cost(PG_FUNCTION_ARGS)
+static Oid
+pg_qualstats_create_hypoindex(const char *index)
 {
-	PG_RETURN_FLOAT4(total_cost);
+	int				ret;
+	Oid				idxid;
+	StringInfoData	hypoindex;
+
+	initStringInfo(&hypoindex);
+	appendStringInfoString(&hypoindex, "SELECT indexrelid FROM hypopg_create_index('");
+	appendStringInfoString(&hypoindex, index);
+	appendStringInfoString(&hypoindex, "')");
+
+	ret = SPI_execute(hypoindex.data, false, 0);
+
+	if (ret != SPI_OK_SELECT)
+	{
+		SPI_finish();
+		elog(ERROR, "pg_qualstat: could not create hypo index");
+	}
+
+	idxid = atooid(SPI_getvalue(SPI_tuptable->vals[0],
+				 SPI_tuptable->tupdesc,
+				 1));
+
+	Assert(OidIsValid(idxid));
+
+	return idxid;
 }
 
+static void
+pg_qualstats_drop_hypoindex(Oid idxid)
+{
+	int				ret;
+	bool			res;
+	StringInfoData	hypoindex;
+
+	initStringInfo(&hypoindex);
+	appendStringInfo(&hypoindex, "SELECT hypopg_drop_index(%d)", idxid);
+
+	ret = SPI_execute(hypoindex.data, false, 0);
+	if (ret != SPI_OK_SELECT)
+	{
+		SPI_finish();
+		elog(ERROR, "pg_qualstat: could not drop hypo index");
+	}
+
+	res = atoi(SPI_getvalue(SPI_tuptable->vals[0],
+			   SPI_tuptable->tupdesc,
+			   1));
+}
+
+/* Plan a given query */
+static void
+pg_qualstats_plan_query(const char *query)
+{
+	int				ret;
+	StringInfoData	explainquery;
+
+	initStringInfo(&explainquery);
+	appendStringInfoString(&explainquery, query);
+
+	ret = SPI_execute(query, false, 0);
+}
+
+/*
+ * Plan all give queries to compute the total cost.
+ */
+static float
+pg_qualstats_get_cost(char **queries, int nqueries)
+{
+	int		i;
+
+	pgqs_cost_track_enable = true;
+	pgqs_plan_total_cost = 0;
+
+	for (i = 0; i < nqueries; i++)
+	{
+		pg_qualstats_plan_query(queries[i]);
+	}
+
+	pgqs_cost_track_enable = false;
+
+	return pgqs_plan_total_cost;
+}
+
+/*
+ * Implement a version of knapsack algorithm to try out all the index
+ * combination with optimizer and find the combination which produce least
+ * cost.
+ */
+static pgqsIndexCombination *
+pg_qualstats_knapsack(char **indices, char **queries, int nqueries, int n,
+					  int max_indices)
+{
+	Oid						idxid;
+	pgqsIndexCombination   *path1;
+	pgqsIndexCombination   *path2;
+
+	if (n == 0)
+	{
+		path1 = MemoryContextAllocZero(TopMemoryContext,
+									   sizeof(pgqsIndexCombination) + max_indices * sizeof(int));
+		path1->cost = pg_qualstats_get_cost(queries, nqueries);
+		path1->nindices = 0;
+		return path1;
+	}
+
+	/* compare cost with and without this index */
+	idxid = pg_qualstats_create_hypoindex(indices[n - 1]);
+
+	/* compute total cost including this index */
+	path1 = pg_qualstats_knapsack(indices, queries, nqueries, n - 1, max_indices);
+	path1->indices[path1->nindices++] = n - 1;
+	pg_qualstats_drop_hypoindex(idxid);
+
+	/* compute total cost excluding this index */
+	path2 = pg_qualstats_knapsack(indices, queries, nqueries, n - 1, max_indices);
+
+	/* 
+	 * TODO: Compute index overhead based on how many hot update will be
+	 * converted to the non-hot update.
+	 */
+	if (path1->cost + path1->nindices * INDEX_OVERHEAD <
+		path2->cost + path2->nindices * INDEX_OVERHEAD)
+	{
+		pfree(path2);
+		return path1;
+	}
+	else
+	{
+		pfree(path1);
+		return path2;
+	}
+}
+
+/* function to generate index advise. */
+Datum
+pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
+{
+	ArrayType  *indexes = PG_GETARG_ARRAYTYPE_P(0);
+	ArrayType  *queryids = PG_GETARG_ARRAYTYPE_P(1);
+	Datum	   *key_datums;
+	bool	   *key_nulls;
+	int			nindices;
+	int			nqueries;
+	int			i;
+	int			ret;
+	char	   **index_array;
+	char	   **query_array;
+	ArrayType   *result;
+	pgqsIndexCombination   *path;
+
+	elog(NOTICE, "## Generate index advice ##");
+
+	deconstruct_array_builtin(indexes, TEXTOID, &key_datums, &key_nulls, &nindices);
+	index_array = palloc0(nindices * sizeof(char *));
+
+	/* read index query array */
+	for (i = 0; i < nindices; i++)
+	{
+		if (key_nulls[i])
+			continue;
+		index_array[i] = TextDatumGetCString(key_datums[i]);
+	}
+
+	deconstruct_array_builtin(queryids, TEXTOID, &key_datums, &key_nulls, &nqueries);
+	query_array = palloc0(nqueries * sizeof(char *));
+
+	/* read query id array */
+	for (i = 0; i < nqueries; i++)
+	{
+		if (key_nulls[i])
+			continue;
+		query_array[i] = TextDatumGetCString(key_datums[i]);
+	}
+
+	if (nindices == 0)
+		PG_RETURN_ARRAYTYPE_P(indexes);
+
+	if ((ret = SPI_connect()) < 0)
+		elog(ERROR, "pg_qualstat: SPI_connect returned %d", ret);
+
+	path = pg_qualstats_knapsack(index_array, query_array, nqueries, nindices,
+								 nindices);
+	SPI_finish();
+
+	/* construct and return array. */
+	for (i = 0; i < path->nindices; i++)
+	{
+		key_datums[i] = CStringGetTextDatum(index_array[path->indices[i]]);
+	}
+
+	result = construct_array_builtin(key_datums, path->nindices, TEXTOID);
+
+	PG_RETURN_ARRAYTYPE_P(result);
+}

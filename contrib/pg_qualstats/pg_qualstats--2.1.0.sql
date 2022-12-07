@@ -29,13 +29,8 @@ RETURNS SETOF record
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
 
-CREATE FUNCTION @extschema@.pg_qualstats_start_cost_track()
-RETURNS void
-AS 'MODULE_PATHNAME'
-LANGUAGE C;
-
-CREATE FUNCTION @extschema@.pg_qualstats_get_total_cost()
-RETURNS float
+CREATE FUNCTION @extschema@.pg_qualstats_generate_advise(text[], text[])
+RETURNS text[]
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
 
@@ -737,18 +732,13 @@ CREATE OR REPLACE FUNCTION pg_qualstats_index_advisor_xx (
     min_filter integer DEFAULT 1000,
     min_selectivity integer DEFAULT 30,
     forbidden_am text[] DEFAULT '{}')
-    RETURNS json
+    RETURNS text[]
 AS $_$
 DECLARE
     v_processed bigint[] = '{}';
-    v_indexes json[] = '{}';
-    v_unoptimised json[] = '{}';
-
     rec record;
     v_nb_processed integer = 1;
-    v_count int = 0;	
     v_ddl text;
-    v_ddl1 text[];
     v_col text;
     v_qualnodeid bigint;
     v_quals_todo bigint[];
@@ -759,20 +749,22 @@ DECLARE
     v_query text;
     v_old_total_cost float := 0;	
     v_total_cost float := 0;
+    prev_relid oid := 0;
+    v_relddl text[] = '{}';
+    v_relqueries text[] = '{}';
+    v_relddlcount int := 0;
+    v_relquerycount int := 0;
+    v_relfinalindex text[] := '{}';
+
 BEGIN
     -- sanity checks and default values
     SELECT coalesce(min_filter, 1000), coalesce(min_selectivity, 30),
       coalesce(forbidden_am, '{}')
     INTO min_filter, min_selectivity, forbidden_am;
 
-    -- don't try to generate hash indexes Before pg 10, as those are only WAL
-    -- logged since pg 11.
-    IF pg_catalog.current_setting('server_version_num')::bigint < 100000 THEN
-        forbidden_am := array_append(forbidden_am, 'hash');
-    END IF;
-
-    PERFORM hypopg_reset_index();
-
+    -- We assume hash might not win over btree
+    forbidden_am := array_append(forbidden_am, 'hash');
+ 
     -- The index suggestion is done in multiple iteration, by scoring for each
     -- relation containing interesting quals a path of possibly AND-ed quals
     -- that contains other possibly AND-ed quals.  Only the higher score path
@@ -861,7 +853,7 @@ BEGIN
             pg_catalog.array_length((quals).qualnodeids, 1)
                 + sum(weight) AS path_weight,
           CASE amname WHEN 'btree' THEN 1 ELSE 2 END AS amweight
-          FROM paths WHERE amname = 'btree'
+          FROM paths
           GROUP BY relid, amname, parent, quals
         ),
         -- compute a rank for each final paths, per relation.
@@ -949,7 +941,6 @@ BEGIN
                 LOOP
                   CONTINUE WHEN v_queryid = 'null';
                   v_queryids := v_queryids || v_queryid::text::bigint;
-		  raise notice '%', v_queryid::text::bigint;
                 END LOOP;
               END LOOP;
             END IF;
@@ -964,56 +955,30 @@ BEGIN
             v_queryids = '{}';
         END IF;
 
-	--v_ddl1[v_count] := v_ddl;
-
-	IF v_old_total_cost = 0 THEN
-		PERFORM pg_qualstats_start_cost_track();
-		raise notice '1';
-		FOREACH v_queryid IN ARRAY v_queryids
-		LOOP
-			raise notice '2';
-			SELECT query INTO v_query FROM pg_qualstats_example_queries() where queryid = v_queryid;
-			EXECUTE 'EXPLAIN ' || v_query;
-		END LOOP;
-		SELECT pg_qualstats_get_total_cost() INTO v_old_total_cost;
-		raise notice '%', v_old_total_cost;
+	IF rec.relid != prev_relid THEN
+		SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries) INTO v_relddl;
+		v_relfinalindex = pg_catalog.array_cat(v_relfinalindex, v_relddl);
+		prev_relid := rec.relid;
+		v_relddl = '{}';
+		v_relqueries = '{}';
 	END IF;
 
-	raise notice 'Creating HypoIndex%', v_ddl;
-	PERFORM hypopg_create_index(v_ddl);
+	v_relddl[v_relddlcount] := v_ddl;
+	v_relddlcount := v_relddlcount + 1;
 
-	PERFORM pg_qualstats_start_cost_track();
 	FOREACH v_queryid IN ARRAY v_queryids
 	LOOP
 		SELECT query INTO v_query FROM pg_qualstats_example_queries() where queryid = v_queryid;
-		--raise notice 'Executing Query %', v_queryid, v_query;
-		EXECUTE 'EXPLAIN ' || v_query;
+		v_relqueries[v_relquerycount] := 'EXPLAIN ' || v_query;
+		v_relquerycount := v_relquerycount + 1;
 	END LOOP;
-	SELECT pg_qualstats_get_total_cost() INTO v_total_cost;
 
-	-- if cost reduced then keep index else drop it
-	IF v_total_cost < v_old_total_cost THEN
-		raise notice 'Total Cost Reduced FROM % TO % so Keep Index', v_old_total_cost, v_total_cost;
-		v_old_total_cost := v_total_cost;
-        	v_indexes := pg_catalog.array_append(v_indexes,
-            	pg_catalog.json_build_object(
-                		'ddl', v_ddl,
-                		'queryids', v_queryids
-            			)
-        	);
-
-	ELSE
-		raise notice 'Total Cost Not Reduced OLD COST % NEW COST % so Ignore Index', v_old_total_cost, v_total_cost;
-	END IF;
-
-	v_count := v_count + 1;
-        -- and finally append the index to the list of generated indexes
       END LOOP;
     END LOOP;
 
-   -- RETURN v_ddl1;
-    RETURN pg_catalog.json_build_object(
-        'indexes', v_indexes,
-        'unoptimised', v_unoptimised);
+    SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries) INTO v_relddl;
+    v_relfinalindex = pg_catalog.array_cat(v_relfinalindex, v_relddl);
+
+   RETURN v_relfinalindex;
 END;
 $_$ LANGUAGE plpgsql;

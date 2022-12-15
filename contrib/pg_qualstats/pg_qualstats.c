@@ -109,7 +109,7 @@ PG_MODULE_MAGIC;
  * TODO: some random value to add an overhead of each index this need to be
  * changed once the overhead tracking logic is implemented.
  */
-#define INDEX_OVERHEAD 1000
+#define INDEX_OVERHEAD 10000
 
 /* 
  * If 'pgqs_cost_track_enable' is set then the planner will start tracking the
@@ -117,7 +117,7 @@ PG_MODULE_MAGIC;
  * 'pgqs_plan_total_cost'
  */
 static bool pgqs_cost_track_enable = false;
-static float pgqs_plan_total_cost = 0.0;
+static float pgqs_plan_cost = 0.0;
 
 /*
  * Track cost for current combination of the indices.
@@ -314,6 +314,7 @@ typedef struct pgqsQueryStringHashKey
 typedef struct pgqsQueryStringEntry
 {
 	pgqsQueryStringHashKey key;
+	int					   frequency;
 
 	/*
 	 * Imperatively at the end of the struct This is actually of length
@@ -747,7 +748,7 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 
 	if ((pgqs || pgqs_backend) && pgqs_enabled && pgqs_is_query_sampled()
 #if PG_VERSION_NUM >= 90600
-		&& (!IsParallelWorker())
+		&& (!IsParallelWorker() && !pgqs_cost_track_enable)
 #endif
 
 	/*
@@ -781,17 +782,18 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 		/* keep an unormalized query example for each queryid if needed */
 		if (pgqs_track_constants)
 		{
+			pgqsQueryStringEntry *queryEntry;
+
 			/* Lookup the hash table entry with a shared lock. */
 			PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
 
-			hash_search_with_hash_value(pgqs_query_examples_hash, &queryKey,
-										context->queryId,
-										HASH_FIND, &found);
+			queryEntry = (pgqsQueryStringEntry *) hash_search_with_hash_value(pgqs_query_examples_hash, &queryKey,
+																			  context->queryId,
+																			  HASH_FIND, &found);
 
 			/* Create the new entry if not present */
 			if (!found)
 			{
-				pgqsQueryStringEntry *queryEntry;
 				bool		excl_found;
 
 				/* Need exclusive lock to add a new hashtable entry - promote */
@@ -807,8 +809,15 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 
 				/* Make sure it wasn't added by another backend */
 				if (!excl_found)
+				{
 					strncpy(queryEntry->querytext, context->querytext, pgqs_query_size);
+					queryEntry->frequency = 1;
+				}
+				else
+					queryEntry->frequency++;
 			}
+			else
+				queryEntry->frequency++;
 
 			PGQS_LWL_RELEASE(pgqs->querylock);
 		}
@@ -2318,8 +2327,8 @@ pg_qualstats_example_queries(PG_FUNCTION_ARGS)
 
 	while ((entry = hash_seq_search(&hash_seq)) != NULL)
 	{
-		Datum		values[2];
-		bool		nulls[2];
+		Datum		values[3];
+		bool		nulls[3];
 		int64		queryid = entry->key.queryid;
 
 		memset(values, 0, sizeof(values));
@@ -2327,6 +2336,7 @@ pg_qualstats_example_queries(PG_FUNCTION_ARGS)
 
 		values[0] = Int64GetDatumFast(queryid);
 		values[1] = CStringGetTextDatum(entry->querytext);
+		values[2] = Int32GetDatum(entry->frequency);
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 
@@ -2665,7 +2675,7 @@ pgqs_planner(Query *parse, const char *query_string,
 	/* If enabled, delay by taking and releasing the specified lock */
 	if (pgqs_cost_track_enable)
 	{
-		pgqs_plan_total_cost += result->planTree->total_cost;
+		pgqs_plan_cost = result->planTree->total_cost;
 	}
 
 	return result;
@@ -2739,21 +2749,23 @@ pg_qualstats_plan_query(const char *query)
  * Plan all give queries to compute the total cost.
  */
 static float
-pg_qualstats_get_cost(char **queries, int nqueries)
+pg_qualstats_get_cost(char **queries, int *queryfreq, int nqueries)
 {
 	int		i;
+	float	cost;
 
 	pgqs_cost_track_enable = true;
-	pgqs_plan_total_cost = 0;
 
 	for (i = 0; i < nqueries; i++)
 	{
 		pg_qualstats_plan_query(queries[i]);
+		cost += (pgqs_plan_cost * queryfreq[i]);
+		elog(NOTICE, "query=%s freq=%d", queries[i], queryfreq[i]);
 	}
 
 	pgqs_cost_track_enable = false;
 
-	return pgqs_plan_total_cost;
+	return cost;
 }
 
 /*
@@ -2762,8 +2774,8 @@ pg_qualstats_get_cost(char **queries, int nqueries)
  * cost.
  */
 static pgqsIndexCombination *
-pg_qualstats_knapsack(char **indices, char **queries, int nqueries, int n,
-					  int max_indices)
+pg_qualstats_knapsack(char **indices, char **queries, int *queryfreq,
+					  int nqueries, int n, int max_indices)
 {
 	Oid						idxid;
 	pgqsIndexCombination   *path1;
@@ -2773,7 +2785,7 @@ pg_qualstats_knapsack(char **indices, char **queries, int nqueries, int n,
 	{
 		path1 = MemoryContextAllocZero(TopMemoryContext,
 									   sizeof(pgqsIndexCombination) + max_indices * sizeof(int));
-		path1->cost = pg_qualstats_get_cost(queries, nqueries);
+		path1->cost = pg_qualstats_get_cost(queries, queryfreq, nqueries);
 		path1->nindices = 0;
 		return path1;
 	}
@@ -2782,12 +2794,14 @@ pg_qualstats_knapsack(char **indices, char **queries, int nqueries, int n,
 	idxid = pg_qualstats_create_hypoindex(indices[n - 1]);
 
 	/* compute total cost including this index */
-	path1 = pg_qualstats_knapsack(indices, queries, nqueries, n - 1, max_indices);
+	path1 = pg_qualstats_knapsack(indices, queries, queryfreq, nqueries, n - 1,
+								  max_indices);
 	path1->indices[path1->nindices++] = n - 1;
 	pg_qualstats_drop_hypoindex(idxid);
 
 	/* compute total cost excluding this index */
-	path2 = pg_qualstats_knapsack(indices, queries, nqueries, n - 1, max_indices);
+	path2 = pg_qualstats_knapsack(indices, queries, queryfreq, nqueries, n - 1,
+								  max_indices);
 
 	/* 
 	 * TODO: Compute index overhead based on how many hot update will be
@@ -2812,6 +2826,7 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 {
 	ArrayType  *indexes = PG_GETARG_ARRAYTYPE_P(0);
 	ArrayType  *queryids = PG_GETARG_ARRAYTYPE_P(1);
+	ArrayType  *queryfreq = PG_GETARG_ARRAYTYPE_P(2);
 	Datum	   *key_datums;
 	bool	   *key_nulls;
 	int			nindices;
@@ -2820,6 +2835,7 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 	int			ret;
 	char	   **index_array;
 	char	   **query_array;
+	int			*query_freq;
 	ArrayType   *result;
 	pgqsIndexCombination   *path;
 
@@ -2836,6 +2852,9 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 		index_array[i] = TextDatumGetCString(key_datums[i]);
 	}
 
+	if (nindices == 0)
+		PG_RETURN_ARRAYTYPE_P(indexes);
+
 	deconstruct_array_builtin(queryids, TEXTOID, &key_datums, &key_nulls, &nqueries);
 	query_array = palloc0(nqueries * sizeof(char *));
 
@@ -2847,14 +2866,22 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 		query_array[i] = TextDatumGetCString(key_datums[i]);
 	}
 
-	if (nindices == 0)
-		PG_RETURN_ARRAYTYPE_P(indexes);
+	deconstruct_array_builtin(queryfreq, INT2OID, &key_datums, &key_nulls, &nqueries);
+	query_freq = palloc0(nqueries * sizeof(int));
+
+	/* read query id array */
+	for (i = 0; i < nqueries; i++)
+	{
+		if (key_nulls[i])
+			continue;
+		query_freq[i] = DatumGetInt32(key_datums[i]);
+	}
 
 	if ((ret = SPI_connect()) < 0)
 		elog(ERROR, "pg_qualstat: SPI_connect returned %d", ret);
 
-	path = pg_qualstats_knapsack(index_array, query_array, nqueries, nindices,
-								 nindices);
+	path = pg_qualstats_knapsack(index_array, query_array, query_freq,
+								 nqueries, nindices, nindices);
 	SPI_finish();
 
 	/* construct and return array. */

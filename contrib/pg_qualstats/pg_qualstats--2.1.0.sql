@@ -24,12 +24,12 @@ LANGUAGE C;
 
   Returns all the example queries with their associated queryid
 */
-CREATE FUNCTION @extschema@.pg_qualstats_example_queries(OUT queryid bigint, OUT query text)
+CREATE FUNCTION @extschema@.pg_qualstats_example_queries(OUT queryid bigint, OUT query text, OUT frequency smallint)
 RETURNS SETOF record
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
 
-CREATE FUNCTION @extschema@.pg_qualstats_generate_advise(text[], text[])
+CREATE FUNCTION @extschema@.pg_qualstats_generate_advise(text[], text[], smallint[])
 RETURNS text[]
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
@@ -747,11 +747,13 @@ DECLARE
     v_queryids bigint[] = '{}';
     v_queryid bigint;
     v_query text;
+    v_freq smallint;
     v_old_total_cost float := 0;	
     v_total_cost float := 0;
     prev_relid oid := 0;
     v_relddl text[] = '{}';
     v_relqueries text[] = '{}';
+    v_relqueryfreq smallint[] = '{}';
     v_relddlcount int := 0;
     v_relquerycount int := 0;
     v_relfinalindex text[] := '{}';
@@ -956,27 +958,33 @@ BEGIN
         END IF;
 
 	IF rec.relid != prev_relid THEN
-		SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries) INTO v_relddl;
+		SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries, v_relqueryfreq) INTO v_relddl;
 		v_relfinalindex = pg_catalog.array_cat(v_relfinalindex, v_relddl);
 		prev_relid := rec.relid;
 		v_relddl = '{}';
 		v_relqueries = '{}';
+		v_relqueryfreq = '{}';
+		v_relddlcount := 0;
+		v_relquerycount := 0;
 	END IF;
 
 	v_relddl[v_relddlcount] := v_ddl;
 	v_relddlcount := v_relddlcount + 1;
+	RAISE NOTICE 'Initial indices in step1';
+	RAISE NOTICE '%: %', v_relddlcount, v_ddl;
 
 	FOREACH v_queryid IN ARRAY v_queryids
 	LOOP
-		SELECT query INTO v_query FROM pg_qualstats_example_queries() where queryid = v_queryid;
+		SELECT query, frequency INTO v_query, v_freq FROM pg_qualstats_example_queries() where queryid = v_queryid;
 		v_relqueries[v_relquerycount] := 'EXPLAIN ' || v_query;
+		v_relqueryfreq[v_relquerycount] := v_freq;
 		v_relquerycount := v_relquerycount + 1;
 	END LOOP;
 
       END LOOP;
     END LOOP;
 
-    SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries) INTO v_relddl;
+    SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries, v_relqueryfreq) INTO v_relddl;
     v_relfinalindex = pg_catalog.array_cat(v_relfinalindex, v_relddl);
 
    RETURN v_relfinalindex;

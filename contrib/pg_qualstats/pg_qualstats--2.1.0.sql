@@ -29,8 +29,13 @@ RETURNS SETOF record
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
 
-CREATE FUNCTION @extschema@.pg_qualstats_generate_advise(text[], text[], smallint[])
+CREATE FUNCTION @extschema@.pg_qualstats_generate_advise(text[], text[], smallint[], bigint[])
 RETURNS text[]
+AS 'MODULE_PATHNAME'
+LANGUAGE C;
+
+CREATE FUNCTION pg_qualstats_overhead(OUT queryid bigint, OUT relid oid, OUT attnum int, OUT frequency int, OUT total_updated bigint)
+RETURNS SETOF record
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
 
@@ -675,6 +680,8 @@ BEGIN
           -- append the column to the index
           IF v_ddl != '' THEN v_ddl := v_ddl || ', '; END IF;
           v_ddl := v_ddl || @extschema@.pg_qualstats_get_idx_col(v_qualnodeid, true);
+
+	  -- SELECT sum(ovh.total_updated) INTO update_count FROM pg_qualstats_overhead() ovh WHERE ovh.relid = rec.relid AND ovh.attnum = 
         END LOOP;
 
         -- if underlying table has been dropped, skip this (broken) index
@@ -754,10 +761,12 @@ DECLARE
     v_relddl text[] = '{}';
     v_relqueries text[] = '{}';
     v_relqueryfreq smallint[] = '{}';
+    v_relupdate bigint[] = '{}';
     v_relddlcount int := 0;
     v_relquerycount int := 0;
     v_relfinalindex text[] := '{}';
-
+    v_colupdate bigint;
+    v_attnum int;
 BEGIN
     -- sanity checks and default values
     SELECT coalesce(min_filter, 1000), coalesce(min_selectivity, 30),
@@ -874,6 +883,18 @@ BEGIN
       LOOP
         v_nb_processed := v_nb_processed + 1;
 
+	IF rec.relid != prev_relid THEN
+		SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries, v_relqueryfreq, v_relupdate) INTO v_relddl;
+		v_relfinalindex = pg_catalog.array_cat(v_relfinalindex, v_relddl);
+		prev_relid := rec.relid;
+		v_relddl = '{}';
+		v_relqueries = '{}';
+		v_relqueryfreq = '{}';
+		v_relupdate = '{}';
+		v_relddlcount := 0;
+		v_relquerycount := 0;
+	END IF;
+
         v_ddl := '';
         v_quals_todo := '{}';
         v_quals_done := '{}';
@@ -898,6 +919,8 @@ BEGIN
         -- and append qual's own columns
         v_quals_todo := v_quals_todo || rec.quals;
 
+	v_relupdate[v_relddlcount] = 0;
+
         -- generate the index DDL
         FOREACH v_qualnodeid IN ARRAY v_quals_todo LOOP
           -- skip quals already present in the index
@@ -921,7 +944,15 @@ BEGIN
           -- append the column to the index
           IF v_ddl != '' THEN v_ddl := v_ddl || ', '; END IF;
           v_ddl := v_ddl || pg_qualstats_get_idx_col(v_qualnodeid, true);
+
+          SELECT coalesce(q.lattnum, q.rattnum) INTO v_attnum FROM @extschema@.pg_qualstats() q WHERE q.qualnodeid = v_qualnodeid;
+	  SELECT sum(ovh.total_updated) INTO v_colupdate FROM pg_qualstats_overhead() ovh WHERE ovh.relid = rec.relid AND ovh.attnum = v_attnum;
+	  IF v_colupdate IS NOT NULL THEN
+	  	v_relupdate[v_relddlcount] := v_relupdate[v_relddlcount] + v_colupdate;
+	  END IF;
+	  RAISE NOTICE 'Rel:Col-%:%, update=%', rec.relid, v_attnum, v_relupdate[v_relddlcount];
         END LOOP;
+
 
         -- if underlying table has been dropped, skip this (broken) index
         CONTINUE WHEN coalesce(v_ddl, '') = '';
@@ -957,21 +988,10 @@ BEGIN
             v_queryids = '{}';
         END IF;
 
-	IF rec.relid != prev_relid THEN
-		SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries, v_relqueryfreq) INTO v_relddl;
-		v_relfinalindex = pg_catalog.array_cat(v_relfinalindex, v_relddl);
-		prev_relid := rec.relid;
-		v_relddl = '{}';
-		v_relqueries = '{}';
-		v_relqueryfreq = '{}';
-		v_relddlcount := 0;
-		v_relquerycount := 0;
-	END IF;
-
 	v_relddl[v_relddlcount] := v_ddl;
 	v_relddlcount := v_relddlcount + 1;
-	RAISE NOTICE 'Initial indices in step1';
-	RAISE NOTICE '%: %', v_relddlcount, v_ddl;
+--	RAISE NOTICE 'Initial indices in step1';
+--	RAISE NOTICE '%: %', v_relddlcount, v_ddl;
 
 	FOREACH v_queryid IN ARRAY v_queryids
 	LOOP
@@ -984,7 +1004,7 @@ BEGIN
       END LOOP;
     END LOOP;
 
-    SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries, v_relqueryfreq) INTO v_relddl;
+    SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries, v_relqueryfreq, v_relupdate) INTO v_relddl;
     v_relfinalindex = pg_catalog.array_cat(v_relfinalindex, v_relddl);
 
    RETURN v_relfinalindex;

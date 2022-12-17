@@ -152,6 +152,7 @@ static Datum pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
 extern PGDLLEXPORT Datum pg_qualstats_example_query(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_example_queries(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_generate_advise(PG_FUNCTION_ARGS);
+extern PGDLLEXPORT Datum pg_qualstats_overhead(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(pg_qualstats_reset);
 PG_FUNCTION_INFO_V1(pg_qualstats);
@@ -161,6 +162,7 @@ PG_FUNCTION_INFO_V1(pg_qualstats_names_2_0);
 PG_FUNCTION_INFO_V1(pg_qualstats_example_query);
 PG_FUNCTION_INFO_V1(pg_qualstats_example_queries);
 PG_FUNCTION_INFO_V1(pg_qualstats_generate_advise);
+PG_FUNCTION_INFO_V1(pg_qualstats_overhead);
 
 static PlannedStmt *pgqs_planner(Query *parse,
 								 const char *query_string,
@@ -227,7 +229,7 @@ typedef struct pgqsSharedState
 #if PG_VERSION_NUM >= 90400
 	LWLock	   *lock;			/* protects counters hashtable
 								 * search/modification */
-	LWLock	   *querylock;		/* protects query hashtable
+	LWLock	   *querylock;		/* protects query/update hashtable
 								 * search/modification */
 #else
 	LWLockId	lock;			/* protects counters hashtable
@@ -323,6 +325,20 @@ typedef struct pgqsQueryStringEntry
 	char		querytext[1];
 } pgqsQueryStringEntry;
 
+typedef struct pgqsUpdateHashKey
+{
+	pgqs_queryid 	queryid;	/* query identifier (if set by another plugin */
+	Oid				relid;		/* relation OID of the updated column */
+	AttrNumber		attnum;		/* attribute Number of the updated column */	
+} pgqsUpdateHashKey;
+
+typedef struct pgqsUpdateHashEntry
+{
+	pgqsUpdateHashKey	key;
+	int		 			frequency;		/* frequency of execution */
+	int64				updated_rows;	/* total commulative updated rows */
+} pgqsUpdateHashEntry;
+
 /*
  * Transient state of the query tree walker - for the meaning of the counters,
  * see pgqsEntry comments.
@@ -359,6 +375,7 @@ static uint32 hashExpr(Expr *expr, pgqsWalkerContext *context, bool include_cons
 static void exprRepr(Expr *expr, StringInfo buffer, pgqsWalkerContext *context, bool include_const);
 static void pgqs_set_planstates(PlanState *planstate, pgqsWalkerContext *context);
 static Expr *pgqs_resolve_var(Var *var, pgqsWalkerContext *context);
+static void pgqsInsertOverheadHash(ModifyTable *node, pgqsWalkerContext *context);
 
 
 static void pgqs_entry_dealloc(void);
@@ -379,6 +396,7 @@ static Size pgqs_sampled_array_size(void);
 static HTAB *pgqs_hash = NULL;
 static HTAB *pgqs_query_examples_hash = NULL;
 static pgqsSharedState *pgqs = NULL;
+static HTAB *pgqs_update_hash = NULL;
 
 /* Local Hash */
 static HTAB *pgqs_localhash = NULL;
@@ -894,6 +912,10 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 
 			PGQS_LWL_RELEASE(pgqs->lock);
 		}
+
+		if (nodeTag(queryDesc->plannedstmt->planTree) == T_ModifyTable)
+			pgqsInsertOverheadHash((ModifyTable *) queryDesc->plannedstmt->planTree, context);
+		
 	}
 
 	if (prev_ExecutorEnd)
@@ -1833,14 +1855,20 @@ pgqs_backend_mode_startup(void)
 {
 	HASHCTL		info;
 	HASHCTL		queryinfo;
+	HASHCTL		updateinfo;
 
 	memset(&info, 0, sizeof(info));
 	memset(&queryinfo, 0, sizeof(queryinfo));
+	memset(&updateinfo, 0, sizeof(updateinfo));
 	info.keysize = sizeof(pgqsHashKey);
 	info.hcxt = TopMemoryContext;
 	queryinfo.keysize = sizeof(pgqsQueryStringHashKey);
 	queryinfo.entrysize = sizeof(pgqsQueryStringEntry) + pgqs_query_size * sizeof(char);
 	queryinfo.hcxt = TopMemoryContext;
+	updateinfo.keysize = sizeof(pgqsUpdateHashKey);
+	updateinfo.entrysize = sizeof(pgqsUpdateHashEntry);
+	updateinfo.hcxt = TopMemoryContext;
+	updateinfo.hash = pgqs_hash_fn;
 
 	if (pgqs_resolve_oids)
 		info.entrysize = sizeof(pgqsEntryWithNames);
@@ -1850,9 +1878,9 @@ pgqs_backend_mode_startup(void)
 	info.hash = pgqs_hash_fn;
 
 	pgqs_hash = hash_create("pg_qualstatements_hash",
-							  pgqs_max,
-							  &info,
-							  HASH_ELEM | HASH_FUNCTION | HASH_CONTEXT);
+							 pgqs_max,
+							 &info,
+							 HASH_ELEM | HASH_FUNCTION | HASH_CONTEXT);
 
 	pgqs_query_examples_hash = hash_create("pg_qualqueryexamples_hash",
 											 pgqs_max,
@@ -1864,6 +1892,11 @@ pgqs_backend_mode_startup(void)
 #else
 											 HASH_ELEM | HASH_FUNCTION | HASH_CONTEXT);
 #endif
+
+	pgqs_update_hash = hash_create("pg_update_hash",
+									pgqs_max,
+									&updateinfo,
+									HASH_ELEM | HASH_FUNCTION | HASH_CONTEXT);
 }
 
 #if PG_VERSION_NUM >= 150000
@@ -1885,6 +1918,7 @@ pgqs_shmem_startup(void)
 {
 	HASHCTL		info;
 	HASHCTL		queryinfo;
+	HASHCTL		updateinfo;
 	bool		found;
 
 	Assert(!pgqs_backend);
@@ -1903,9 +1937,13 @@ pgqs_shmem_startup(void)
 						   &found);
 	memset(&info, 0, sizeof(info));
 	memset(&queryinfo, 0, sizeof(queryinfo));
+	memset(&updateinfo, 0, sizeof(updateinfo));
 	info.keysize = sizeof(pgqsHashKey);
 	queryinfo.keysize = sizeof(pgqsQueryStringHashKey);
 	queryinfo.entrysize = sizeof(pgqsQueryStringEntry) + pgqs_query_size * sizeof(char);
+	updateinfo.keysize = sizeof(pgqsUpdateHashKey);
+	updateinfo.entrysize = sizeof(pgqsUpdateHashEntry);
+	updateinfo.hash = pgqs_hash_fn;
 
 	if (pgqs_resolve_oids)
 		info.entrysize = sizeof(pgqsEntryWithNames);
@@ -1947,6 +1985,11 @@ pgqs_shmem_startup(void)
 #else
 											 HASH_ELEM | HASH_FUNCTION | HASH_FIXED_SIZE);
 #endif
+
+	pgqs_update_hash = ShmemInitHash("pg_update_hash",
+									 pgqs_max, pgqs_max,
+									 &updateinfo,
+									 HASH_ELEM | HASH_FUNCTION | HASH_FIXED_SIZE);
 	LWLockRelease(AddinShmemInitLock);
 }
 
@@ -2760,7 +2803,6 @@ pg_qualstats_get_cost(char **queries, int *queryfreq, int nqueries)
 	{
 		pg_qualstats_plan_query(queries[i]);
 		cost += (pgqs_plan_cost * queryfreq[i]);
-		elog(NOTICE, "query=%s freq=%d", queries[i], queryfreq[i]);
 	}
 
 	pgqs_cost_track_enable = false;
@@ -2827,6 +2869,7 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 	ArrayType  *indexes = PG_GETARG_ARRAYTYPE_P(0);
 	ArrayType  *queryids = PG_GETARG_ARRAYTYPE_P(1);
 	ArrayType  *queryfreq = PG_GETARG_ARRAYTYPE_P(2);
+	ArrayType  *indexupdates = PG_GETARG_ARRAYTYPE_P_COPY(3);
 	Datum	   *key_datums;
 	bool	   *key_nulls;
 	int			nindices;
@@ -2836,6 +2879,7 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 	char	   **index_array;
 	char	   **query_array;
 	int			*query_freq;
+	int64		*index_updates;
 	ArrayType   *result;
 	pgqsIndexCombination   *path;
 
@@ -2877,6 +2921,14 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 		query_freq[i] = DatumGetInt32(key_datums[i]);
 	}
 
+	index_updates = (int64 *) ARR_DATA_PTR(indexupdates);
+
+	/* read query id array */
+	for (i = 0; i < nindices; i++)
+	{
+		elog(NOTICE, "index = %s update %lld", index_array[i], index_updates[i]);
+	}
+
 	if ((ret = SPI_connect()) < 0)
 		elog(ERROR, "pg_qualstat: SPI_connect returned %d", ret);
 
@@ -2893,4 +2945,124 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 	result = construct_array_builtin(key_datums, path->nindices, TEXTOID);
 
 	PG_RETURN_ARRAYTYPE_P(result);
+}
+
+static void
+pgqsInsertOverheadHash(ModifyTable *node, pgqsWalkerContext *context)
+{
+	ListCell	*l;
+	RangeTblEntry *rte;
+	Instrumentation *instrumentation = context->planstate->instrument;
+
+	/* TODO: for now only consider update overhead. */
+	if (node->operation != CMD_UPDATE)
+		return;
+
+	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_EXCLUSIVE);
+	foreach(l, node->resultRelations)
+	{
+		Index					resultRelation = lfirst_int(l);
+		pgqsUpdateHashKey		key;
+		pgqsUpdateHashEntry	   *entry;
+		List		*cols;
+		ListCell	*lc;
+
+		rte = list_nth(context->rtable, resultRelation - 1);
+		cols = (List *) list_nth(node->updateColnosLists, resultRelation - 1);
+
+		key.relid = rte->relid;	
+		foreach(lc, cols)
+		{
+			AttrNumber	targetattnum = lfirst_int(lc);
+			bool		found;
+
+			key.attnum = targetattnum;
+			key.queryid = context->queryId;
+
+			entry = (pgqsUpdateHashEntry *) hash_search(pgqs_update_hash,
+														&key,
+														HASH_ENTER, &found);
+			if (!found)
+			{
+				entry->frequency = 1;
+				entry->updated_rows = instrumentation->ntuples;
+			}
+			else
+			{
+				entry->frequency++;
+				entry->updated_rows += instrumentation->ntuples;
+			}
+		}
+	}
+	PGQS_LWL_RELEASE(pgqs->querylock);
+}
+
+Datum
+pg_qualstats_overhead(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	HASH_SEQ_STATUS hash_seq;
+	pgqsUpdateHashEntry *entry;
+
+	if ((!pgqs && !pgqs_backend) || !pgqs_update_hash)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("pg_qualstats must be loaded via shared_preload_libraries")));
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not " \
+						"allowed in this context")));
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	/* don't need to scan the hash table if track_constants isn't enabled */
+	if (!pgqs_track_constants)
+		return (Datum) 0;
+
+	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
+	hash_seq_init(&hash_seq, pgqs_update_hash);
+
+	while ((entry = hash_seq_search(&hash_seq)) != NULL)
+	{
+		Datum		values[5];
+		bool		nulls[5];
+		int64		queryid = entry->key.queryid;
+
+		memset(values, 0, sizeof(values));
+		memset(nulls, 0, sizeof(nulls));
+
+		values[0] = Int64GetDatumFast(queryid);
+		values[1] = ObjectIdGetDatum(entry->key.relid);
+		values[2] = Int32GetDatum(entry->key.attnum);
+		values[3] = Int32GetDatum(entry->frequency);
+		values[4] =	Int64GetDatumFast(entry->updated_rows);
+
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	PGQS_LWL_RELEASE(pgqs->querylock);
+
+	return (Datum) 0;
 }

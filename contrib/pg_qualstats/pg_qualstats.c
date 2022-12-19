@@ -130,6 +130,19 @@ typedef struct pgqsIndexCombination
 } pgqsIndexCombination;
 
 /*
+ * Track cost for current combination of the indices.
+ */
+typedef struct pgqsIndexAdviceContext
+{
+	char	  **indices;
+	char	  **queries;
+	int16	   *frequency;
+	int64	   *update_count;
+	int			nindices;
+	int			nqueries;	
+} pgqsIndexAdviceContext;
+
+/*
  * Extension version number, for supporting older extension versions' objects
  */
 typedef enum pgqsVersion
@@ -2792,7 +2805,7 @@ pg_qualstats_plan_query(const char *query)
  * Plan all give queries to compute the total cost.
  */
 static float
-pg_qualstats_get_cost(char **queries, int *queryfreq, int nqueries)
+pg_qualstats_get_cost(char **queries, int16 *queryfreq, int nqueries)
 {
 	int		i;
 	float	cost;
@@ -2816,8 +2829,7 @@ pg_qualstats_get_cost(char **queries, int *queryfreq, int nqueries)
  * cost.
  */
 static pgqsIndexCombination *
-pg_qualstats_knapsack(char **indices, char **queries, int *queryfreq,
-					  int nqueries, int n, int max_indices)
+pg_qualstats_knapsack(pgqsIndexAdviceContext *context, int n)
 {
 	Oid						idxid;
 	pgqsIndexCombination   *path1;
@@ -2826,24 +2838,25 @@ pg_qualstats_knapsack(char **indices, char **queries, int *queryfreq,
 	if (n == 0)
 	{
 		path1 = MemoryContextAllocZero(TopMemoryContext,
-									   sizeof(pgqsIndexCombination) + max_indices * sizeof(int));
-		path1->cost = pg_qualstats_get_cost(queries, queryfreq, nqueries);
+									   sizeof(pgqsIndexCombination) +
+									   context->nindices * sizeof(int));
+		path1->cost = pg_qualstats_get_cost(context->queries,
+											context->frequency,
+											context->nqueries);
 		path1->nindices = 0;
 		return path1;
 	}
 
 	/* compare cost with and without this index */
-	idxid = pg_qualstats_create_hypoindex(indices[n - 1]);
+	idxid = pg_qualstats_create_hypoindex(context->indices[n - 1]);
 
 	/* compute total cost including this index */
-	path1 = pg_qualstats_knapsack(indices, queries, queryfreq, nqueries, n - 1,
-								  max_indices);
+	path1 = pg_qualstats_knapsack(context, n - 1);
 	path1->indices[path1->nindices++] = n - 1;
 	pg_qualstats_drop_hypoindex(idxid);
 
 	/* compute total cost excluding this index */
-	path2 = pg_qualstats_knapsack(indices, queries, queryfreq, nqueries, n - 1,
-								  max_indices);
+	path2 = pg_qualstats_knapsack(context, n - 1);
 
 	/* 
 	 * TODO: Compute index overhead based on how many hot update will be
@@ -2868,7 +2881,7 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 {
 	ArrayType  *indexes = PG_GETARG_ARRAYTYPE_P(0);
 	ArrayType  *queryids = PG_GETARG_ARRAYTYPE_P(1);
-	ArrayType  *queryfreq = PG_GETARG_ARRAYTYPE_P(2);
+	ArrayType  *queryfreq = PG_GETARG_ARRAYTYPE_P_COPY(2);
 	ArrayType  *indexupdates = PG_GETARG_ARRAYTYPE_P_COPY(3);
 	Datum	   *key_datums;
 	bool	   *key_nulls;
@@ -2881,6 +2894,7 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 	int			*query_freq;
 	int64		*index_updates;
 	ArrayType   *result;
+	pgqsIndexAdviceContext	context;
 	pgqsIndexCombination   *path;
 
 	elog(NOTICE, "## Generate index advice ##");
@@ -2910,17 +2924,7 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 		query_array[i] = TextDatumGetCString(key_datums[i]);
 	}
 
-	deconstruct_array_builtin(queryfreq, INT2OID, &key_datums, &key_nulls, &nqueries);
-	query_freq = palloc0(nqueries * sizeof(int));
-
-	/* read query id array */
-	for (i = 0; i < nqueries; i++)
-	{
-		if (key_nulls[i])
-			continue;
-		query_freq[i] = DatumGetInt32(key_datums[i]);
-	}
-
+	query_freq = (int *) ARR_DATA_PTR(queryfreq);
 	index_updates = (int64 *) ARR_DATA_PTR(indexupdates);
 
 	/* read query id array */
@@ -2929,11 +2933,22 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 		elog(NOTICE, "index = %s update %lld", index_array[i], index_updates[i]);
 	}
 
+	for (i = 0; i < nqueries; i++)
+	{
+		elog(NOTICE, "query = %s freq %lld", query_array[i], query_freq[i]);
+	}
+
 	if ((ret = SPI_connect()) < 0)
 		elog(ERROR, "pg_qualstat: SPI_connect returned %d", ret);
 
-	path = pg_qualstats_knapsack(index_array, query_array, query_freq,
-								 nqueries, nindices, nindices);
+	context.indices = index_array;
+	context.queries = query_array;
+	context.frequency = query_freq;
+	context.nindices = nindices;
+	context.nqueries = nqueries;
+	context.update_count = index_updates;
+
+	path = pg_qualstats_knapsack(&context, nindices);
 	SPI_finish();
 
 	/* construct and return array. */

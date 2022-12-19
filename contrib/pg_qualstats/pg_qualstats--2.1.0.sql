@@ -24,12 +24,12 @@ LANGUAGE C;
 
   Returns all the example queries with their associated queryid
 */
-CREATE FUNCTION @extschema@.pg_qualstats_example_queries(OUT queryid bigint, OUT query text, OUT frequency smallint)
+CREATE FUNCTION @extschema@.pg_qualstats_example_queries(OUT queryid bigint, OUT query text, OUT frequency int)
 RETURNS SETOF record
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
 
-CREATE FUNCTION @extschema@.pg_qualstats_generate_advise(text[], text[], smallint[], bigint[])
+CREATE FUNCTION @extschema@.pg_qualstats_generate_advise(text[], text[], int[], bigint[])
 RETURNS text[]
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
@@ -754,13 +754,13 @@ DECLARE
     v_queryids bigint[] = '{}';
     v_queryid bigint;
     v_query text;
-    v_freq smallint;
+    v_freq int;
     v_old_total_cost float := 0;	
     v_total_cost float := 0;
     prev_relid oid := 0;
     v_relddl text[] = '{}';
     v_relqueries text[] = '{}';
-    v_relqueryfreq smallint[] = '{}';
+    v_relqueryfreq int[] = '{}';
     v_relupdate bigint[] = '{}';
     v_relddlcount int := 0;
     v_relquerycount int := 0;

@@ -109,7 +109,7 @@ PG_MODULE_MAGIC;
  * TODO: some random value to add an overhead of each index this need to be
  * changed once the overhead tracking logic is implemented.
  */
-#define INDEX_OVERHEAD 10000
+#define INDEX_UPDATE_OVERHEAD 10
 
 /* 
  * If 'pgqs_cost_track_enable' is set then the planner will start tracking the
@@ -126,6 +126,7 @@ typedef struct pgqsIndexCombination
 {
 	float	cost;
 	int		nindices;
+	int		nupdate;
 	int		indices[FLEXIBLE_ARRAY_MEMBER];
 } pgqsIndexCombination;
 
@@ -136,8 +137,8 @@ typedef struct pgqsIndexAdviceContext
 {
 	char	  **indices;
 	char	  **queries;
-	int16	   *frequency;
 	int64	   *update_count;
+	int		   *frequency;
 	int			nindices;
 	int			nqueries;	
 } pgqsIndexAdviceContext;
@@ -2853,17 +2854,19 @@ pg_qualstats_knapsack(pgqsIndexAdviceContext *context, int n)
 	/* compute total cost including this index */
 	path1 = pg_qualstats_knapsack(context, n - 1);
 	path1->indices[path1->nindices++] = n - 1;
+	path1->nupdate += context->update_count[n - 1];
+
 	pg_qualstats_drop_hypoindex(idxid);
 
 	/* compute total cost excluding this index */
 	path2 = pg_qualstats_knapsack(context, n - 1);
 
 	/* 
-	 * TODO: Compute index overhead based on how many hot update will be
-	 * converted to the non-hot update.
+	 * TODO: How to compare the cost vs no of hot update will be converted to
+	 * non hot update???
 	 */
-	if (path1->cost + path1->nindices * INDEX_OVERHEAD <
-		path2->cost + path2->nindices * INDEX_OVERHEAD)
+	if (path1->cost + path1->nupdate * INDEX_UPDATE_OVERHEAD <
+		path2->cost + path2->nupdate * INDEX_UPDATE_OVERHEAD)
 	{
 		pfree(path2);
 		return path1;

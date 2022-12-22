@@ -167,6 +167,7 @@ extern PGDLLEXPORT Datum pg_qualstats_example_query(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_example_queries(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_generate_advise(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_overhead(PG_FUNCTION_ARGS);
+extern PGDLLEXPORT Datum pg_qualstats_qualnodeid_combination(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(pg_qualstats_reset);
 PG_FUNCTION_INFO_V1(pg_qualstats);
@@ -177,6 +178,7 @@ PG_FUNCTION_INFO_V1(pg_qualstats_example_query);
 PG_FUNCTION_INFO_V1(pg_qualstats_example_queries);
 PG_FUNCTION_INFO_V1(pg_qualstats_generate_advise);
 PG_FUNCTION_INFO_V1(pg_qualstats_overhead);
+PG_FUNCTION_INFO_V1(pg_qualstats_qualnodeid_combination);
 
 static PlannedStmt *pgqs_planner(Query *parse,
 								 const char *query_string,
@@ -3083,4 +3085,196 @@ pg_qualstats_overhead(PG_FUNCTION_ARGS)
 	PGQS_LWL_RELEASE(pgqs->querylock);
 
 	return (Datum) 0;
+}
+
+static bool
+pg_qualstats_qualnodeid_exists(int64 *qualnodeids, int nqualnodes,
+							   int64 qualnodeid)
+{
+	int		i;
+
+	for (i = 0; i < nqualnodes; i++)
+	{
+		if (qualnodeids[i] == qualnodeid)
+			return true;
+	}
+
+	return false;
+}
+
+static bool
+pg_qualstats_attnum_exists(AttrNumber *attrs, int nattr, AttrNumber attrno)
+{
+	int		i;
+
+	for (i = 0; i < nattr; i++)
+	{
+		if (attrs[i] == attrno)
+			return true;
+	}
+
+	return false;
+}
+
+static void
+pg_qualstats_qualnodeid_get_attnum(int64 qualnodeid)
+{
+	HASH_SEQ_STATUS hash_seq;
+	pgqsEntry	   *entry;
+	AttrNumber		attno;
+
+	PGQS_LWL_ACQUIRE(pgqs->lock, LW_SHARED);
+	hash_seq_init(&hash_seq, pgqs_hash);
+
+	while ((entry = hash_seq_search(&hash_seq)) != NULL)
+	{
+		if (entry->qualnodeid == qualnodeid)
+		{
+			if (entry->lattnum != InvalidAttrNumber)
+			{
+				attno = entry->lattnum;
+				break;
+			}
+			else if (entry->rattnum != InvalidAttrNumber)
+			{
+				attno = entry->rattnum;
+				break;
+			}
+		}
+	}
+	PGQS_LWL_RELEASE(pgqs->lock);
+
+	return attno;
+}
+
+#if 0
+AttrNumber*
+pg_qualstats_qualids_get_attrs(int64 *quals, int nquals, int nidexcols)
+{
+	int			i;
+	int			nquals_done;
+	int			natt_done;
+	int			nindexcol;
+	int64	   *quals_done;
+	int64		qualnodeid;
+	AttrNumber	attno;
+	AttrNumber *attno_done;
+	AttrNumber *indexcol;
+
+	indexcol = palloc0(nquals * sizeof(AttrNumber));
+	quals_done = palloc0(nquals * sizeof(int64));
+
+	for (i = 0; i < nquals; i++)
+	{
+		qualnodeid = quals[i];
+
+		/* skip quals already present in the index */
+		if (pg_qualstats_qualnodeid_exists(quals_done, nquals_done, qualnodeid))
+			continue;
+
+        /* skip other quals for the same column */
+		attno = pg_qualstats_qualnodeid_get_attnum(qualnodeid);
+		if (pg_qualstats_attnum_exists(indexcol, nindexcol, attno))
+			continue;
+	
+		quals_done[nquals_done++] = qualnodeid;
+
+		/* if underlying table has been dropped, stop here */
+		indexcol[nindexcol++] = attno;
+	}
+}
+
+Datum
+pg_qualstats_test(PG_FUNCTION_ARGS)
+{
+	ArrayType  *quals_todo = PG_GETARG_ARRAYTYPE_P_COPY(0);
+	int64	   *quals;
+	AttrNumber *idxcols;
+	int			nquals;
+	int			nidxcols;
+	int			i;
+	int			ret;
+	ArrayType  *result;
+
+	quals = (int64 *) ARR_DATA_PTR(quals_todo);
+	nquals = ARR_DIMS(quals_todo)[0];
+
+	idxcols = pg_qualstats_qualids_get_attrs(quals, nquals, &nidxcols);
+
+	/* Generate all combinations for indexes */
+	/* read query id array */
+	for (i = 0; i < nquals; i++)
+	{
+		elog(NOTICE, "qualnodeid = %lld", (long long int) quals[i]);
+	}
+
+	if ((ret = SPI_connect()) < 0)
+		elog(ERROR, "pg_qualstat: SPI_connect returned %d", ret);
+
+	/****/
+	SPI_finish();
+
+	return (Datum) 0;
+}
+#endif
+
+void print(int64 *num, int n)
+{
+    int i;
+    elog(NOTICE, "comb: %lld %lld %lld ", (long long int)num[0], (long long int)num[1], (long long int)num[2]);
+}
+
+/*
+ * Function to generate all combination of qualnodeids
+ */
+Datum
+pg_qualstats_qualnodeid_combination(PG_FUNCTION_ARGS)
+{
+	ArrayType  *quals = PG_GETARG_ARRAYTYPE_P_COPY(0);
+	int64	   *qualsarray;
+	int64	   *finalquals;
+	int			ncombination;
+	int			nquals;
+	int			j;
+	int			i;
+	int			index = 0;
+	Datum	   *elem;
+	ArrayType  *result;
+
+	qualsarray = (int64 *) ARR_DATA_PTR(quals);
+	nquals = ARR_DIMS(quals)[0];
+
+	/* number of same size combinations (n * n-1) */
+	ncombination = (nquals * (nquals - 1));
+
+	finalquals = palloc0(sizeof(int64) * nquals * ncombination);
+
+	/* generate all combinations for qualnodeids */
+    for (j = 1; j <= nquals; j++) 
+	{
+        for (i = 0; i < nquals-1; i++)
+		{
+			int64	temp = qualsarray[i];
+            
+			qualsarray[i] = qualsarray[i + 1];
+            qualsarray[i + 1] = temp;
+
+            memcpy(&(finalquals[index]), &qualsarray[0], sizeof(int64) * nquals);
+			print(&(finalquals[index]), nquals);
+			index += nquals;
+        }
+	}
+
+	elem = palloc0(sizeof(Datum) * index);
+
+	/* construct and return array. */
+	for (i = 0; i < index; i++)
+		elem[i] = Int64GetDatum(finalquals[i]);
+
+	result = construct_array_builtin(elem, index, INT8OID);
+
+	pfree(quals);
+	pfree(finalquals);
+
+	PG_RETURN_ARRAYTYPE_P(result);
 }

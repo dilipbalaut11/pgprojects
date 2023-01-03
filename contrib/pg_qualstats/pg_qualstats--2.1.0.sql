@@ -932,9 +932,11 @@ BEGIN
         FROM final WHERE amname='btree'
       LOOP
 
+	-- generate index advise for last table if the relid has changed
 	IF rec.relid != prev_relid THEN
 		SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries, v_relqueryfreq, v_relupdate_array) INTO v_relddl;
 		v_relfinalindex = pg_catalog.array_cat(v_relfinalindex, v_relddl);
+
 		prev_relid := rec.relid;
 		v_relddl = '{}';
 		v_relqueries = '{}';
@@ -960,7 +962,6 @@ BEGIN
                     SELECT pg_catalog.json_array_elements(v_cur->'qualnodeids')::text::bigint
                 LOOP
                   v_quals_todo := v_quals_todo || v_qualnodeid;
-		  RAISE NOTICE 'XXX - qualnodeid: %', v_qualnodeid;
                 END LOOP;
               END LOOP;
             END IF;
@@ -975,6 +976,8 @@ BEGIN
 	v_quals_done = '{}';
 
 
+	-- compute the number of updated rows for the column involved in this set
+	-- do not cound duplicate update if columns are updated as part of same query by keeping track of v_queryid_array
 	FOREACH v_qualnodeid IN ARRAY v_quals_todo LOOP
             SELECT coalesce(q.lattnum, q.rattnum) INTO v_attnum, v_queryid FROM @extschema@.pg_qualstats() q WHERE q.qualnodeid = v_qualnodeid;
 	    CONTINUE WHEN v_quals_done @> ARRAY[v_qualnodeid];
@@ -993,14 +996,14 @@ BEGIN
 	END LOOP;
 
 
-	-- generate qualnodeid combinations
+	-- generate qualnodeid permutations
 	IF v_numquals > 1 THEN
 		SELECT * INTO v_quals_todo FROM pg_qualstats_qualnodeid_combination(v_quals_done);
 	ELSE
 		v_quals_todo := v_quals_done;
 	END IF;
 
-        -- generate the index DDL
+        -- generate the index DDL for each permutation
 	v_counter := 0;
         FOREACH v_qualnodeid IN ARRAY v_quals_todo LOOP
 	   v_quals_this_index = v_quals_this_index || v_qualnodeid;
@@ -1044,6 +1047,7 @@ BEGIN
             v_queryids = '{}';
         END IF;
 
+	-- fetch the query using queryid
 	FOREACH v_queryid IN ARRAY v_queryids
 	LOOP
 		SELECT query, frequency INTO v_query, v_freq FROM pg_qualstats_example_queries() where queryid = v_queryid;
@@ -1053,6 +1057,7 @@ BEGIN
 	END LOOP;
       END LOOP;
 
+    -- generate index advise for last table
     SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries, v_relqueryfreq, v_relupdate_array) INTO v_relddl;
     v_relfinalindex = pg_catalog.array_cat(v_relfinalindex, v_relddl);
 

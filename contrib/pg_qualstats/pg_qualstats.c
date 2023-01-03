@@ -55,6 +55,7 @@
 #include "nodes/makefuncs.h"
 #include "optimizer/clauses.h"
 #include "optimizer/planner.h"
+#include "optimizer/optimizer.h"
 #include "parser/analyze.h"
 #include "parser/parse_node.h"
 #include "parser/parsetree.h"
@@ -109,7 +110,7 @@ PG_MODULE_MAGIC;
  * TODO: some random value to add an overhead of each index this need to be
  * changed once the overhead tracking logic is implemented.
  */
-#define INDEX_UPDATE_OVERHEAD 10
+#define INDEX_UPDATE_OVERHEAD random_page_cost
 
 /* 
  * If 'pgqs_cost_track_enable' is set then the planner will start tracking the
@@ -2786,35 +2787,45 @@ pg_qualstats_drop_hypoindex(Oid idxid)
 		elog(ERROR, "pg_qualstat: could not drop hypo index");
 	}
 
-	res = atoi(SPI_getvalue(SPI_tuptable->vals[0],
-			   SPI_tuptable->tupdesc,
-			   1));
+	if (!parse_bool(SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1), &res))
+	{
+		SPI_finish();
+		elog(ERROR, "pg_qualstat: drop hypo index should return boolean");
+	}
+
+	if (!res)
+	{
+		SPI_finish();
+		elog(ERROR, "pg_qualstat: could not drop hypo index");
+	}
 }
 
 /* Plan a given query */
 static void
 pg_qualstats_plan_query(const char *query)
 {
-	int				ret;
 	StringInfoData	explainquery;
 
 	initStringInfo(&explainquery);
 	appendStringInfoString(&explainquery, query);
-
-	ret = SPI_execute(query, false, 0);
+	SPI_execute(query, false, 0);
 }
 
 /*
  * Plan all give queries to compute the total cost.
  */
 static float
-pg_qualstats_get_cost(char **queries, int16 *queryfreq, int nqueries)
+pg_qualstats_get_cost(char **queries, int32 *queryfreq, int nqueries)
 {
 	int		i;
 	float	cost;
 
 	pgqs_cost_track_enable = true;
 
+	/* 
+	 * replan each query and compute the total weighted cost by multiplying
+	 * each query cost with its frequency.
+	 */
 	for (i = 0; i < nqueries; i++)
 	{
 		pg_qualstats_plan_query(queries[i]);
@@ -2863,10 +2874,7 @@ pg_qualstats_knapsack(pgqsIndexAdviceContext *context, int n)
 	/* compute total cost excluding this index */
 	path2 = pg_qualstats_knapsack(context, n - 1);
 
-	/* 
-	 * TODO: How to compare the cost vs no of hot update will be converted to
-	 * non hot update???
-	 */
+	/* Add the update overhead and compare the cost. */
 	if (path1->cost + path1->nupdate * INDEX_UPDATE_OVERHEAD <
 		path2->cost + path2->nupdate * INDEX_UPDATE_OVERHEAD)
 	{
@@ -2935,12 +2943,12 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 	/* read query id array */
 	for (i = 0; i < nindices; i++)
 	{
-		elog(NOTICE, "index = %s update %lld", index_array[i], index_updates[i]);
+		elog(NOTICE, "index = %s update %lld", index_array[i], (long long int) index_updates[i]);
 	}
 
 	for (i = 0; i < nqueries; i++)
 	{
-		elog(NOTICE, "query = %s freq %lld", query_array[i], query_freq[i]);
+		elog(NOTICE, "query = %s freq %d", query_array[i], query_freq[i]);
 	}
 
 	if ((ret = SPI_connect()) < 0)
@@ -3087,6 +3095,8 @@ pg_qualstats_overhead(PG_FUNCTION_ARGS)
 	return (Datum) 0;
 }
 
+#if 0
+
 static bool
 pg_qualstats_qualnodeid_exists(int64 *qualnodeids, int nqualnodes,
 							   int64 qualnodeid)
@@ -3147,7 +3157,7 @@ pg_qualstats_qualnodeid_get_attnum(int64 qualnodeid)
 	return attno;
 }
 
-#if 0
+
 AttrNumber*
 pg_qualstats_qualids_get_attrs(int64 *quals, int nquals, int nidexcols)
 {
@@ -3216,13 +3226,14 @@ pg_qualstats_test(PG_FUNCTION_ARGS)
 
 	return (Datum) 0;
 }
-#endif
 
-void print(int64 *num, int n)
+static void
+print(int64 *num, int n)
 {
     int i;
     elog(NOTICE, "comb: %lld %lld %lld ", (long long int)num[0], (long long int)num[1], (long long int)num[2]);
 }
+#endif
 
 /*
  * Function to generate all combination of qualnodeids
@@ -3260,7 +3271,6 @@ pg_qualstats_qualnodeid_combination(PG_FUNCTION_ARGS)
             qualsarray[i + 1] = temp;
 
             memcpy(&(finalquals[index]), &qualsarray[0], sizeof(int64) * nquals);
-			print(&(finalquals[index]), nquals);
 			index += nquals;
         }
 	}

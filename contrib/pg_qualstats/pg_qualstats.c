@@ -25,6 +25,7 @@
  */
 #include <limits.h>
 #include <math.h>
+#include "c.h"
 #include "postgres.h"
 #include "access/hash.h"
 #include "access/htup_details.h"
@@ -107,10 +108,10 @@ PG_MODULE_MAGIC;
 #endif
 
 /*
- * TODO: some random value to add an overhead of each index this need to be
- * changed once the overhead tracking logic is implemented.
+ * For inserting each index tuple we need to pay one random page cost and one
+ * cpu index tuple cost.
  */
-#define INDEX_UPDATE_OVERHEAD random_page_cost
+#define INDEX_UPDATE_OVERHEAD (random_page_cost + cpu_index_tuple_cost)
 
 /* 
  * If 'pgqs_cost_track_enable' is set then the planner will start tracking the
@@ -125,9 +126,9 @@ static float pgqs_plan_cost = 0.0;
  */
 typedef struct pgqsIndexCombination
 {
-	float	cost;
+	double	cost;
 	int		nindices;
-	int		nupdate;
+	double	update_cost;
 	int		indices[FLEXIBLE_ARRAY_MEMBER];
 } pgqsIndexCombination;
 
@@ -138,8 +139,9 @@ typedef struct pgqsIndexAdviceContext
 {
 	char	  **indices;
 	char	  **queries;
-	int64	   *update_count;
 	int		   *frequency;
+	int64	   *update_count;
+	int		   *update_frequency;
 	int			nindices;
 	int			nqueries;	
 } pgqsIndexAdviceContext;
@@ -2837,6 +2839,56 @@ pg_qualstats_get_cost(char **queries, int32 *queryfreq, int nqueries)
 	return cost;
 }
 
+static int
+pg_qualstats_hypoindex_size(Oid idxid)
+{
+	int				ret;
+	uint64			size;
+	StringInfoData	hypoindex;
+
+	initStringInfo(&hypoindex);
+	appendStringInfo(&hypoindex, "SELECT hypopg_relation_size(%d)", idxid);
+
+	ret = SPI_execute(hypoindex.data, false, 0);
+	if (ret != SPI_OK_SELECT)
+	{
+		SPI_finish();
+		elog(ERROR, "pg_qualstat: could not get hypo index size");
+	}
+
+	size = strtou64(SPI_getvalue(SPI_tuptable->vals[0],
+					SPI_tuptable->tupdesc,
+					1), NULL, 10);
+
+	return size;
+}
+
+static double
+pg_qualstats_get_update_cost(uint64 index_size, uint64 tuple_updated)
+{
+	double		T;
+	double		index_pages;
+	double		update_io_cost;
+	double		update_cpu_cost;
+	double		update_total_cost;
+
+
+	/* total index pages. */
+	T  = index_size / BLCKSZ;
+
+	/* 
+	 * We are commputing the page acccess cost and tuple cost based on total
+	 * accumulated tuple count so we don't need to use update query frequency.
+	 */
+	index_pages = (2 * T * tuple_updated) / (2 * T + tuple_updated);
+	update_io_cost = index_pages * random_page_cost;
+	update_cpu_cost = tuple_updated * cpu_tuple_cost;
+
+	update_total_cost = update_io_cost + update_cpu_cost;
+
+	return update_total_cost;
+}
+
 /*
  * Implement a version of knapsack algorithm to try out all the index
  * combination with optimizer and find the combination which produce least
@@ -2846,6 +2898,8 @@ static pgqsIndexCombination *
 pg_qualstats_knapsack(pgqsIndexAdviceContext *context, int n)
 {
 	Oid						idxid;
+	uint64					size;
+	double					update_cost;
 	pgqsIndexCombination   *path1;
 	pgqsIndexCombination   *path2;
 
@@ -2863,20 +2917,23 @@ pg_qualstats_knapsack(pgqsIndexAdviceContext *context, int n)
 
 	/* compare cost with and without this index */
 	idxid = pg_qualstats_create_hypoindex(context->indices[n - 1]);
+	size = pg_qualstats_hypoindex_size(idxid);
 
 	/* compute total cost including this index */
 	path1 = pg_qualstats_knapsack(context, n - 1);
 	path1->indices[path1->nindices++] = n - 1;
-	path1->nupdate += context->update_count[n - 1];
+
+	update_cost =
+		pg_qualstats_get_update_cost(size, context->update_count[n - 1]);
+	path1->update_cost += update_cost;
 
 	pg_qualstats_drop_hypoindex(idxid);
 
 	/* compute total cost excluding this index */
 	path2 = pg_qualstats_knapsack(context, n - 1);
 
-	/* Add the update overhead and compare the cost. */
-	if (path1->cost + path1->nupdate * INDEX_UPDATE_OVERHEAD <
-		path2->cost + path2->nupdate * INDEX_UPDATE_OVERHEAD)
+	/* add the update overhead and compare the cost. */
+	if (path1->cost + path1->update_cost < path2->cost + path2->update_cost)
 	{
 		pfree(path2);
 		return path1;
@@ -2896,6 +2953,7 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 	ArrayType  *queryids = PG_GETARG_ARRAYTYPE_P(1);
 	ArrayType  *queryfreq = PG_GETARG_ARRAYTYPE_P_COPY(2);
 	ArrayType  *indexupdates = PG_GETARG_ARRAYTYPE_P_COPY(3);
+	ArrayType  *indexupdatesfreq = PG_GETARG_ARRAYTYPE_P_COPY(4);
 	Datum	   *key_datums;
 	bool	   *key_nulls;
 	int			nindices;
@@ -2906,6 +2964,7 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 	char	   **query_array;
 	int			*query_freq;
 	int64		*index_updates;
+	int			*update_freq;
 	ArrayType   *result;
 	pgqsIndexAdviceContext	context;
 	pgqsIndexCombination   *path;
@@ -2939,17 +2998,14 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 
 	query_freq = (int *) ARR_DATA_PTR(queryfreq);
 	index_updates = (int64 *) ARR_DATA_PTR(indexupdates);
+	update_freq = (int *) ARR_DATA_PTR(indexupdatesfreq);
 
 	/* read query id array */
 	for (i = 0; i < nindices; i++)
 	{
-		elog(NOTICE, "index = %s update %lld", index_array[i], (long long int) index_updates[i]);
+		elog(NOTICE, "index = %s update %lld freq=%d", index_array[i], (long long int) index_updates[i], update_freq[i]);
 	}
 
-	for (i = 0; i < nqueries; i++)
-	{
-		elog(NOTICE, "query = %s freq %d", query_array[i], query_freq[i]);
-	}
 
 	if ((ret = SPI_connect()) < 0)
 		elog(ERROR, "pg_qualstat: SPI_connect returned %d", ret);
@@ -2960,6 +3016,7 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 	context.nindices = nindices;
 	context.nqueries = nqueries;
 	context.update_count = index_updates;
+	context.update_frequency = update_freq;
 
 	path = pg_qualstats_knapsack(&context, nindices);
 	SPI_finish();

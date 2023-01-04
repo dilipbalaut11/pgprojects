@@ -29,7 +29,7 @@ RETURNS SETOF record
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
 
-CREATE FUNCTION @extschema@.pg_qualstats_generate_advise(text[], text[], int[], bigint[])
+CREATE FUNCTION @extschema@.pg_qualstats_generate_advise(text[], text[], int[], bigint[], int[])
 RETURNS text[]
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
@@ -817,11 +817,14 @@ DECLARE
     v_relqueries text[] = '{}';
     v_relqueryfreq int[] = '{}';
     v_relupdate bigint;
+    v_relupdate_freq int;
     v_relupdate_array bigint[] = '{}';
+    v_relupdate_freq_array int[] = '{}';
     v_relddlcount int := 0;
     v_relquerycount int := 0;
     v_relfinalindex text[] := '{}';
     v_colupdate bigint;
+    v_colupdate_freq int;
     v_counter int;
     v_numquals int;
     v_attnum int;
@@ -934,7 +937,7 @@ BEGIN
 
 	-- generate index advise for last table if the relid has changed
 	IF rec.relid != prev_relid THEN
-		SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries, v_relqueryfreq, v_relupdate_array) INTO v_relddl;
+		SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries, v_relqueryfreq, v_relupdate_array, v_relupdate_freq_array) INTO v_relddl;
 		v_relfinalindex = pg_catalog.array_cat(v_relfinalindex, v_relddl);
 
 		prev_relid := rec.relid;
@@ -942,6 +945,7 @@ BEGIN
 		v_relqueries = '{}';
 		v_relqueryfreq = '{}';
 		v_relupdate_array = '{}';
+		v_relupdate_freq_array = '{}';
 		v_relddlcount := 0;
 		v_relquerycount := 0;
 	END IF;
@@ -970,6 +974,7 @@ BEGIN
         -- and append qual's own columns
         v_quals_todo := v_quals_todo || rec.quals;
 	v_relupdate := 0;
+	v_relupdate_freq := 0;
 	v_numquals := 0;
 	v_attnum_done = '{}';
 	v_queryid_done = '{}';
@@ -982,11 +987,12 @@ BEGIN
             SELECT coalesce(q.lattnum, q.rattnum) INTO v_attnum, v_queryid FROM @extschema@.pg_qualstats() q WHERE q.qualnodeid = v_qualnodeid;
 	    CONTINUE WHEN v_quals_done @> ARRAY[v_qualnodeid];
 	    CONTINUE WHEN v_attnum_done @> ARRAY[v_attnum];
-	    SELECT sum(ovh.total_updated), array_agg(queryid) INTO v_colupdate, v_queryid_array
+	    SELECT sum(ovh.total_updated), sum(ovh.frequency), array_agg(queryid) INTO v_colupdate, v_colupdate_freq, v_queryid_array
 			FROM pg_qualstats_overhead() ovh WHERE ovh.relid = rec.relid AND ovh.attnum = v_attnum AND  NOT (ovh.queryid = ANY (v_queryid_done));
 
 	    IF v_colupdate IS NOT NULL THEN
 	  	v_relupdate := v_relupdate + v_colupdate;
+		v_relupdate_freq := v_relupdate_freq + v_colupdate_freq;
 	    END IF;
 	    v_attnum_done := v_attnum_done || v_attnum;
 	    v_queryid_done := v_queryid_done || v_queryid_array;
@@ -1013,7 +1019,8 @@ BEGIN
 		RAISE NOTICE 'DDL %', v_ddl;
 		CONTINUE WHEN coalesce(v_ddl, '') = '';
 	   	v_relddl[v_relddlcount] := v_ddl;
-	   	v_relupdate_array[v_relddlcount] := v_relupdate;		
+	   	v_relupdate_array[v_relddlcount] := v_relupdate;
+		v_relupdate_freq_array[v_relddlcount] := v_relupdate_freq;
 	   	v_relddlcount := v_relddlcount + 1;
 		v_quals_this_index = '{}';
 		v_counter := 0;
@@ -1058,7 +1065,7 @@ BEGIN
       END LOOP;
 
     -- generate index advise for last table
-    SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries, v_relqueryfreq, v_relupdate_array) INTO v_relddl;
+    SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries, v_relqueryfreq, v_relupdate_array, v_relupdate_freq_array) INTO v_relddl;
     v_relfinalindex = pg_catalog.array_cat(v_relfinalindex, v_relddl);
 
    RETURN v_relfinalindex;

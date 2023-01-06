@@ -44,6 +44,11 @@ RETURNS bigint[]
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
 
+CREATE FUNCTION pg_qualstats_test_index_advise()
+RETURNS void
+AS 'MODULE_PATHNAME'
+LANGUAGE C;
+
 --CREATE FUNCTION @extschema@.pg_qualstats_index_advise()
 --RETURNS SETOF record
 --AS 'MODULE_PATHNAME'
@@ -1072,76 +1077,55 @@ BEGIN
 END;
 $_$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION @extschema@.pg_qualstats_index_advisor_yy (
+CREATE OR REPLACE FUNCTION pg_qualstats_index_advisor_yy (
     min_filter integer DEFAULT 1000,
     min_selectivity integer DEFAULT 30,
     forbidden_am text[] DEFAULT '{}')
-    RETURNS json
+    RETURNS text[]
 AS $_$
 DECLARE
-    v_indexes json[] = '{}';
-    v_unoptimised json[] = '{}';
-
     rec record;
-    v_nb_processed integer = 1;
-
     v_ddl text;
     v_col text;
     v_qualnodeid bigint;
     v_quals_todo bigint[];
+    v_quals_this_index bigint[];
     v_quals_done bigint[];
     v_quals_col_done text[];
     v_queryids bigint[] = '{}';
+    v_queryid bigint;
+    v_attnum_done int[];
+    v_queryid_done bigint[];
+    v_queryid_array bigint[];
+    v_query text;
+    v_freq int;
+    v_old_total_cost float := 0;	
+    v_total_cost float := 0;
+    prev_relid oid := 0;
+    v_relddl text[] = '{}';
+    v_relqueries text[] = '{}';
+    v_relqueryfreq int[] = '{}';
+    v_relupdate bigint;
+    v_relupdate_freq int;
+    v_relupdate_array bigint[] = '{}';
+    v_relupdate_freq_array int[] = '{}';
+    v_relddlcount int := 0;
+    v_relquerycount int := 0;
+    v_relfinalindex text[] := '{}';
+    v_colupdate bigint;
+    v_colupdate_freq int;
+    v_counter int;
+    v_numquals int;
+    v_attnum int;
 BEGIN
     -- sanity checks and default values
     SELECT coalesce(min_filter, 1000), coalesce(min_selectivity, 30),
       coalesce(forbidden_am, '{}')
     INTO min_filter, min_selectivity, forbidden_am;
 
-    -- don't try to generate hash indexes Before pg 10, as those are only WAL
-    -- logged since pg 11.
-    IF pg_catalog.current_setting('server_version_num')::bigint < 100000 THEN
-        forbidden_am := array_append(forbidden_am, 'hash');
-    END IF;
-
-    -- first find out unoptimizable quals.
-    -- We need an array of json containing the per-qual info, and a single
-    -- array containing all the underlying qualnodeids, so we need to create
-    -- the wanted final object manually as we can't have two different grouping
-    -- approach.
-    FOR rec IN WITH src AS (SELECT DISTINCT qualnodeid,
-        (coalesce(lrelid, rrelid), coalesce(lattnum, rattnum),
-          opno, eval_type)::@extschema@.qual AS qual,
-          queryid
-      FROM @extschema@.pg_qualstats() q
-      JOIN pg_catalog.pg_database d ON q.dbid = d.oid
-      LEFT JOIN pg_catalog.pg_operator op ON op.oid = q.opno
-      LEFT JOIN pg_catalog.pg_amop amop ON amop.amopopr = op.oid
-      LEFT JOIN pg_catalog.pg_am am ON am.oid = amop.amopmethod
-      WHERE d.datname = current_database()
-       AND eval_type = 'f'
-       AND coalesce(lrelid, rrelid) != 0
-       AND amname IS NULL
-    )
-    SELECT pg_catalog.json_build_object(
-            'qual', @extschema@.pg_qualstats_deparse_qual(qual),
-            -- be careful to generate an empty array if no queryid availiable
-            'queryids',
-            coalesce(pg_catalog.array_agg(DISTINCT queryid)
-                FILTER (WHERE queryid IS NOT NULL), '{}')
-        ) AS obj,
-        array_agg(qualnodeid) AS qualnodeids
-    FROM src
-    GROUP BY qual
-    LOOP
-        v_unoptimised := array_append(v_unoptimised, rec.obj);
-    END LOOP;
-
-    -- The index suggestion is done in multiple iteration, by scoring for each
-    -- relation containing interesting quals a path of possibly AND-ed quals
-    -- that contains other possibly AND-ed quals.  Only the higher score path
-    -- will be used to create an index, so we can then compute another set of
-    -- paths ignoring the quals that are now optimized with an index.
+    -- We assume hash might not win over btree
+    forbidden_am := array_append(forbidden_am, 'hash');
+ 
       FOR rec IN
         -- first, find quals that seems worth to optimize along with the
         -- possible access methods, discarding any qualnode that are marked as
@@ -1149,15 +1133,14 @@ BEGIN
         WITH pgqs AS (
           SELECT dbid, amname, qualid, qualnodeid,
             (coalesce(lrelid, rrelid), coalesce(lattnum, rattnum),
-            opno, eval_type)::@extschema@.qual AS qual, queryid,
+            opno, eval_type)::qual AS qual, queryid,
             round(avg(execution_count)) AS execution_count,
             sum(occurences) AS occurences,
-            round(sum(nbfiltered)::numeric / sum(occurences)) AS avg_filter,
             CASE WHEN sum(execution_count) = 0
               THEN 0
               ELSE round(sum(nbfiltered::numeric) / sum(execution_count) * 100)
             END AS avg_selectivity
-          FROM @extschema@.pg_qualstats() q
+          FROM pg_qualstats() q
           JOIN pg_catalog.pg_database d ON q.dbid = d.oid
           JOIN pg_catalog.pg_operator op ON op.oid = q.opno
           JOIN pg_catalog.pg_amop amop ON amop.amopopr = op.oid
@@ -1175,10 +1158,8 @@ BEGIN
             count(*) AS weight,
             (array_agg(qualnodeid),
              array_agg(queryid)
-            )::@extschema@.adv_quals AS quals
+            )::adv_quals AS quals
           FROM pgqs
-          WHERE avg_filter >= min_filter
-          AND avg_selectivity >= min_selectivity
           GROUP BY (qual).relid, amname, parent
         ),
         -- for each possibly AND-ed qual, build the list of included qualnodeid
@@ -1242,7 +1223,21 @@ BEGIN
             included, path_weight
         FROM final WHERE amname='btree'
       LOOP
-        v_nb_processed := v_nb_processed + 1;
+
+	-- generate index advise for last table if the relid has changed
+	IF rec.relid != prev_relid THEN
+		SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries, v_relqueryfreq, v_relupdate_array, v_relupdate_freq_array) INTO v_relddl;
+		v_relfinalindex = pg_catalog.array_cat(v_relfinalindex, v_relddl);
+
+		prev_relid := rec.relid;
+		v_relddl = '{}';
+		v_relqueries = '{}';
+		v_relqueryfreq = '{}';
+		v_relupdate_array = '{}';
+		v_relupdate_freq_array = '{}';
+		v_relddlcount := 0;
+		v_relquerycount := 0;
+	END IF;
 
         v_ddl := '';
         v_quals_todo := '{}';
@@ -1267,38 +1262,60 @@ BEGIN
 
         -- and append qual's own columns
         v_quals_todo := v_quals_todo || rec.quals;
+	v_relupdate := 0;
+	v_relupdate_freq := 0;
+	v_numquals := 0;
+	v_attnum_done = '{}';
+	v_queryid_done = '{}';
+	v_quals_done = '{}';
 
-        -- generate the index DDL
+
+	-- compute the number of updated rows for the column involved in this set
+	-- do not cound duplicate update if columns are updated as part of same query by keeping track of v_queryid_array
+	FOREACH v_qualnodeid IN ARRAY v_quals_todo LOOP
+            SELECT coalesce(q.lattnum, q.rattnum) INTO v_attnum, v_queryid FROM @extschema@.pg_qualstats() q WHERE q.qualnodeid = v_qualnodeid;
+	    CONTINUE WHEN v_quals_done @> ARRAY[v_qualnodeid];
+	    CONTINUE WHEN v_attnum_done @> ARRAY[v_attnum];
+	    SELECT sum(ovh.total_updated), sum(ovh.frequency), array_agg(queryid) INTO v_colupdate, v_colupdate_freq, v_queryid_array
+			FROM pg_qualstats_overhead() ovh WHERE ovh.relid = rec.relid AND ovh.attnum = v_attnum AND  NOT (ovh.queryid = ANY (v_queryid_done));
+
+	    IF v_colupdate IS NOT NULL THEN
+	  	v_relupdate := v_relupdate + v_colupdate;
+		v_relupdate_freq := v_relupdate_freq + v_colupdate_freq;
+	    END IF;
+	    v_attnum_done := v_attnum_done || v_attnum;
+	    v_queryid_done := v_queryid_done || v_queryid_array;
+	    v_quals_done :=  v_quals_done || v_qualnodeid;
+	    v_queryid_array = '{}';
+	    v_numquals := v_numquals + 1;
+	END LOOP;
+
+
+	-- generate qualnodeid permutations
+	IF v_numquals > 1 THEN
+		SELECT * INTO v_quals_todo FROM pg_qualstats_qualnodeid_combination(v_quals_done);
+	ELSE
+		v_quals_todo := v_quals_done;
+	END IF;
+
+        -- generate the index DDL for each permutation
+	v_counter := 0;
         FOREACH v_qualnodeid IN ARRAY v_quals_todo LOOP
-          -- skip quals already present in the index
-          CONTINUE WHEN v_quals_done @> ARRAY[v_qualnodeid];
-
-          -- skip other quals for the same column
-          v_col := @extschema@.pg_qualstats_get_idx_col(v_qualnodeid, false);
-          CONTINUE WHEN v_quals_col_done @> ARRAY[v_col];
-
-          -- mark this qual and col as present in this index
-          v_quals_done := v_quals_done || v_qualnodeid;
-          v_quals_col_done := v_quals_col_done || v_col;
-
-          -- if underlying table has been dropped, stop here
-          CONTINUE WHEN coalesce(v_col, '') = '';
-
-          -- append the column to the index
-          IF v_ddl != '' THEN v_ddl := v_ddl || ', '; END IF;
-          v_ddl := v_ddl || @extschema@.pg_qualstats_get_idx_col(v_qualnodeid, true);
-
-	  -- SELECT sum(ovh.total_updated) INTO update_count FROM pg_qualstats_overhead() ovh WHERE ovh.relid = rec.relid AND ovh.attnum = 
+	   v_quals_this_index = v_quals_this_index || v_qualnodeid;
+	   v_counter := v_counter + 1;
+	   IF v_counter = v_numquals THEN
+		SELECT * INTO v_ddl FROM pg_qualstats_get_index_ddl(v_quals_this_index, rec.amname);
+		RAISE NOTICE 'DDL %', v_ddl;
+		CONTINUE WHEN coalesce(v_ddl, '') = '';
+	   	v_relddl[v_relddlcount] := v_ddl;
+	   	v_relupdate_array[v_relddlcount] := v_relupdate;
+		v_relupdate_freq_array[v_relddlcount] := v_relupdate_freq;
+	   	v_relddlcount := v_relddlcount + 1;
+		v_quals_this_index = '{}';
+		v_counter := 0;
+	   END IF;
         END LOOP;
 
-        -- if underlying table has been dropped, skip this (broken) index
-        CONTINUE WHEN coalesce(v_ddl, '') = '';
-
-        -- generate the full CREATE INDEX ddl
-        v_ddl = pg_catalog.format('CREATE INDEX ON %s USING %I (%s)',
-          @extschema@.pg_qualstats_get_qualnode_rel(v_qualnodeid), rec.amname, v_ddl);
-	
-	RAISE NOTICE 'INDEX: %', v_ddl;
         -- get the underlyings queryid(s)
         DECLARE
             v_queryid text;
@@ -1326,17 +1343,21 @@ BEGIN
             v_queryids = '{}';
         END IF;
 
-        -- and finally append the index to the list of generated indexes
-        v_indexes := pg_catalog.array_append(v_indexes,
-            pg_catalog.json_build_object(
-                'ddl', v_ddl,
-                'queryids', v_queryids
-            )
-        );
+	-- fetch the query using queryid
+	FOREACH v_queryid IN ARRAY v_queryids
+	LOOP
+		SELECT query, frequency INTO v_query, v_freq FROM pg_qualstats_example_queries() where queryid = v_queryid;
+		v_relqueries[v_relquerycount] := 'EXPLAIN ' || v_query;
+		v_relqueryfreq[v_relquerycount] := v_freq;
+		v_relquerycount := v_relquerycount + 1;
+	END LOOP;
       END LOOP;
 
-    RETURN pg_catalog.json_build_object(
-        'indexes', v_indexes,
-        'unoptimised', v_unoptimised);
+    -- generate index advise for last table
+    SELECT pg_qualstats_generate_advise(v_relddl, v_relqueries, v_relqueryfreq, v_relupdate_array, v_relupdate_freq_array) INTO v_relddl;
+    v_relfinalindex = pg_catalog.array_cat(v_relfinalindex, v_relddl);
+
+   RETURN v_relfinalindex;
 END;
-$_$ LANGUAGE plpgsql;       /* end of pg_qualstats_index_advisor */
+$_$ LANGUAGE plpgsql;
+

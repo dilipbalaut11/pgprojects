@@ -2774,7 +2774,6 @@ pg_qualstats_create_hypoindex(const char *index)
 	Oid				idxid;
 	StringInfoData	hypoindex;
 
-	return;
 	initStringInfo(&hypoindex);
 	appendStringInfoString(&hypoindex, "SELECT indexrelid FROM hypopg_create_index('");
 	appendStringInfoString(&hypoindex, index);
@@ -2804,7 +2803,6 @@ pg_qualstats_drop_hypoindex(Oid idxid)
 	bool			res;
 	StringInfoData	hypoindex;
 
-	return;
 	initStringInfo(&hypoindex);
 	appendStringInfo(&hypoindex, "SELECT hypopg_drop_index(%d)", idxid);
 
@@ -2853,8 +2851,6 @@ pg_qualstats_get_cost(QueryInfo *queryinfos, int nqueries)
 {
 	int		i;
 	float	cost;
-
-	return 100;
 
 	pgqs_cost_track_enable = true;
 

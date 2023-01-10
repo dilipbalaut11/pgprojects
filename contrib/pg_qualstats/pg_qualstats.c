@@ -3945,14 +3945,18 @@ pg_qualstats_compare_comb(IndexCandidate *candidates, int n,
 }
 
 static char **
-pg_qualstats_index_advise_rel(IndexCandidate *candidates, int ncandidates)
+pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
+							  int ncandidates, int *nindexes,
+							  MemoryContext per_query_ctx)
 {
-	char	  **index_array;
+	char	  **index_array = NULL;
 	QueryInfo  *queryinfos;
 	int			nqueries;
 	int			i;
+	int			prev_indexes = *nindexes;
 	IndexCandidate *finalcand;
 	pgqsIndexCombination	*path;
+	MemoryContext oldcontext;
 
 	elog(NOTICE, "Candidate Relation %d", candidates[0].relid);
 
@@ -3961,26 +3965,31 @@ pg_qualstats_index_advise_rel(IndexCandidate *candidates, int ncandidates)
 	/* genrate all one and two length index combinations. */
 	finalcand = pg_qualstats_get_index_combination(candidates, &ncandidates);
 	pg_qualstats_get_updates(finalcand, ncandidates);
+
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
 	pg_qualstats_generate_index_queries(finalcand, ncandidates);
+	MemoryContextSwitchTo(oldcontext);
+
 	print_candidates(finalcand, ncandidates);
 	path = pg_qualstats_compare_comb(finalcand, ncandidates,
 									 queryinfos, nqueries);
 
-#if 0
+	if (path->nindices == 0)
+		return prevarray;
+
+	prev_indexes = *nindexes;
+	(*nindexes) += path->nindices;
+
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+	if (prev_indexes == 0)
+		index_array = (char **) palloc(path->nindices * sizeof(char *));
+	else
+		index_array = (char ** ) repalloc(prevarray, (*nindexes) * sizeof(char *));
+	MemoryContextSwitchTo(oldcontext);
+
 	/* construct and return array. */
 	for (i = 0; i < path->nindices; i++)
-	{
-		key_datums[i] = CStringGetTextDatum(index_array[path->indices[i]]);
-	}
-
-	result = construct_array_builtin(key_datums, path->nindices, TEXTOID);
-
-	PG_RETURN_ARRAYTYPE_P(result);
-#endif
-
-	/* construct and return array. */
-	for (i = 0; i < path->nindices; i++)
-		elog(NOTICE, "FinalIndex %d: %s", i, finalcand[path->indices[i]].indexstmt);
+		index_array[prev_indexes + i] = finalcand[path->indices[i]].indexstmt;
 
 	return index_array;
 }
@@ -3992,12 +4001,20 @@ pg_qualstats_test_index_advise(PG_FUNCTION_ARGS)
 	int			i;
 	int			ncandidates = 0;
 	int			nrelcand = 0;
+	int			nindexes = 0;
 	int			idxcand = 0;
 	Oid			prevrelid = InvalidOid;
 	char	  **index_array;
+	Datum	   *key_datums;
 	TupleDesc	tupdesc;
+	ArrayType  *result;
 	IndexCandidate *candidates;
-	
+	ReturnSetInfo  *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	MemoryContext 	per_query_ctx;
+	MemoryContext 	oldcontext;
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+
 	if ((ret = SPI_connect()) < 0)
 		elog(ERROR, "pg_qualstat: SPI_connect returned %d", ret);
 
@@ -4050,8 +4067,10 @@ pg_qualstats_test_index_advise(PG_FUNCTION_ARGS)
 	{
 		if (OidIsValid(prevrelid) && prevrelid != candidates[i].relid)
 		{
-			index_array = pg_qualstats_index_advise_rel(&candidates[idxcand],
-														nrelcand);
+			index_array = pg_qualstats_index_advise_rel(index_array,
+														&candidates[idxcand],
+														nrelcand, &nindexes,
+														per_query_ctx);
 			nrelcand = 0;
 			idxcand = i;
 		}
@@ -4059,9 +4078,22 @@ pg_qualstats_test_index_advise(PG_FUNCTION_ARGS)
 		nrelcand++;
 	}
 
-	index_array = pg_qualstats_index_advise_rel(&candidates[idxcand],
-												nrelcand);
+	index_array = pg_qualstats_index_advise_rel(index_array,
+												&candidates[idxcand],
+												nrelcand, &nindexes,
+												per_query_ctx);
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+	key_datums = (Datum *) palloc(nindexes * sizeof(Datum));
+	MemoryContextSwitchTo(oldcontext);
+
+
 	SPI_finish();
 
-	return (Datum) 0;
+	/* construct and return array. */
+	for (i = 0; i < nindexes; i++)
+		key_datums[i] = CStringGetTextDatum(index_array[i]);
+
+	result = construct_array_builtin(key_datums, nindexes, TEXTOID);
+
+	PG_RETURN_ARRAYTYPE_P(result);
 }

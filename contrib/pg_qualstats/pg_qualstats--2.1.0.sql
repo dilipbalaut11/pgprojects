@@ -45,7 +45,7 @@ AS 'MODULE_PATHNAME'
 LANGUAGE C;
 
 CREATE FUNCTION pg_qualstats_test_index_advise()
-RETURNS void
+RETURNS text[]
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
 

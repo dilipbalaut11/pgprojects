@@ -129,7 +129,7 @@ typedef struct pgqsIndexCombination
 	double	cost;
 	int		nindices;
 	double	update_cost;
-	int		indices[100];
+	int		indices[FLEXIBLE_ARRAY_MEMBER];
 } pgqsIndexCombination;
 
 /*
@@ -3895,8 +3895,9 @@ pg_qualstats_get_index_combination(IndexCandidate *candidates,
  * cost.
  */
 static pgqsIndexCombination *
-pg_qualstats_compare_comb(IndexCandidate *candidates, int n,
-					  	  QueryInfo *queryinfos, int nqueries)
+pg_qualstats_compare_comb(IndexCandidate *candidates, int cur_cand,
+						  QueryInfo *queryinfos, int nqueries,
+						  int selected_cand, int max_cand)
 {
 	Oid						idxid;
 	uint64					size;
@@ -3904,11 +3905,11 @@ pg_qualstats_compare_comb(IndexCandidate *candidates, int n,
 	pgqsIndexCombination   *path1;
 	pgqsIndexCombination   *path2;
 
-	if (n == 0)
+	if (cur_cand == max_cand - 1 || selected_cand == max_cand)
 	{
 		path1 = MemoryContextAllocZero(TopMemoryContext,
 									   sizeof(pgqsIndexCombination) +
-									   n * sizeof(int));
+									   max_cand * sizeof(int));
 		path1->cost = pg_qualstats_get_cost(queryinfos, nqueries);
 		path1->nindices = 0;
 
@@ -3916,20 +3917,22 @@ pg_qualstats_compare_comb(IndexCandidate *candidates, int n,
 	}
 
 	/* compare cost with and without this index */
-	idxid = pg_qualstats_create_hypoindex(candidates[n - 1].indexstmt);
+	idxid = pg_qualstats_create_hypoindex(candidates[cur_cand].indexstmt);
 	size = pg_qualstats_hypoindex_size(idxid);
 
 	/* compute total cost including this index */
-	path1 = pg_qualstats_compare_comb(candidates, n - 1, queryinfos, nqueries);
-	path1->indices[path1->nindices++] = n - 1;
+	path1 = pg_qualstats_compare_comb(candidates, cur_cand + 1, queryinfos,
+									  nqueries, selected_cand + 1, max_cand);
+	path1->indices[path1->nindices++] = cur_cand;
 
-	update_cost = pg_qualstats_get_update_cost(size, candidates[n - 1].nupdates);
+	update_cost = pg_qualstats_get_update_cost(size, candidates[cur_cand].nupdates);
 	path1->update_cost += update_cost;
 
 	pg_qualstats_drop_hypoindex(idxid);
 
 	/* compute total cost excluding this index */
-	path2 = pg_qualstats_compare_comb(candidates, n - 1, queryinfos, nqueries);
+	path2 = pg_qualstats_compare_comb(candidates, cur_cand + 1, queryinfos,
+									  nqueries, selected_cand, max_cand);
 
 	/* add the update overhead and compare the cost. */
 	if (path1->cost + path1->update_cost < path2->cost + path2->update_cost)
@@ -3971,8 +3974,8 @@ pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 	MemoryContextSwitchTo(oldcontext);
 
 	print_candidates(finalcand, ncandidates);
-	path = pg_qualstats_compare_comb(finalcand, ncandidates,
-									 queryinfos, nqueries);
+	path = pg_qualstats_compare_comb(finalcand, 0, queryinfos, nqueries,
+									 0, Min(ncandidates, 13));
 
 	if (path->nindices == 0)
 		return prevarray;

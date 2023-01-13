@@ -3510,6 +3510,15 @@ typedef struct IndexCandidate
 	bool	isvalid;
 } IndexCandidate;
 
+typedef struct IndexCombContext
+{
+	IndexCandidate   *candidates;
+	QueryInfo		 *queryinfos;
+	int		nqueries;
+	int		ncandidates;
+	int		maxcand;
+} IndexCombContext;
+
 static void
 print_candidates(IndexCandidate *candidates, int ncandidates)
 {
@@ -3889,50 +3898,51 @@ pg_qualstats_get_index_combination(IndexCandidate *candidates,
 	return finalcand;
 }
 
+int count = 0;
+
 /*
  * Implement a version of knapsack algorithm to try out all the index
  * combination with optimizer and find the combination which produce least
  * cost.
  */
 static pgqsIndexCombination *
-pg_qualstats_compare_comb(IndexCandidate *candidates, int cur_cand,
-						  QueryInfo *queryinfos, int nqueries,
-						  int selected_cand, int max_cand)
+pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
+						  int selected_cand)
 {
 	Oid						idxid;
 	uint64					size;
 	double					update_cost;
+	int						max_cand = context->maxcand;
 	pgqsIndexCombination   *path1;
 	pgqsIndexCombination   *path2;
+	IndexCandidate		   *cand = context->candidates;
 
+	count++;
 	if (cur_cand == max_cand - 1 || selected_cand == max_cand)
 	{
-		path1 = MemoryContextAllocZero(TopMemoryContext,
-									   sizeof(pgqsIndexCombination) +
-									   max_cand * sizeof(int));
-		path1->cost = pg_qualstats_get_cost(queryinfos, nqueries);
+		path1 = palloc0(sizeof(pgqsIndexCombination) + max_cand * sizeof(int));
+		path1->cost = pg_qualstats_get_cost(context->queryinfos,
+											context->nqueries);
 		path1->nindices = 0;
 
 		return path1;
 	}
 
 	/* compare cost with and without this index */
-	idxid = pg_qualstats_create_hypoindex(candidates[cur_cand].indexstmt);
+	idxid = pg_qualstats_create_hypoindex(cand[cur_cand].indexstmt);
 	size = pg_qualstats_hypoindex_size(idxid);
 
 	/* compute total cost including this index */
-	path1 = pg_qualstats_compare_comb(candidates, cur_cand + 1, queryinfos,
-									  nqueries, selected_cand + 1, max_cand);
+	path1 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand + 1);
 	path1->indices[path1->nindices++] = cur_cand;
 
-	update_cost = pg_qualstats_get_update_cost(size, candidates[cur_cand].nupdates);
+	update_cost = pg_qualstats_get_update_cost(size, cand[cur_cand].nupdates);
 	path1->update_cost += update_cost;
 
 	pg_qualstats_drop_hypoindex(idxid);
 
 	/* compute total cost excluding this index */
-	path2 = pg_qualstats_compare_comb(candidates, cur_cand + 1, queryinfos,
-									  nqueries, selected_cand, max_cand);
+	path2 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand);
 
 	/* add the update overhead and compare the cost. */
 	if (path1->cost + path1->update_cost < path2->cost + path2->update_cost)
@@ -3958,7 +3968,8 @@ pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 	int			i;
 	int			prev_indexes = *nindexes;
 	IndexCandidate *finalcand;
-	pgqsIndexCombination	*path;
+	pgqsIndexCombination   *path;
+	IndexCombContext		context;
 	MemoryContext oldcontext;
 
 	elog(NOTICE, "Candidate Relation %d", candidates[0].relid);
@@ -3972,13 +3983,20 @@ pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
 	pg_qualstats_generate_index_queries(finalcand, ncandidates);
 	MemoryContextSwitchTo(oldcontext);
-
+	count = 0;
 	print_candidates(finalcand, ncandidates);
-	path = pg_qualstats_compare_comb(finalcand, 0, queryinfos, nqueries,
-									 0, Min(ncandidates, 13));
+
+	context.candidates = finalcand;
+	context.ncandidates = ncandidates;
+	context.queryinfos = queryinfos;
+	context.nqueries = nqueries;
+	context.maxcand = Min(ncandidates, 15);
+
+	path = pg_qualstats_compare_comb(&context, 0, 0);
 
 	if (path->nindices == 0)
 		return prevarray;
+	elog(NOTICE, "ncandidates=%d count=%d", ncandidates, count);
 
 	prev_indexes = *nindexes;
 	(*nindexes) += path->nindices;

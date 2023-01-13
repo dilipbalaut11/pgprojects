@@ -2846,11 +2846,11 @@ typedef struct QueryInfo
 /*
  * Plan all give queries to compute the total cost.
  */
-static float
+static double
 pg_qualstats_get_cost(QueryInfo *queryinfos, int nqueries)
 {
 	int		i;
-	float	cost;
+	double	cost = 0.0;
 
 	pgqs_cost_track_enable = true;
 

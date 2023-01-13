@@ -2894,13 +2894,13 @@ pg_qualstats_hypoindex_size(Oid idxid)
 }
 
 static double
-pg_qualstats_get_update_cost(uint64 index_size, uint64 tuple_updated)
+pg_qualstats_get_index_overhead(uint64 index_size, uint64 tuple_updated)
 {
 	double		T;
 	double		index_pages;
 	double		update_io_cost;
 	double		update_cpu_cost;
-	double		update_total_cost;
+	double		total_cost;
 
 
 	/* total index pages. */
@@ -2914,9 +2914,12 @@ pg_qualstats_get_update_cost(uint64 index_size, uint64 tuple_updated)
 	update_io_cost = index_pages * random_page_cost;
 	update_cpu_cost = tuple_updated * cpu_tuple_cost;
 
-	update_total_cost = update_io_cost + update_cpu_cost;
+	total_cost = update_io_cost + update_cpu_cost;
 
-	return update_total_cost;
+	/* TODO: per index overhead. */
+	total_cost += 100;
+
+	return total_cost;
 }
 
 #if 0
@@ -3494,7 +3497,7 @@ char *query =
 "\n          FROM pgqs"
 "\n          GROUP BY (qual).relid, amname, parent"
 "\n        )"
-"\nSELECT * FROM filtered where amname !='hash' ORDER BY relid, amname, cardinality(attnumlist);";
+"\nSELECT * FROM filtered where amname ='btree' ORDER BY relid, amname, cardinality(attnumlist);";
 
 typedef struct IndexCandidate
 {
@@ -3514,6 +3517,7 @@ typedef struct IndexCombContext
 {
 	IndexCandidate   *candidates;
 	QueryInfo		 *queryinfos;
+	Bitmapset		 *memberattr;
 	int		nqueries;
 	int		ncandidates;
 	int		maxcand;
@@ -3898,7 +3902,46 @@ pg_qualstats_get_index_combination(IndexCandidate *candidates,
 	return finalcand;
 }
 
-int count = 0;
+static void
+pg_qualstats_bms_add_candattr(IndexCombContext *context, IndexCandidate *cand)
+{
+	int		i;
+
+	for (i = 0; i < cand->nattrs; i++)
+	{
+		context->memberattr = bms_add_member(context->memberattr,
+											 cand->attnum[i]);
+	}
+}
+
+static void
+pg_qualstats_bms_remove_candattr(IndexCombContext *context,
+								 IndexCandidate *cand)
+{
+	int		i;
+
+	for (i = 0; i < cand->nattrs; i++)	
+	{
+		context->memberattr = bms_del_member(context->memberattr,
+											 cand->attnum[i]);
+	}
+}
+
+static bool
+pg_qualstats_cand_exists_in_bms(Bitmapset *bms, IndexCandidate *cand)
+{
+	int		i;
+
+	if (bms == NULL)
+		return false;
+
+	if (0 == bms_member_index(bms, cand->attnum[0]))
+		return true;
+	return false;
+}
+
+int count1 = 0;
+int count2 = 0;
 
 /*
  * Implement a version of knapsack algorithm to try out all the index
@@ -3917,8 +3960,7 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 	pgqsIndexCombination   *path2;
 	IndexCandidate		   *cand = context->candidates;
 
-	count++;
-	if (cur_cand == max_cand - 1 || selected_cand == max_cand)
+	if (cur_cand == max_cand || selected_cand == max_cand)
 	{
 		path1 = palloc0(sizeof(pgqsIndexCombination) + max_cand * sizeof(int));
 		path1->cost = pg_qualstats_get_cost(context->queryinfos,
@@ -3928,6 +3970,17 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 		return path1;
 	}
 
+	/* compute total cost excluding this index */
+	path2 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand);
+	if (pg_qualstats_cand_exists_in_bms(context->memberattr, &cand[cur_cand]))
+	{
+		count1++;
+		return path2;
+	}
+	count2++;
+
+	pg_qualstats_bms_add_candattr(context, &cand[cur_cand]);
+
 	/* compare cost with and without this index */
 	idxid = pg_qualstats_create_hypoindex(cand[cur_cand].indexstmt);
 	size = pg_qualstats_hypoindex_size(idxid);
@@ -3936,13 +3989,11 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 	path1 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand + 1);
 	path1->indices[path1->nindices++] = cur_cand;
 
-	update_cost = pg_qualstats_get_update_cost(size, cand[cur_cand].nupdates);
+	update_cost = pg_qualstats_get_index_overhead(size, cand[cur_cand].nupdates);
 	path1->update_cost += update_cost;
 
 	pg_qualstats_drop_hypoindex(idxid);
-
-	/* compute total cost excluding this index */
-	path2 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand);
+	pg_qualstats_bms_remove_candattr(context, &cand[cur_cand]);
 
 	/* add the update overhead and compare the cost. */
 	if (path1->cost + path1->update_cost < path2->cost + path2->update_cost)
@@ -3983,20 +4034,22 @@ pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
 	pg_qualstats_generate_index_queries(finalcand, ncandidates);
 	MemoryContextSwitchTo(oldcontext);
-	count = 0;
+	count1 = 0;
+	count2 = 0;
 	print_candidates(finalcand, ncandidates);
 
 	context.candidates = finalcand;
 	context.ncandidates = ncandidates;
 	context.queryinfos = queryinfos;
 	context.nqueries = nqueries;
-	context.maxcand = Min(ncandidates, 15);
+	context.maxcand = ncandidates;//Min(ncandidates, 15);
+	context.memberattr = NULL;
 
 	path = pg_qualstats_compare_comb(&context, 0, 0);
 
 	if (path->nindices == 0)
 		return prevarray;
-	elog(NOTICE, "ncandidates=%d count=%d", ncandidates, count);
+	elog(NOTICE, "ncandidates=%d count1=%d count2=%d", ncandidates, count1, count2);
 
 	prev_indexes = *nindexes;
 	(*nindexes) += path->nindices;

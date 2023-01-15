@@ -3998,8 +3998,11 @@ pg_qualstats_cand_exists_in_bms(Bitmapset *bms, IndexCandidate *cand)
 	if (bms == NULL)
 		return false;
 
-	if (0 == bms_member_index(bms, cand->attnum[0]))
-		return true;
+	for (i = 0; i < cand->nattrs; i++)
+	{
+		if (bms_is_member(cand->attnum[i], bms))
+			return true;
+	}
 	return false;
 }
 

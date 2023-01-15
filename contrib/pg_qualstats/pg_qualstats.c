@@ -2894,14 +2894,14 @@ pg_qualstats_hypoindex_size(Oid idxid)
 }
 
 static double
-pg_qualstats_get_index_overhead(uint64 index_size, uint64 tuple_updated)
+pg_qualstats_get_index_overhead(uint64 index_size, uint64 navgupdate,
+								int nfrequency)
 {
 	double		T;
 	double		index_pages;
 	double		update_io_cost;
 	double		update_cpu_cost;
 	double		total_cost;
-
 
 	/* total index pages. */
 	T  = index_size / BLCKSZ;
@@ -2910,14 +2910,14 @@ pg_qualstats_get_index_overhead(uint64 index_size, uint64 tuple_updated)
 	 * We are commputing the page acccess cost and tuple cost based on total
 	 * accumulated tuple count so we don't need to use update query frequency.
 	 */
-	index_pages = (2 * T * tuple_updated) / (2 * T + tuple_updated);
-	update_io_cost = index_pages * random_page_cost;
-	update_cpu_cost = tuple_updated * cpu_tuple_cost;
+	index_pages = (2 * T * navgupdate) / (2 * T + navgupdate);
+	update_io_cost = (index_pages * nfrequency) * random_page_cost;
+	update_cpu_cost = (navgupdate * nfrequency) * cpu_tuple_cost;
 
 	total_cost = update_io_cost + update_cpu_cost;
 
-	/* TODO: per index overhead. */
-	total_cost += 100;
+	/* per index overhead based on index size */
+	total_cost += (index_pages * 0.1);
 
 	return total_cost;
 }
@@ -3497,7 +3497,7 @@ char *query =
 "\n          FROM pgqs"
 "\n          GROUP BY (qual).relid, amname, parent"
 "\n        )"
-"\nSELECT * FROM filtered where amname ='btree' ORDER BY relid, amname, cardinality(attnumlist);";
+"\nSELECT * FROM filtered where amname !='hash' ORDER BY relid, amname, cardinality(attnumlist);";
 
 typedef struct IndexCandidate
 {
@@ -3509,6 +3509,7 @@ typedef struct IndexCandidate
 	int		nqueryids;
 	int64  *queryids;
 	int64	nupdates;
+	int		nupdatefreq;
 	char   *indexstmt;
 	bool	isvalid;
 } IndexCandidate;
@@ -3530,7 +3531,8 @@ print_candidates(IndexCandidate *candidates, int ncandidates)
 
 	for (i = 0; i < ncandidates; i++)
 	{
-		elog(NOTICE, "Index: %s: update: %d", candidates[i].indexstmt, candidates[i].nupdates);
+		elog(NOTICE, "Index: %s: update: %d freq: %d", candidates[i].indexstmt,
+			 candidates[i].nupdates,candidates[i].nupdatefreq);
 	}
 }
 
@@ -3738,7 +3740,8 @@ pg_qualstats_idx_updates(Oid dbid, Oid relid, int *attrs, int nattr)
 		}
 		qrueryid_done[nqueryiddone++] = entry->key.queryid;
 
-		nupdates += entry->updated_rows;
+		/* average update per query. */
+		nupdates += (entry->updated_rows / entry->frequency);
 	}
 
 	PGQS_LWL_RELEASE(pgqs->querylock);
@@ -3753,15 +3756,75 @@ pg_qualstats_idx_updates(Oid dbid, Oid relid, int *attrs, int nattr)
 static void
 pg_qualstats_get_updates(IndexCandidate *candidates, int ncandidates)
 {
+	HASH_SEQ_STATUS 		hash_seq;
+	int64	   *qrueryid_done;
+	int64		nupdates = 0;
+	int			nupdatefreq = 0;
+	int			nqueryiddone = 0;
+	int			maxqueryids = 50;
 	int			i;
+
+	qrueryid_done = palloc(sizeof(int64) * maxqueryids);
+
+	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
 
 	for (i = 0; i < ncandidates; i++)
 	{
-		IndexCandidate *cand = &candidates[i];
+		pgqsUpdateHashEntry	   *entry;
+		IndexCandidate		   *cand = &candidates[i];
 
-		cand->nupdates = pg_qualstats_idx_updates(MyDatabaseId, cand->relid,
-												  cand->attnum,cand->nattrs);
+		hash_seq_init(&hash_seq, pgqs_update_hash);
+
+		while ((entry = hash_seq_search(&hash_seq)) != NULL)
+		{
+			int			i;
+
+			if (entry->key.dbid != MyDatabaseId)
+				continue;
+			if (entry->key.relid != cand->relid)
+				continue;
+			for (i = 0; i < cand->nattrs; i++)
+			{
+				if (entry->key.attnum == cand->attnum[i])
+					break;
+			}
+
+			if (i == cand->nattrs)
+				continue;
+
+			for (i = 0; i < nqueryiddone; i++)
+			{
+				if (entry->key.queryid == qrueryid_done[i])
+					break;
+			}
+			if (i < nqueryiddone)
+				continue;
+
+			if (nqueryiddone == maxqueryids)
+			{
+				maxqueryids *= 2;
+				qrueryid_done = repalloc(qrueryid_done, sizeof(int64) * maxqueryids);
+			}
+			qrueryid_done[nqueryiddone++] = entry->key.queryid;
+
+			/* average update per query. */
+			nupdates += entry->updated_rows;
+			nupdatefreq += entry->frequency;
+		}
+
+		if (nupdates > 0)
+		{
+			cand->nupdates = nupdates / nupdatefreq;
+			cand->nupdatefreq = nupdatefreq;
+		}
+
+		nupdates = 0;
+		nupdatefreq = 0;
+		nqueryiddone = 0;
 	}
+
+	PGQS_LWL_RELEASE(pgqs->querylock);
+
 }
 
 static void
@@ -3989,7 +4052,9 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 	path1 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand + 1);
 	path1->indices[path1->nindices++] = cur_cand;
 
-	update_cost = pg_qualstats_get_index_overhead(size, cand[cur_cand].nupdates);
+	update_cost = pg_qualstats_get_index_overhead(size,
+												  cand[cur_cand].nupdates,
+												  cand[cur_cand].nupdatefreq);
 	path1->update_cost += update_cost;
 
 	pg_qualstats_drop_hypoindex(idxid);

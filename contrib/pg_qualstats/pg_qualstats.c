@@ -852,7 +852,7 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 				/* Make sure it wasn't added by another backend */
 				if (!excl_found)
 				{
-					if (nodeTag(queryDesc->plannedstmt->planTree) == T_ExplainStmt)
+					if (queryDesc->estate->es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY)
 						queryEntry->isExplain = true;
 					else
 						queryEntry->isExplain = false;

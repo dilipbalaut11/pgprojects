@@ -3497,7 +3497,7 @@ char *query =
 "\n          FROM pgqs"
 "\n          GROUP BY (qual).relid, amname, parent"
 "\n        )"
-"\nSELECT * FROM filtered where amname !='hash' ORDER BY relid, amname, cardinality(attnumlist);";
+"\nSELECT * FROM filtered where amname !='hash' ORDER BY relid, amname DESC, cardinality(attnumlist);";
 
 typedef struct IndexCandidate
 {
@@ -4006,8 +4006,7 @@ pg_qualstats_cand_exists_in_bms(Bitmapset *bms, IndexCandidate *cand)
 	return false;
 }
 
-int count1 = 0;
-int count2 = 0;
+int count = 0;
 
 /*
  * Implement a version of knapsack algorithm to try out all the index
@@ -4028,6 +4027,7 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 
 	if (cur_cand == max_cand || selected_cand == max_cand)
 	{
+		count++;
 		path1 = palloc0(sizeof(pgqsIndexCombination) + max_cand * sizeof(int));
 		path1->cost = pg_qualstats_get_cost(context->queryinfos,
 											context->nqueries);
@@ -4039,11 +4039,7 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 	/* compute total cost excluding this index */
 	path2 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand);
 	if (pg_qualstats_cand_exists_in_bms(context->memberattr, &cand[cur_cand]))
-	{
-		count1++;
 		return path2;
-	}
-	count2++;
 
 	pg_qualstats_bms_add_candattr(context, &cand[cur_cand]);
 
@@ -4102,8 +4098,7 @@ pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
 	pg_qualstats_generate_index_queries(finalcand, ncandidates);
 	MemoryContextSwitchTo(oldcontext);
-	count1 = 0;
-	count2 = 0;
+	count = 0;
 	print_candidates(finalcand, ncandidates);
 
 	context.candidates = finalcand;
@@ -4117,7 +4112,7 @@ pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 
 	if (path->nindices == 0)
 		return prevarray;
-	elog(NOTICE, "ncandidates=%d count1=%d count2=%d", ncandidates, count1, count2);
+	elog(NOTICE, "ncandidates=%d combination tested=%d", ncandidates, count);
 
 	prev_indexes = *nindexes;
 	(*nindexes) += path->nindices;

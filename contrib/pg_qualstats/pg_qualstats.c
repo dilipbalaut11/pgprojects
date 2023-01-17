@@ -3607,35 +3607,34 @@ pg_qulstat_is_queryid_exists(int64 *queryids, int nqueryids, int64 queryid)
 static char *
 pg_qualstats_get_query(int64 queryid, int *freq)
 {
-	char		*query = NULL;
-	HASH_SEQ_STATUS 		hash_seq;
 	pgqsQueryStringEntry   *entry;
+	pgqsQueryStringHashKey	queryKey;
+	char   *query = NULL;
+	bool	found;
+
+	queryKey.queryid = queryid;
 
 	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
-	hash_seq_init(&hash_seq, pgqs_query_examples_hash);
+	entry = hash_search_with_hash_value(pgqs_query_examples_hash, &queryKey,
+										queryid, HASH_FIND, &found);
+	if (!found)
+		return NULL;
 
-	while ((entry = hash_seq_search(&hash_seq)) != NULL)
+	if (entry->isExplain)
 	{
-		if (queryid == entry->key.queryid)
-		{
-			if (entry->isExplain)
-			{
-				query = palloc0(strlen(entry->querytext) + 1);
-				strcpy(query, entry->querytext);
-			}
-			else
-			{
-				int		explainlen = strlen("EXPLAIN ");
-
-				query = palloc0(explainlen + strlen(entry->querytext) + 1);
-				strcpy(query, "EXPLAIN ");
-				strcpy(query + explainlen, entry->querytext);
-			}
-			*freq = entry->frequency;
-			hash_seq_term(&hash_seq);
-			break;
-		}
+		query = palloc0(strlen(entry->querytext) + 1);
+		strcpy(query, entry->querytext);
 	}
+	else
+	{
+		int		explainlen = strlen("EXPLAIN ");
+
+		query = palloc0(explainlen + strlen(entry->querytext) + 1);
+		strcpy(query, "EXPLAIN ");
+		strcpy(query + explainlen, entry->querytext);
+	}
+
+	*freq = entry->frequency;
 
 	PGQS_LWL_RELEASE(pgqs->querylock);
 

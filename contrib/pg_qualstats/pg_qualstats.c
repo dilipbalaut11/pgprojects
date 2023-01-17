@@ -2847,7 +2847,7 @@ typedef struct QueryInfo
  * Plan all give queries to compute the total cost.
  */
 static double
-pg_qualstats_get_cost(QueryInfo *queryinfos, int nqueries)
+pg_qualstats_get_cost(QueryInfo *queryinfos, int nqueries, int *queryidxs)
 {
 	int		i;
 	double	cost = 0.0;
@@ -2860,8 +2860,10 @@ pg_qualstats_get_cost(QueryInfo *queryinfos, int nqueries)
 	 */
 	for (i = 0; i < nqueries; i++)
 	{
-		pg_qualstats_plan_query(queryinfos[i].query);
-		cost += (pgqs_plan_cost * queryinfos[i].frequency);
+		int		index = (queryidxs != NULL) ? queryidxs[i] : i;
+
+		pg_qualstats_plan_query(queryinfos[index].query);
+		cost += (pgqs_plan_cost * queryinfos[index].frequency);
 	}
 
 	pgqs_cost_track_enable = false;
@@ -3493,7 +3495,7 @@ char *query =
 "\n            count(*) AS weight,"
 "\n            array_agg(DISTINCT((qual).attnum) ORDER BY ((qual).attnum)) AS attnumlist,"
 "\n            array_agg(qualnodeid) AS qualidlist,"
-"\n            array_agg(queryid) AS queryidlist"
+"\n            array_agg(DISTINCT(queryid)) AS queryidlist"
 "\n          FROM pgqs"
 "\n          GROUP BY (qual).relid, amname, parent"
 "\n        )"
@@ -3509,6 +3511,7 @@ typedef struct IndexCandidate
 	int		nqueryids;
 	int64  *queryids;
 	int64	nupdates;
+	int	   *queryinfoidx;
 	int		nupdatefreq;
 	char   *indexstmt;
 	bool	isvalid;
@@ -3531,8 +3534,8 @@ print_candidates(IndexCandidate *candidates, int ncandidates)
 
 	for (i = 0; i < ncandidates; i++)
 	{
-		elog(NOTICE, "Index: %s: update: %d freq: %d", candidates[i].indexstmt,
-			 candidates[i].nupdates,candidates[i].nupdatefreq);
+		elog(NOTICE, "Index: %s: update: %d freq: %d valid:%d", candidates[i].indexstmt,
+			 candidates[i].nupdates,candidates[i].nupdatefreq, candidates[i].isvalid);
 	}
 }
 
@@ -3559,6 +3562,7 @@ pg_qualstats_is_subarray(int *a, int *b, int la, int lb)
 	return false;
 }
 
+#if 0
 /* 
  * Mark all candidate invalid which are fully contained by other element
  * of same amtype.
@@ -3579,7 +3583,7 @@ pg_qualstats_mark_duplicates(IndexCandidate *candidates, int ncandidates)
 			if (cand->amoid != candidates[j].amoid)
 				break;
 
-			/* if it is subarray then mark valid and stop. */
+			/* if it is subarray then mark invalid and stop. */
 			if (pg_qualstats_is_subarray(cand->attnum, candidates[j].attnum,
 										 cand->nattrs, candidates[j].nattrs))
 			{
@@ -3589,16 +3593,21 @@ pg_qualstats_mark_duplicates(IndexCandidate *candidates, int ncandidates)
 		}
 	}
 }
+#endif
 
 static bool
-pg_qulstat_is_queryid_exists(int64 *queryids, int nqueryids, int64 queryid)
+pg_qulstat_is_queryid_exists(int64 *queryids, int nqueryids, int64 queryid,
+							 int *idx)
 {
 	int			i;
 
 	for (i = 0; i < nqueryids ; i++)
 	{
 		if (queryids[i] == queryid)
+		{
+			*idx = i;
 			return true;
+		}
 	}
 
 	return false;
@@ -3658,17 +3667,27 @@ pg_qualstats_get_queries(IndexCandidate *candidates, int ncandidates,
 	{
 		IndexCandidate *cand = &candidates[i];
 
+		cand->queryinfoidx = palloc(cand->nqueryids * sizeof(int));
+
 		for (j = 0; j < cand->nqueryids ; j++)
 		{
-			if (pg_qulstat_is_queryid_exists(queryids, nids, cand->queryids[j]))
+			int index = -1;
+
+			if (pg_qulstat_is_queryid_exists(queryids, nids, cand->queryids[j],
+											 &index))
+			{
+				cand->queryinfoidx[j] = index;
 				continue;
+			}
 
 			if (nids >= maxids)
 			{
 				maxids *= 2;
 				queryids = repalloc(queryids, maxids * sizeof(int64));
 			}
-			queryids[nids++] = cand->queryids[j];
+			queryids[nids] = cand->queryids[j];
+			cand->queryinfoidx[j] = nids;
+			nids++;
 		}
 	}
 
@@ -3826,21 +3845,24 @@ pg_qualstats_get_updates(IndexCandidate *candidates, int ncandidates)
 
 }
 
-static void
+static bool
 pg_qualstats_generate_index_queries(IndexCandidate *candidates, int ncandidates)
 {
 	int		i;
 	int		j;
+	Relation	relation;
 	StringInfoData buf;
+
+	relation = RelationIdGetRelation(candidates[0].relid);
+	if (relation == NULL)
+		return false;
 
 	initStringInfo(&buf);
 
 	for (i = 0; i < ncandidates; i++)
 	{
 		IndexCandidate *cand = &candidates[i];
-		Relation	relation;
 
-		relation = RelationIdGetRelation(cand->relid);
 		appendStringInfo(&buf, "CREATE INDEX ON %s USING %s (",
 						 relation->rd_rel->relname.data,
 						 cand->amname);
@@ -3856,13 +3878,14 @@ pg_qualstats_generate_index_queries(IndexCandidate *candidates, int ncandidates)
 		cand->indexstmt = palloc(buf.len + 1);
 		strcpy(cand->indexstmt, buf.data);
 		resetStringInfo(&buf);
-		RelationClose(relation);
 	}
+	RelationClose(relation);
+	return true;
 }
 
 static bool
 pg_qualstats_is_exists(IndexCandidate *candidates, int ncandidates,
-					   IndexCandidate *newcand)
+					   IndexCandidate *newcand, int *match)
 {
 	int		i;
 	int		j;
@@ -3883,7 +3906,10 @@ pg_qualstats_is_exists(IndexCandidate *candidates, int ncandidates,
 		}
 
 		if (j == oldcand->nattrs)
+		{
+			*match = i;
 			return true;
+		}
 	}
 
 	return false;
@@ -3895,8 +3921,9 @@ pg_qualstats_add_candidate_if_not_exists(IndexCandidate *candidates,
 										 int *ncandidates, int *nmaxcand)
 {
 	IndexCandidate *finalcand = candidates;
+	int				match = -1;
 
-	if (!pg_qualstats_is_exists(candidates, *ncandidates, cand))
+	if (!pg_qualstats_is_exists(candidates, *ncandidates, cand, &match))
 	{
 		if (*ncandidates == *nmaxcand)
 		{
@@ -3908,7 +3935,46 @@ pg_qualstats_add_candidate_if_not_exists(IndexCandidate *candidates,
 		(*ncandidates)++;
 	}
 	else
+	{
+		IndexCandidate *oldcand = &candidates[match];
+		int		i;
+		int 	j;
+		int		nqueryidx = oldcand->nqueryids;
+		bool	isfirst = true;
+
+		for (i = 0; i < cand->nqueryids; i++)
+		{
+			for (j = 0; j < oldcand->nqueryids; j++)
+			{
+				if (cand->queryinfoidx[i] == oldcand->queryinfoidx[j])
+					break;
+			}
+			/* not found */
+			if (j == oldcand->nqueryids)
+			{
+				if (isfirst)
+				{
+					int		newsize = cand->nqueryids + oldcand->nqueryids;
+					int	   *queryinfoidx;
+
+					/* 
+						* Allocate new memory instead of repallocing as
+						* multiple candidate which are derived from same
+						* parent might share same memory.
+						*/
+					queryinfoidx = (int *) palloc(newsize * sizeof(int));
+					memcpy(queryinfoidx, oldcand->queryinfoidx,
+							sizeof(int) * oldcand->nqueryids);
+					oldcand->queryinfoidx = queryinfoidx;
+
+					isfirst = false;
+				}
+				oldcand->queryinfoidx[nqueryidx++] = cand->queryinfoidx[i];
+			}
+		}
 		pfree(cand->attnum);
+		oldcand->nqueryids = nqueryidx;
+	}
 
 	return finalcand;
 }
@@ -3939,7 +4005,9 @@ pg_qualstats_get_index_combination(IndexCandidate *candidates,
 			cand.attnum[0] = candidates[i].attnum[j];
 
 			finalcand = pg_qualstats_add_candidate_if_not_exists(finalcand,
-										&cand, &nfinalcand, &nmaxcand);
+																 &cand,
+																 &nfinalcand,
+																 &nmaxcand);
 
 			/* generate two column indexes. */
 			for (k = 0; k < candidates[i].nattrs; k++)
@@ -4029,7 +4097,7 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 		count++;
 		path1 = palloc0(sizeof(pgqsIndexCombination) + max_cand * sizeof(int));
 		path1->cost = pg_qualstats_get_cost(context->queryinfos,
-											context->nqueries);
+											context->nqueries, NULL);
 		path1->nindices = 0;
 
 		return path1;
@@ -4037,7 +4105,8 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 
 	/* compute total cost excluding this index */
 	path2 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand);
-	if (pg_qualstats_cand_exists_in_bms(context->memberattr, &cand[cur_cand]))
+	if (!cand[cur_cand].isvalid ||
+		pg_qualstats_cand_exists_in_bms(context->memberattr, &cand[cur_cand]))
 		return path2;
 
 	pg_qualstats_bms_add_candattr(context, &cand[cur_cand]);
@@ -4071,6 +4140,38 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 	}
 }
 
+/*
+ * check individiual index usefulness, if not reducing the cost by some margin
+ * then mark invalid.
+ */
+static void
+pg_qualstats_mark_useless_candidate(IndexCandidate *candidates,
+									int ncandidates, QueryInfo  *queryinfos)
+{
+	int		i;
+	int		j;
+
+	for (i = 0; i < ncandidates; i++)
+	{
+		IndexCandidate *cand = &candidates[i];
+		double	cost1;
+		double	cost2;
+		Oid		idxid;
+
+		cost1 = pg_qualstats_get_cost(queryinfos, cand->nqueryids,
+										cand->queryinfoidx);
+		idxid = pg_qualstats_create_hypoindex(cand->indexstmt);
+							
+		cost2 = pg_qualstats_get_cost(queryinfos, cand->nqueryids,
+										cand->queryinfoidx);
+		pg_qualstats_drop_hypoindex(idxid);
+
+		if (cost2 < cost1 - 100)
+			cand->isvalid = true;
+		else
+			cand->isvalid = false;
+	}
+}
 static char **
 pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 							  int ncandidates, int *nindexes,
@@ -4093,10 +4194,12 @@ pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 	/* genrate all one and two length index combinations. */
 	finalcand = pg_qualstats_get_index_combination(candidates, &ncandidates);
 	pg_qualstats_get_updates(finalcand, ncandidates);
-
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
-	pg_qualstats_generate_index_queries(finalcand, ncandidates);
+	if (!pg_qualstats_generate_index_queries(finalcand, ncandidates))
+		return prevarray;
+
 	MemoryContextSwitchTo(oldcontext);
+	pg_qualstats_mark_useless_candidate(finalcand, ncandidates, queryinfos);
 	count = 0;
 	print_candidates(finalcand, ncandidates);
 

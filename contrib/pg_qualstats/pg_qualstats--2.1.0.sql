@@ -29,10 +29,10 @@ RETURNS SETOF record
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
 
-CREATE FUNCTION @extschema@.pg_qualstats_generate_advise(text[], text[], int[], bigint[], int[])
+/*CREATE FUNCTION @extschema@.pg_qualstats_generate_advise(text[], text[], int[], bigint[], int[])
 RETURNS text[]
 AS 'MODULE_PATHNAME'
-LANGUAGE C;
+LANGUAGE C;*/
 
 CREATE FUNCTION pg_qualstats_overhead(OUT queryid bigint, OUT relid oid, OUT attnum int, OUT frequency int, OUT total_updated bigint)
 RETURNS SETOF record

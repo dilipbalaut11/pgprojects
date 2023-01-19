@@ -2800,11 +2800,13 @@ static void
 pg_qualstats_drop_hypoindex(Oid idxid)
 {
 	int				ret;
-	bool			res;
 	StringInfoData	hypoindex;
 
 	initStringInfo(&hypoindex);
-	appendStringInfo(&hypoindex, "SELECT hypopg_drop_index(%d)", idxid);
+	if (OidIsValid(idxid))
+		appendStringInfo(&hypoindex, "SELECT hypopg_drop_index(%d)", idxid);
+	else
+		appendStringInfo(&hypoindex, "SELECT hypopg_reset_index()");
 
 	ret = SPI_execute(hypoindex.data, false, 0);
 	if (ret != SPI_OK_SELECT)
@@ -2813,6 +2815,7 @@ pg_qualstats_drop_hypoindex(Oid idxid)
 		elog(ERROR, "pg_qualstat: could not drop hypo index");
 	}
 
+#if 0
 	if (!parse_bool(SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1), &res))
 	{
 		SPI_finish();
@@ -2824,6 +2827,7 @@ pg_qualstats_drop_hypoindex(Oid idxid)
 		SPI_finish();
 		elog(ERROR, "pg_qualstat: could not drop hypo index");
 	}
+#endif
 }
 
 /* Plan a given query */
@@ -2981,7 +2985,7 @@ pg_qualstats_knapsack(pgqsIndexAdviceContext *context, int n)
 		return path2;
 	}
 }
-#endif
+
 
 /* function to generate index advise. */
 Datum
@@ -3069,6 +3073,7 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 
 	PG_RETURN_ARRAYTYPE_P(result);
 }
+#endif
 
 static void
 pgqsInsertOverheadHash(ModifyTable *node, pgqsWalkerContext *context)
@@ -3535,11 +3540,12 @@ print_candidates(IndexCandidate *candidates, int ncandidates)
 
 	for (i = 0; i < ncandidates; i++)
 	{
-		elog(NOTICE, "Index: %s: update: %d freq: %d valid:%d", candidates[i].indexstmt,
-			 candidates[i].nupdates,candidates[i].nupdatefreq, candidates[i].isvalid);
+		elog(NOTICE, "Index: %s: update: %lld freq: %d valid:%d", candidates[i].indexstmt,
+			 (long long int) candidates[i].nupdates, candidates[i].nupdatefreq, candidates[i].isvalid);
 	}
 }
 
+#if 0
 /* Given two sorted array check whether array a is subarray of array b. */
 static bool
 pg_qualstats_is_subarray(int *a, int *b, int la, int lb)
@@ -3563,7 +3569,6 @@ pg_qualstats_is_subarray(int *a, int *b, int la, int lb)
 	return false;
 }
 
-#if 0
 /* 
  * Mark all candidate invalid which are fully contained by other element
  * of same amtype.
@@ -3708,6 +3713,7 @@ pg_qualstats_get_queries(IndexCandidate *candidates, int ncandidates,
 	return queryinfos;
 }
 
+#if 0
 /* 
  * Get the non overlapping update count for given relation and set of
  * attributes.
@@ -3767,6 +3773,7 @@ pg_qualstats_idx_updates(Oid dbid, Oid relid, int *attrs, int nattr)
 
 	return nupdates;
 }
+#endif
 
 /*
  * Process each index candidate and compute the number of updated tuple for
@@ -4059,7 +4066,7 @@ pg_qualstats_bms_remove_candattr(IndexCombContext *context,
 }
 
 static bool
-pg_qualstats_cand_exists_in_bms(Bitmapset *bms, IndexCandidate *cand)
+pg_qualstats_is_cand_overlaps(Bitmapset *bms, IndexCandidate *cand)
 {
 	int		i;
 
@@ -4115,7 +4122,9 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 	if (cur_cand == max_cand || selected_cand == max_cand)
 	{
 		count++;
-		path1 = palloc0(sizeof(pgqsIndexCombination) + max_cand * sizeof(int));
+		path1 = palloc0(sizeof(pgqsIndexCombination) +
+						context->ncandidates * sizeof(int));
+
 		path1->cost = pg_qualstats_get_cost(context->queryinfos,
 											context->nqueries, NULL);
 		path1->nindices = 0;
@@ -4132,7 +4141,7 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 	 * in the combination.
 	 */
 	if (!cand[cur_cand].isvalid ||
-		pg_qualstats_cand_exists_in_bms(context->memberattr, &cand[cur_cand]))
+		pg_qualstats_is_cand_overlaps(context->memberattr, &cand[cur_cand]))
 		return path1;
 
 	pg_qualstats_bms_add_candattr(context, &cand[cur_cand]);
@@ -4157,6 +4166,80 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 }
 
 /*
+ * try missing candidate in selected path with greedy approach
+ */
+static pgqsIndexCombination *
+pg_qualstats_complete_comb(IndexCombContext *context,
+						   pgqsIndexCombination *path)
+{
+	int		i;
+	int 	ncand = context->ncandidates;	
+	IndexCandidate		   *cand = context->candidates;
+	pgqsIndexCombination   *finalpath = path;
+
+	for (i = 0; i < path->nindices; i++)
+	{
+		pg_qualstats_create_hypoindex(cand[path->indices[i]].indexstmt);
+	}
+
+	for (i = 0; i < ncand; i++)
+	{
+		Oid			idxid;
+		int			j;
+
+		if (!cand->isvalid)
+			continue;
+
+		for (j = 0; j < path->nindices; j++)
+		{
+			if (path->indices[j] == i)
+				break;
+		}
+		/* 
+		 * if candidate not found in path then try to add in the path and
+		 * compare cost
+		 */
+		if (j == path->nindices)
+		{
+			pgqsIndexCombination *newpath;
+			int		size;
+			int		idxsz;
+			double	overhead;
+			
+			size = sizeof(pgqsIndexCombination) + ncand * sizeof(int);
+
+			newpath = (pgqsIndexCombination *) palloc0(size);
+			memcpy(newpath, finalpath, size);
+			newpath->nindices += 1;
+			idxid = pg_qualstats_create_hypoindex(cand[i].indexstmt);
+			idxsz = pg_qualstats_hypoindex_size(idxid);
+			overhead = pg_qualstats_get_index_overhead(idxsz, cand[i].nattrs,
+											   		   cand[i].nupdates,
+											   		   cand[i].nupdatefreq);
+			newpath->overhead += overhead;
+			newpath->cost = pg_qualstats_get_cost(context->queryinfos,
+												  context->nqueries, NULL);
+			if (newpath->cost > finalpath->cost)
+			{
+				elog(NOTICE, "cost increased in greedy");
+			}
+
+			finalpath = pg_qualstats_compare_path(finalpath, newpath);
+			/* drop this index if this index is not selected. */
+			if (finalpath != newpath)
+				pg_qualstats_drop_hypoindex(idxid);
+			else
+				elog(NOTICE, "path selected in greedy");
+		}
+	}
+
+	/* reset all hypo indexes. */
+	pg_qualstats_drop_hypoindex(InvalidOid);
+
+	return finalpath;
+}
+
+/*
  * check individiual index usefulness, if not reducing the cost by some margin
  * then mark invalid.
  */
@@ -4165,7 +4248,6 @@ pg_qualstats_mark_useless_candidate(IndexCandidate *candidates,
 									int ncandidates, QueryInfo  *queryinfos)
 {
 	int		i;
-	int		j;
 
 	for (i = 0; i < ncandidates; i++)
 	{
@@ -4227,6 +4309,13 @@ pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 	context.memberattr = NULL;
 
 	path = pg_qualstats_compare_comb(&context, 0, 0);
+
+	/* 
+	 * If path doesn't include all the candidates then try to add missing
+	 * candidates with greedy approach.
+	 */
+	if (path->nindices < ncandidates)
+		pg_qualstats_complete_comb(&context, path);
 
 	if (path->nindices == 0)
 		return prevarray;

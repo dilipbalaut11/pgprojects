@@ -128,7 +128,7 @@ typedef struct pgqsIndexCombination
 {
 	double	cost;
 	int		nindices;
-	double	update_cost;
+	double	overhead;
 	int		indices[FLEXIBLE_ARRAY_MEMBER];
 } pgqsIndexCombination;
 
@@ -2896,14 +2896,14 @@ pg_qualstats_hypoindex_size(Oid idxid)
 }
 
 static double
-pg_qualstats_get_index_overhead(uint64 index_size, uint64 navgupdate,
-								int nfrequency)
+pg_qualstats_get_index_overhead(uint64 index_size, int nattr,
+								uint64 navgupdate, int nfrequency)
 {
 	double		T;
 	double		index_pages;
 	double		update_io_cost;
 	double		update_cpu_cost;
-	double		total_cost;
+	double		overhead;
 
 	/* total index pages. */
 	T  = index_size / BLCKSZ;
@@ -2916,12 +2916,13 @@ pg_qualstats_get_index_overhead(uint64 index_size, uint64 navgupdate,
 	update_io_cost = (index_pages * nfrequency) * random_page_cost;
 	update_cpu_cost = (navgupdate * nfrequency) * cpu_tuple_cost;
 
-	total_cost = update_io_cost + update_cpu_cost;
+	overhead = update_io_cost + update_cpu_cost;
 
-	/* per index overhead based on index size */
-	total_cost += (index_pages * 0.1);
+	/* XXX overhead of index based on number of size and number of columns. */
+	overhead += T;
+	overhead += (nattr * 1000);
 
-	return total_cost;
+	return overhead;
 }
 
 #if 0
@@ -4073,12 +4074,31 @@ pg_qualstats_cand_exists_in_bms(Bitmapset *bms, IndexCandidate *cand)
 	return false;
 }
 
+/*
+ * compare and retutn cheaper path and free non selected path
+ *
+ */
+static pgqsIndexCombination *
+pg_qualstats_compare_path(pgqsIndexCombination *path1,
+						  pgqsIndexCombination *path2)
+{
+	double	cost1 = path1->cost + path1->overhead;
+	double	cost2 = path2->cost + path2->overhead;
+
+	if (cost1 <= cost2)
+	{
+		pfree(path2);
+		return path1;
+	}
+
+	pfree(path1);
+	return path2;
+}
+
 int count = 0;
 
 /*
- * Implement a version of knapsack algorithm to try out all the index
- * combination with optimizer and find the combination which produce least
- * cost.
+ * Perform a exhaustive search with different index combinations.
  */
 static pgqsIndexCombination *
 pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
@@ -4086,7 +4106,7 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 {
 	Oid						idxid;
 	uint64					size;
-	double					update_cost;
+	double					overhead;
 	int						max_cand = context->maxcand;
 	pgqsIndexCombination   *path1;
 	pgqsIndexCombination   *path2;
@@ -4104,10 +4124,16 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 	}
 
 	/* compute total cost excluding this index */
-	path2 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand);
+	path1 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand);
+
+	/*
+	 * If any of the attribute of this candidate is overlapping with any
+	 * existing candidate in this combindation then don't add this candidate
+	 * in the combination.
+	 */
 	if (!cand[cur_cand].isvalid ||
 		pg_qualstats_cand_exists_in_bms(context->memberattr, &cand[cur_cand]))
-		return path2;
+		return path1;
 
 	pg_qualstats_bms_add_candattr(context, &cand[cur_cand]);
 
@@ -4116,28 +4142,18 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 	size = pg_qualstats_hypoindex_size(idxid);
 
 	/* compute total cost including this index */
-	path1 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand + 1);
-	path1->indices[path1->nindices++] = cur_cand;
+	path2 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand + 1);
+	path2->indices[path2->nindices++] = cur_cand;
 
-	update_cost = pg_qualstats_get_index_overhead(size,
-												  cand[cur_cand].nupdates,
-												  cand[cur_cand].nupdatefreq);
-	path1->update_cost += update_cost;
+	overhead = pg_qualstats_get_index_overhead(size, cand[cur_cand].nattrs,
+											   cand[cur_cand].nupdates,
+											   cand[cur_cand].nupdatefreq);
+	path2->overhead += overhead;
 
 	pg_qualstats_drop_hypoindex(idxid);
 	pg_qualstats_bms_remove_candattr(context, &cand[cur_cand]);
 
-	/* add the update overhead and compare the cost. */
-	if (path1->cost + path1->update_cost < path2->cost + path2->update_cost)
-	{
-		pfree(path2);
-		return path1;
-	}
-	else
-	{
-		pfree(path1);
-		return path2;
-	}
+	return pg_qualstats_compare_path(path1, path2);
 }
 
 /*

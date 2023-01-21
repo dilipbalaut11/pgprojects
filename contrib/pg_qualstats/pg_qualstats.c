@@ -124,13 +124,13 @@ static float pgqs_plan_cost = 0.0;
 /*
  * Track cost for current combination of the indices.
  */
-typedef struct pgqsIndexCombination
+typedef struct IndexCombination
 {
 	double	cost;
 	int		nindices;
 	double	overhead;
 	int		indices[FLEXIBLE_ARRAY_MEMBER];
-} pgqsIndexCombination;
+} IndexCombination;
 
 /*
  * Track cost for current combination of the indices.
@@ -2843,6 +2843,7 @@ pg_qualstats_plan_query(const char *query)
 
 typedef struct QueryInfo
 {
+	double	cost;
 	int		frequency;
 	char   *query;
 } QueryInfo;
@@ -2899,55 +2900,25 @@ pg_qualstats_hypoindex_size(Oid idxid)
 	return size;
 }
 
-static double
-pg_qualstats_get_index_overhead(uint64 index_size, int nattr,
-								uint64 navgupdate, int nfrequency)
-{
-	double		T;
-	double		index_pages;
-	double		update_io_cost;
-	double		update_cpu_cost;
-	double		overhead;
-
-	/* total index pages. */
-	T  = index_size / BLCKSZ;
-
-	/* 
-	 * We are commputing the page acccess cost and tuple cost based on total
-	 * accumulated tuple count so we don't need to use update query frequency.
-	 */
-	index_pages = (2 * T * navgupdate) / (2 * T + navgupdate);
-	update_io_cost = (index_pages * nfrequency) * random_page_cost;
-	update_cpu_cost = (navgupdate * nfrequency) * cpu_tuple_cost;
-
-	overhead = update_io_cost + update_cpu_cost;
-
-	/* XXX overhead of index based on number of size and number of columns. */
-	overhead += T;
-	overhead += (nattr * 1000);
-
-	return overhead;
-}
-
 #if 0
 /*
  * Implement a version of knapsack algorithm to try out all the index
  * combination with optimizer and find the combination which produce least
  * cost.
  */
-static pgqsIndexCombination *
+static IndexCombination *
 pg_qualstats_knapsack(pgqsIndexAdviceContext *context, int n)
 {
 	Oid						idxid;
 	uint64					size;
 	double					update_cost;
-	pgqsIndexCombination   *path1;
-	pgqsIndexCombination   *path2;
+	IndexCombination   *path1;
+	IndexCombination   *path2;
 
 	if (n == 0)
 	{
 		path1 = MemoryContextAllocZero(TopMemoryContext,
-									   sizeof(pgqsIndexCombination) +
+									   sizeof(IndexCombination) +
 									   context->nindices * sizeof(int));
 		path1->cost = pg_qualstats_get_cost(context->queries,
 											context->frequency,
@@ -3009,7 +2980,7 @@ pg_qualstats_generate_advise(PG_FUNCTION_ARGS)
 	int			*update_freq;
 	ArrayType   *result;
 	pgqsIndexAdviceContext	context;
-	pgqsIndexCombination   *path;
+	IndexCombination   *path;
 
 	elog(NOTICE, "## Generate index advice ##");
 
@@ -3519,18 +3490,22 @@ typedef struct IndexCandidate
 	int64	nupdates;
 	int	   *queryinfoidx;
 	int		nupdatefreq;
+	double	benefit;
+	double	overhead;
 	char   *indexstmt;
 	bool	isvalid;
+	bool	isselected;
 } IndexCandidate;
 
 typedef struct IndexCombContext
 {
-	IndexCandidate   *candidates;
-	QueryInfo		 *queryinfos;
-	Bitmapset		 *memberattr;
 	int		nqueries;
 	int		ncandidates;
 	int		maxcand;
+	double		  **benefitmat;
+	IndexCandidate *candidates;
+	QueryInfo	   *queryinfos;
+	Bitmapset	   *memberattr;
 } IndexCombContext;
 
 static void
@@ -3543,6 +3518,32 @@ print_candidates(IndexCandidate *candidates, int ncandidates)
 		elog(NOTICE, "Index: %s: update: %lld freq: %d valid:%d", candidates[i].indexstmt,
 			 (long long int) candidates[i].nupdates, candidates[i].nupdatefreq, candidates[i].isvalid);
 	}
+}
+
+static void
+print_benefit_matrix(IndexCombContext *context)
+{
+	IndexCandidate *candidates = context->candidates;
+	QueryInfo	   *queryinfos = context->queryinfos;
+	double		  **benefitmat = context->benefitmat;
+	int 	ncandidates = context->ncandidates;
+	int		i;
+	StringInfoData	row;
+
+	initStringInfo(&row);
+
+	appendStringInfo(&row, "======Benefit Matrix Start=======\n");
+	for (i = 0; i < ncandidates; i++)
+	{
+		int	j;
+
+		for (j = 0; j < context->nqueries; j++)
+			appendStringInfo(&row, "%f\t", benefitmat[j][i]);
+		appendStringInfo(&row, "\n");
+	}
+	appendStringInfo(&row, "======Benefit Matrix End=======\n");
+	elog(NOTICE, "%s", row.data);
+	pfree(row.data);
 }
 
 #if 0
@@ -3775,6 +3776,38 @@ pg_qualstats_idx_updates(Oid dbid, Oid relid, int *attrs, int nattr)
 }
 #endif
 
+static double
+pg_qualstats_get_index_overhead(IndexCandidate *cand, Oid idxid)
+{
+	double		T;
+	double		index_pages;
+	double		update_io_cost;
+	double		update_cpu_cost;
+	double		overhead;
+	int			navgupdate = cand->nupdates;
+	int			nfrequency = cand->nupdatefreq;
+	int			size = pg_qualstats_hypoindex_size(idxid);
+
+	/* total index pages. */
+	T  = size / BLCKSZ;
+
+	/* 
+	 * We are commputing the page acccess cost and tuple cost based on total
+	 * accumulated tuple count so we don't need to use update query frequency.
+	 */
+	index_pages = (2 * T * navgupdate) / (2 * T + navgupdate);
+	update_io_cost = (index_pages * nfrequency) * random_page_cost;
+	update_cpu_cost = (navgupdate * nfrequency) * cpu_tuple_cost;
+
+	overhead = update_io_cost + update_cpu_cost;
+
+	/* XXX overhead of index based on number of size and number of columns. */
+	overhead += T;
+	overhead += (cand->nattrs * 1000);
+
+	return overhead;
+}
+
 /*
  * Process each index candidate and compute the number of updated tuple for
  * each index candidates based on the index column update counts.
@@ -3987,6 +4020,10 @@ pg_qualstats_add_candidate_if_not_exists(IndexCandidate *candidates,
 	return finalcand;
 }
 
+/*
+ * From given index candidate list generate single column and two columns
+ * index candidate array.
+ */
 static IndexCandidate *
 pg_qualstats_get_index_combination(IndexCandidate *candidates,
 								   int *ncandidates)
@@ -4085,9 +4122,9 @@ pg_qualstats_is_cand_overlaps(Bitmapset *bms, IndexCandidate *cand)
  * compare and retutn cheaper path and free non selected path
  *
  */
-static pgqsIndexCombination *
-pg_qualstats_compare_path(pgqsIndexCombination *path1,
-						  pgqsIndexCombination *path2)
+static IndexCombination *
+pg_qualstats_compare_path(IndexCombination *path1,
+						  IndexCombination *path2)
 {
 	double	cost1 = path1->cost + path1->overhead;
 	double	cost2 = path2->cost + path2->overhead;
@@ -4107,22 +4144,21 @@ int count = 0;
 /*
  * Perform a exhaustive search with different index combinations.
  */
-static pgqsIndexCombination *
+static IndexCombination *
 pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 						  int selected_cand)
 {
 	Oid						idxid;
-	uint64					size;
 	double					overhead;
 	int						max_cand = context->maxcand;
-	pgqsIndexCombination   *path1;
-	pgqsIndexCombination   *path2;
+	IndexCombination   *path1;
+	IndexCombination   *path2;
 	IndexCandidate		   *cand = context->candidates;
 
 	if (cur_cand == max_cand || selected_cand == max_cand)
 	{
 		count++;
-		path1 = palloc0(sizeof(pgqsIndexCombination) +
+		path1 = palloc0(sizeof(IndexCombination) +
 						context->ncandidates * sizeof(int));
 
 		path1->cost = pg_qualstats_get_cost(context->queryinfos,
@@ -4148,15 +4184,12 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 
 	/* compare cost with and without this index */
 	idxid = pg_qualstats_create_hypoindex(cand[cur_cand].indexstmt);
-	size = pg_qualstats_hypoindex_size(idxid);
 
 	/* compute total cost including this index */
 	path2 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand + 1);
 	path2->indices[path2->nindices++] = cur_cand;
 
-	overhead = pg_qualstats_get_index_overhead(size, cand[cur_cand].nattrs,
-											   cand[cur_cand].nupdates,
-											   cand[cur_cand].nupdatefreq);
+	overhead = pg_qualstats_get_index_overhead(&cand[cur_cand], idxid);
 	path2->overhead += overhead;
 
 	pg_qualstats_drop_hypoindex(idxid);
@@ -4168,14 +4201,14 @@ pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
 /*
  * try missing candidate in selected path with greedy approach
  */
-static pgqsIndexCombination *
+static IndexCombination *
 pg_qualstats_complete_comb(IndexCombContext *context,
-						   pgqsIndexCombination *path)
+						   IndexCombination *path)
 {
 	int		i;
 	int 	ncand = context->ncandidates;	
 	IndexCandidate		   *cand = context->candidates;
-	pgqsIndexCombination   *finalpath = path;
+	IndexCombination   *finalpath = path;
 
 	for (i = 0; i < path->nindices; i++)
 	{
@@ -4201,21 +4234,17 @@ pg_qualstats_complete_comb(IndexCombContext *context,
 		 */
 		if (j == path->nindices)
 		{
-			pgqsIndexCombination *newpath;
+			IndexCombination *newpath;
 			int		size;
-			int		idxsz;
 			double	overhead;
 			
-			size = sizeof(pgqsIndexCombination) + ncand * sizeof(int);
+			size = sizeof(IndexCombination) + ncand * sizeof(int);
 
-			newpath = (pgqsIndexCombination *) palloc0(size);
+			newpath = (IndexCombination *) palloc0(size);
 			memcpy(newpath, finalpath, size);
 			newpath->nindices += 1;
 			idxid = pg_qualstats_create_hypoindex(cand[i].indexstmt);
-			idxsz = pg_qualstats_hypoindex_size(idxid);
-			overhead = pg_qualstats_get_index_overhead(idxsz, cand[i].nattrs,
-											   		   cand[i].nupdates,
-											   		   cand[i].nupdatefreq);
+			overhead = pg_qualstats_get_index_overhead(&cand[i], idxid);
 			newpath->overhead += overhead;
 			newpath->cost = pg_qualstats_get_cost(context->queryinfos,
 												  context->nqueries, NULL);
@@ -4270,6 +4299,138 @@ pg_qualstats_mark_useless_candidate(IndexCandidate *candidates,
 			cand->isvalid = false;
 	}
 }
+
+/*
+ * Plan all give queries to compute the total cost.
+ */
+static void
+pg_qualstats_fill_query_basecost(QueryInfo *queryinfos, int nqueries, int *queryidxs)
+{
+	int		i;
+
+	pgqs_cost_track_enable = true;
+
+	/* 
+	 * plan each query and get its cost
+	 */
+	for (i = 0; i < nqueries; i++)
+	{
+		int		index = (queryidxs != NULL) ? queryidxs[i] : i;
+
+		pg_qualstats_plan_query(queryinfos[index].query);
+		queryinfos[i].cost = pgqs_plan_cost;
+	}
+
+	pgqs_cost_track_enable = false;
+}
+
+static bool
+pg_qualstats_is_index_useful(double basecost, double indexcost,
+							 double indexoverhead)
+{
+	if (indexcost + indexoverhead < basecost)
+		return true;
+	return false;
+}
+/*
+ * check individiual index benefit for each query and fill in the matrix.
+ */
+static void
+pg_qualstats_compuete_index_benefit(IndexCombContext *context,
+									int nqueries, int *queryidxs)
+{
+	IndexCandidate *candidates = context->candidates;
+	QueryInfo  *queryinfos = context->queryinfos;
+	double	  **benefit = context->benefitmat;
+	int 		ncandidates = context->ncandidates;
+	int			i;
+
+	pgqs_cost_track_enable = true;
+
+	for (i = 0; i < ncandidates; i++)
+	{
+		IndexCandidate *cand = &candidates[i];
+		Oid		idxid;
+		int		j;
+
+		/* 
+		 * If candiate is already identified as it has no value or it is
+		 * seletced in the final combination then in the recheck its benefits.
+		 */
+		if (!cand->isvalid || cand->isselected)
+			continue;
+
+		idxid = pg_qualstats_create_hypoindex(cand->indexstmt);
+
+		/* If candidate overhead is not yet computed then do it now */
+		if (cand->overhead == 0)
+			cand->overhead = pg_qualstats_get_index_overhead(cand, idxid);
+
+		/* 
+		 * replan each query and compute the total weighted cost by multiplying
+		 * each query cost with its frequency.
+		 */
+		for (j = 0; j < nqueries; j++)
+		{
+			int		index = (queryidxs != NULL) ? queryidxs[j] : j;
+
+			pg_qualstats_plan_query(queryinfos[index].query);
+
+			if (pg_qualstats_is_index_useful(queryinfos[index].cost,
+										 	 pgqs_plan_cost, cand->overhead))
+			{
+				benefit[index][i] = queryinfos[index].cost - pgqs_plan_cost;
+			}
+			else
+				benefit[index][i] = 0;
+		}
+
+		pg_qualstats_drop_hypoindex(idxid);
+	}
+
+	pgqs_cost_track_enable = false;
+}
+
+static int
+pg_qualstats_get_best_candidate(IndexCombContext *context)
+{
+	IndexCandidate *candidates = context->candidates;
+	QueryInfo	   *queryinfos = context->queryinfos;
+	double		  **benefitmat = context->benefitmat;
+	int 	ncandidates = context->ncandidates;
+	int		i;
+	int		bestcandidx = -1;
+	double	max_benefit = 0;
+	double	benefit;
+
+	for (i = 0; i < ncandidates; i++)
+	{
+		int	j;
+
+		if (!candidates[i].isvalid || candidates[i].isselected)
+			continue;
+
+		benefit = 0;
+
+		for (j = 0; j < context->nqueries; j++)
+			benefit += (benefitmat[j][i] * queryinfos[j].frequency);
+
+		if (benefit == 0)
+		{
+			candidates[i].isvalid = false;
+			continue;
+		}
+
+		if (benefit > max_benefit)
+		{
+			max_benefit = benefit;
+			bestcandidx = i;
+		}
+	}
+
+	return bestcandidx;
+}
+
 static char **
 pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 							  int ncandidates, int *nindexes,
@@ -4281,7 +4442,7 @@ pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 	int			i;
 	int			prev_indexes = *nindexes;
 	IndexCandidate *finalcand;
-	pgqsIndexCombination   *path;
+	IndexCombination   *path;
 	IndexCombContext		context;
 	MemoryContext oldcontext;
 
@@ -4297,7 +4458,7 @@ pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 		return prevarray;
 
 	MemoryContextSwitchTo(oldcontext);
-	pg_qualstats_mark_useless_candidate(finalcand, ncandidates, queryinfos);
+	//pg_qualstats_mark_useless_candidate(finalcand, ncandidates, queryinfos);
 	count = 0;
 	print_candidates(finalcand, ncandidates);
 
@@ -4308,6 +4469,61 @@ pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 	context.maxcand = ncandidates;//Min(ncandidates, 15);
 	context.memberattr = NULL;
 
+	/* allocate memory for benefit matrix */
+	context.benefitmat = (double **) palloc0(nqueries * sizeof(double *));
+	for (i = 0; i < nqueries; i++)
+		context.benefitmat[i] = (double *) palloc0(ncandidates * sizeof(double));
+
+	path = palloc0(sizeof(IndexCombination) + ncandidates * sizeof(int));
+
+	/*
+	 * First plan query query without any new index and set base cost for each
+	 * query.
+	 */
+	pg_qualstats_fill_query_basecost(queryinfos, nqueries, NULL);
+
+	while (true)
+	{
+		int bestcand;
+
+		/*
+		 * Create every index one at a time and replan every query and fill
+		 * intial values of benefit matrix.
+		 */
+		pg_qualstats_compuete_index_benefit(&context, nqueries, NULL);
+		print_benefit_matrix(&context);
+
+		/*
+		 * Compute the overall benefit of all the candidate and get the  best
+		 * candidate.
+		 */
+		bestcand = pg_qualstats_get_best_candidate(&context);
+		if (bestcand == -1)
+			break;
+
+		/*
+		 * Add best candidates to the path and create the hypoindex for this
+		 * candidate and reiterate for the next round.  For this index we
+		 * create hypoindex and do not drop so that next round assume this
+		 * index is already exist now and check benefit of each candidate by
+		 * assuming this candidate is already finalized.
+		 */
+		pg_qualstats_create_hypoindex(finalcand[bestcand].indexstmt);
+
+		/* 
+		 * Best candidate is seleted so update the query base cost as if this
+		 * index exists before going for next iteration.
+		 */
+		for (i = 0; i < context.nqueries; i++)
+			queryinfos[i].cost -= context.benefitmat[i][bestcand];
+
+		path->indices[path->nindices++] = bestcand;
+		finalcand[bestcand].isselected = true;
+	}
+
+	pg_qualstats_drop_hypoindex(InvalidOid);
+
+#if 0
 	path = pg_qualstats_compare_comb(&context, 0, 0);
 
 	/* 
@@ -4317,9 +4533,11 @@ pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 	if (path->nindices < ncandidates)
 		pg_qualstats_complete_comb(&context, path);
 
+	elog(NOTICE, "ncandidates=%d combination tested=%d", ncandidates, count);
+#endif
+
 	if (path->nindices == 0)
 		return prevarray;
-	elog(NOTICE, "ncandidates=%d combination tested=%d", ncandidates, count);
 
 	prev_indexes = *nindexes;
 	(*nindexes) += path->nindices;
@@ -4404,6 +4622,7 @@ pg_qualstats_test_index_advise(PG_FUNCTION_ARGS)
 		cand->nqueryids = ARR_DIMS(r)[0];
 
 		cand->isvalid = true;
+		cand->isselected = false;
 	}
 
 	/* process candidates for rel by rel and generate index advises. */

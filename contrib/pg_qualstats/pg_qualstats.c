@@ -108,45 +108,6 @@ PG_MODULE_MAGIC;
 #endif
 
 /*
- * For inserting each index tuple we need to pay one random page cost and one
- * cpu index tuple cost.
- */
-#define INDEX_UPDATE_OVERHEAD (random_page_cost + cpu_index_tuple_cost)
-
-/* 
- * If 'pgqs_cost_track_enable' is set then the planner will start tracking the
- * cost of queries being planned and compute total cost in
- * 'pgqs_plan_total_cost'
- */
-static bool pgqs_cost_track_enable = false;
-static float pgqs_plan_cost = 0.0;
-
-/*
- * Track cost for current combination of the indices.
- */
-typedef struct IndexCombination
-{
-	double	cost;
-	int		nindices;
-	double	overhead;
-	int		indices[FLEXIBLE_ARRAY_MEMBER];
-} IndexCombination;
-
-/*
- * Track cost for current combination of the indices.
- */
-typedef struct pgqsIndexAdviceContext
-{
-	char	  **indices;
-	char	  **queries;
-	int		   *frequency;
-	int64	   *update_count;
-	int		   *update_frequency;
-	int			nindices;
-	int			nqueries;	
-} pgqsIndexAdviceContext;
-
-/*
  * Extension version number, for supporting older extension versions' objects
  */
 typedef enum pgqsVersion
@@ -169,8 +130,6 @@ static Datum pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
 extern PGDLLEXPORT Datum pg_qualstats_example_query(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_example_queries(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_generate_advise(PG_FUNCTION_ARGS);
-extern PGDLLEXPORT Datum pg_qualstats_overhead(PG_FUNCTION_ARGS);
-extern PGDLLEXPORT Datum pg_qualstats_qualnodeid_combination(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_test_index_advise(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(pg_qualstats_reset);
@@ -181,8 +140,6 @@ PG_FUNCTION_INFO_V1(pg_qualstats_names_2_0);
 PG_FUNCTION_INFO_V1(pg_qualstats_example_query);
 PG_FUNCTION_INFO_V1(pg_qualstats_example_queries);
 PG_FUNCTION_INFO_V1(pg_qualstats_generate_advise);
-PG_FUNCTION_INFO_V1(pg_qualstats_overhead);
-PG_FUNCTION_INFO_V1(pg_qualstats_qualnodeid_combination);
 PG_FUNCTION_INFO_V1(pg_qualstats_test_index_advise);
 
 static PlannedStmt *pgqs_planner(Query *parse,
@@ -387,6 +344,61 @@ typedef struct pgqsWalkerContext
 	const char *querytext;
 } pgqsWalkerContext;
 
+/* 
+ * If 'pgqs_cost_track_enable' is set then the planner will start tracking the
+ * cost of queries being planned and compute total cost in
+ * 'pgqs_plan_total_cost'
+ */
+static bool pgqs_cost_track_enable = false;
+static float pgqs_plan_cost = 0.0;
+
+typedef struct QueryInfo
+{
+	double	cost;
+	int		frequency;
+	char   *query;
+} QueryInfo;
+
+/*
+ * Track cost for current combination of the indices.
+ */
+typedef struct IndexCombination
+{
+	double	cost;
+	int		nindices;
+	double	overhead;
+	int		indices[FLEXIBLE_ARRAY_MEMBER];
+} IndexCombination;
+
+typedef struct IndexCandidate
+{
+	Oid		relid;
+	Oid		amoid;
+	char   *amname;
+	int		nattrs;
+	int	   *attnum;
+	int		nqueryids;
+	int64  *queryids;
+	int64	nupdates;
+	int	   *queryinfoidx;
+	int		nupdatefreq;
+	double	benefit;
+	double	overhead;
+	char   *indexstmt;
+	bool	isvalid;
+	bool	isselected;
+} IndexCandidate;
+
+typedef struct IndexCombContext
+{
+	int		nqueries;
+	int		ncandidates;
+	int		maxcand;
+	double		  **benefitmat;
+	IndexCandidate *candidates;
+	QueryInfo	   *queryinfos;
+	Bitmapset	   *memberattr;
+} IndexCombContext;
 
 static bool pgqs_whereclause_tree_walker(Node *node, pgqsWalkerContext *query);
 static pgqsEntry *pgqs_process_opexpr(OpExpr *expr, pgqsWalkerContext *context);
@@ -415,6 +427,41 @@ static Size pgqs_memsize(void);
 static Size pgqs_sampled_array_size(void);
 #endif
 
+static char **pg_qualstats_index_advise_rel(char **prevarray,
+											 IndexCandidate *candidates,
+											 int ncandidates, int *nindexes,
+											 MemoryContext per_query_ctx);
+static QueryInfo *pg_qualstats_get_queries(IndexCandidate *candidates,
+											int ncandidates, int *nqueries);
+static bool pg_qulstat_is_queryid_exists(int64 *queryids, int nqueryids,
+										 int64 queryid, int *idx);
+static char *pg_qualstats_get_query(int64 queryid, int *freq);
+static IndexCandidate *pg_qualstats_get_index_combination(IndexCandidate *candidates,
+								   						  int *ncandidates);
+static IndexCandidate *pg_qualstats_add_candidate_if_not_exists(
+										IndexCandidate *candidates,
+										IndexCandidate *cand,
+										int *ncandidates, int *nmaxcand);
+static bool pg_qualstats_is_exists(IndexCandidate *candidates,
+								   int ncandidates, IndexCandidate *newcand,
+								   int *match);
+static void pg_qualstats_get_updates(IndexCandidate *candidates,
+									 int ncandidates);
+
+static bool pg_qualstats_generate_index_queries(IndexCandidate *candidates,
+												int ncandidates);
+static void pg_qualstats_fill_query_basecost(QueryInfo *queryinfos,
+											 int nqueries, int *queryidxs);
+static void pg_qualstats_plan_query(const char *query);
+static void pg_qualstats_compuete_index_benefit(IndexCombContext *context,
+												int nqueries, int *queryidxs);
+static double pg_qualstats_get_index_overhead(IndexCandidate *cand, Oid idxid);
+static bool pg_qualstats_is_index_useful(double basecost, double indexcost,
+										 double indexoverhead);
+static Oid pg_qualstats_create_hypoindex(const char *index);
+static void pg_qualstats_drop_hypoindex(Oid idxid);
+static int pg_qualstats_hypoindex_size(Oid idxid);
+static int pg_qualstats_get_best_candidate(IndexCombContext *context);
 
 /* Global Hash */
 static HTAB *pgqs_hash = NULL;
@@ -2767,139 +2814,6 @@ pgqs_planner(Query *parse, const char *query_string,
 	return result;
 }
 
-static Oid
-pg_qualstats_create_hypoindex(const char *index)
-{
-	int				ret;
-	Oid				idxid;
-	StringInfoData	hypoindex;
-
-	initStringInfo(&hypoindex);
-	appendStringInfoString(&hypoindex, "SELECT indexrelid FROM hypopg_create_index('");
-	appendStringInfoString(&hypoindex, index);
-	appendStringInfoString(&hypoindex, "')");
-
-	ret = SPI_execute(hypoindex.data, false, 0);
-
-	if (ret != SPI_OK_SELECT)
-	{
-		SPI_finish();
-		elog(ERROR, "pg_qualstat: could not create hypo index");
-	}
-
-	idxid = atooid(SPI_getvalue(SPI_tuptable->vals[0],
-				 SPI_tuptable->tupdesc,
-				 1));
-
-	Assert(OidIsValid(idxid));
-
-	return idxid;
-}
-
-static void
-pg_qualstats_drop_hypoindex(Oid idxid)
-{
-	int				ret;
-	StringInfoData	hypoindex;
-
-	initStringInfo(&hypoindex);
-	if (OidIsValid(idxid))
-		appendStringInfo(&hypoindex, "SELECT hypopg_drop_index(%d)", idxid);
-	else
-		appendStringInfo(&hypoindex, "SELECT hypopg_reset_index()");
-
-	ret = SPI_execute(hypoindex.data, false, 0);
-	if (ret != SPI_OK_SELECT)
-	{
-		SPI_finish();
-		elog(ERROR, "pg_qualstat: could not drop hypo index");
-	}
-
-#if 0
-	if (!parse_bool(SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1), &res))
-	{
-		SPI_finish();
-		elog(ERROR, "pg_qualstat: drop hypo index should return boolean");
-	}
-
-	if (!res)
-	{
-		SPI_finish();
-		elog(ERROR, "pg_qualstat: could not drop hypo index");
-	}
-#endif
-}
-
-/* Plan a given query */
-static void
-pg_qualstats_plan_query(const char *query)
-{
-	StringInfoData	explainquery;
-
-	initStringInfo(&explainquery);
-	appendStringInfoString(&explainquery, query);
-	SPI_execute(query, false, 0);
-}
-
-typedef struct QueryInfo
-{
-	double	cost;
-	int		frequency;
-	char   *query;
-} QueryInfo;
-
-/*
- * Plan all give queries to compute the total cost.
- */
-static double
-pg_qualstats_get_cost(QueryInfo *queryinfos, int nqueries, int *queryidxs)
-{
-	int		i;
-	double	cost = 0.0;
-
-	pgqs_cost_track_enable = true;
-
-	/* 
-	 * replan each query and compute the total weighted cost by multiplying
-	 * each query cost with its frequency.
-	 */
-	for (i = 0; i < nqueries; i++)
-	{
-		int		index = (queryidxs != NULL) ? queryidxs[i] : i;
-
-		pg_qualstats_plan_query(queryinfos[index].query);
-		cost += (pgqs_plan_cost * queryinfos[index].frequency);
-	}
-
-	pgqs_cost_track_enable = false;
-
-	return cost;
-}
-
-static int
-pg_qualstats_hypoindex_size(Oid idxid)
-{
-	int				ret;
-	uint64			size;
-	StringInfoData	hypoindex;
-
-	initStringInfo(&hypoindex);
-	appendStringInfo(&hypoindex, "SELECT hypopg_relation_size(%d)", idxid);
-
-	ret = SPI_execute(hypoindex.data, false, 0);
-	if (ret != SPI_OK_SELECT)
-	{
-		SPI_finish();
-		elog(ERROR, "pg_qualstat: could not get hypo index size");
-	}
-
-	size = strtou64(SPI_getvalue(SPI_tuptable->vals[0],
-					SPI_tuptable->tupdesc,
-					1), NULL, 10);
-
-	return size;
-}
-
 #if 0
 /*
  * Implement a version of knapsack algorithm to try out all the index
@@ -3098,130 +3012,6 @@ pgqsInsertOverheadHash(ModifyTable *node, pgqsWalkerContext *context)
 	PGQS_LWL_RELEASE(pgqs->querylock);
 }
 
-Datum
-pg_qualstats_overhead(PG_FUNCTION_ARGS)
-{
-	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-	TupleDesc	tupdesc;
-	Tuplestorestate *tupstore;
-	MemoryContext per_query_ctx;
-	MemoryContext oldcontext;
-	HASH_SEQ_STATUS hash_seq;
-	pgqsUpdateHashEntry *entry;
-
-	if ((!pgqs && !pgqs_backend) || !pgqs_update_hash)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("pg_qualstats must be loaded via shared_preload_libraries")));
-
-	/* check to see if caller supports us returning a tuplestore */
-	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("set-valued function called in context that cannot accept a set")));
-	if (!(rsinfo->allowedModes & SFRM_Materialize))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("materialize mode required, but it is not " \
-						"allowed in this context")));
-
-	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
-	oldcontext = MemoryContextSwitchTo(per_query_ctx);
-
-	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
-		elog(ERROR, "return type must be a row type");
-
-	tupstore = tuplestore_begin_heap(true, false, work_mem);
-	rsinfo->returnMode = SFRM_Materialize;
-	rsinfo->setResult = tupstore;
-	rsinfo->setDesc = tupdesc;
-
-	MemoryContextSwitchTo(oldcontext);
-
-	/* don't need to scan the hash table if track_constants isn't enabled */
-	if (!pgqs_track_constants)
-		return (Datum) 0;
-
-	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
-	hash_seq_init(&hash_seq, pgqs_update_hash);
-
-	while ((entry = hash_seq_search(&hash_seq)) != NULL)
-	{
-		Datum		values[5];
-		bool		nulls[5];
-		int64		queryid = entry->key.queryid;
-
-		memset(values, 0, sizeof(values));
-		memset(nulls, 0, sizeof(nulls));
-
-		values[0] = Int64GetDatumFast(queryid);
-		values[1] = ObjectIdGetDatum(entry->key.relid);
-		values[2] = Int32GetDatum(entry->key.attnum);
-		values[3] = Int32GetDatum(entry->frequency);
-		values[4] =	Int64GetDatumFast(entry->updated_rows);
-
-		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
-	}
-
-	PGQS_LWL_RELEASE(pgqs->querylock);
-
-	return (Datum) 0;
-}
-
-/*
- * Function to generate all combination of qualnodeids
- */
-Datum
-pg_qualstats_qualnodeid_combination(PG_FUNCTION_ARGS)
-{
-	ArrayType  *quals = PG_GETARG_ARRAYTYPE_P_COPY(0);
-	int64	   *qualsarray;
-	int64	   *finalquals;
-	int			ncombination;
-	int			nquals;
-	int			j;
-	int			i;
-	int			index = 0;
-	Datum	   *elem;
-	ArrayType  *result;
-
-	qualsarray = (int64 *) ARR_DATA_PTR(quals);
-	nquals = ARR_DIMS(quals)[0];
-
-	/* number of same size combinations (n * n-1) */
-	ncombination = (nquals * (nquals - 1));
-
-	finalquals = palloc0(sizeof(int64) * nquals * ncombination);
-
-	/* generate all combinations for qualnodeids */
-    for (j = 1; j <= nquals; j++) 
-	{
-        for (i = 0; i < nquals-1; i++)
-		{
-			int64	temp = qualsarray[i];
-            
-			qualsarray[i] = qualsarray[i + 1];
-            qualsarray[i + 1] = temp;
-
-            memcpy(&(finalquals[index]), &qualsarray[0], sizeof(int64) * nquals);
-			index += nquals;
-        }
-	}
-
-	elem = palloc0(sizeof(Datum) * index);
-
-	/* construct and return array. */
-	for (i = 0; i < index; i++)
-		elem[i] = Int64GetDatum(finalquals[i]);
-
-	result = construct_array_builtin(elem, index, INT8OID);
-
-	pfree(quals);
-	pfree(finalquals);
-
-	PG_RETURN_ARRAYTYPE_P(result);
-}
-
 #if 0
 
 static bool
@@ -3362,189 +3152,6 @@ print(int64 *num, int n)
 }
 #endif
 
-char *query1 =  
-		"WITH pgqs AS ("
-        "\nSELECT dbid, amname, qualid, qualnodeid,"
-        "\n    (coalesce(lrelid, rrelid), coalesce(lattnum, rattnum),"
-        "\n    opno, eval_type)::qual AS qual, queryid,"
-        "\n    round(avg(execution_count)) AS execution_count,"
-        "\n    sum(occurences) AS occurences,"
-        "\n    CASE WHEN sum(execution_count) = 0"
-        "\n      THEN 0"
-        "\n      ELSE round(sum(nbfiltered::numeric) / sum(execution_count) * 100)"
-        "\n    END AS avg_selectivity"
-        "\n  FROM pg_qualstats() q"
-        "\n  JOIN pg_catalog.pg_database d ON q.dbid = d.oid"
-        "\n  JOIN pg_catalog.pg_operator op ON op.oid = q.opno"
-        "\n  JOIN pg_catalog.pg_amop amop ON amop.amopopr = op.oid"
-        "\n  JOIN pg_catalog.pg_am am ON am.oid = amop.amopmethod"
-        "\n  WHERE d.datname = current_database()"
-        "\n  AND eval_type = 'f'"
-        "\n  AND coalesce(lrelid, rrelid) != 0"
-        "\n  GROUP BY dbid, amname, qualid, qualnodeid, lrelid, rrelid,"
-        "\n    lattnum, rattnum, opno, eval_type, queryid"
-        "\n),"
-        "\n-- apply cardinality and selectivity restrictions"
-        "\n filtered AS ("
-        "\n  SELECT (qual).relid, amname, coalesce(qualid, qualnodeid) AS parent,"
-        "\n    count(*) AS weight,"
-        "\n    (array_agg(qualnodeid),"
-        "\n     array_agg(queryid)"
-        "\n    )::adv_quals AS quals"
-        "\n  FROM pgqs"
-        "\n  GROUP BY (qual).relid, amname, parent"
-        "\n),"
-        "\n -- for each possibly AND-ed qual, build the list of included qualnodeid"
-        "\nnodes AS ("
-        "\n  SELECT p.relid, p.amname, p.parent, p.quals,"
-        "\n    c.quals AS children"
-        "\n  FROM filtered p"
-        "\n  LEFT JOIN filtered c ON (p.quals).qualnodeids @> (c.quals).qualnodeids"
-        "\n    AND p.amname = c.amname"
-        "\n    AND p.parent != c.parent"
-        "\n    AND (p.quals).qualnodeids != (c.quals).qualnodeids"
-        "\n),"
-        "\n paths AS ("
-        "\n  SELECT DISTINCT *,"
-        "\n    coalesce(pg_catalog.array_length((children).qualnodeids, 1),"
-        "\n             0) AS weight"
-        "\n  FROM nodes"
-        "\n  UNION"
-        "\n  SELECT DISTINCT p.relid, p.amname, p.parent, p.quals, c.children,"
-        "\n    coalesce(pg_catalog.array_length((c.children).qualnodeids, 1),"
-        "\n             0) AS weight"
-        "\n  FROM nodes p"
-        "\n  JOIN nodes c ON (p.children).qualnodeids @> (c.quals).qualnodeids"
-        "\n    AND (c.quals).qualnodeids IS NOT NULL"
-        "\n    AND (c.quals).qualnodeids != (p.quals).qualnodeids"
-        "\n    AND p.amname = c.amname"
-        "\n),"
-        "\n computed AS ("
-        "\n   SELECT relid, amname, parent, quals,"
-        "\n    array_agg(to_json(children) ORDER BY weight)"
-        "\n      FILTER (WHERE children IS NOT NULL) AS included,"
-        "\n    pg_catalog.array_length((quals).qualnodeids, 1)"
-        "\n        + sum(weight) AS path_weight,"
-        "\n  CASE amname WHEN 'btree' THEN 1 ELSE 2 END AS amweight"
-        "\n  FROM paths"
-        "\n  GROUP BY relid, amname, parent, quals"
-        "\n ),"
-        "\n -- compute a rank for each final paths, per relation."
-        "\n final AS ("
-        "\n  SELECT relid, amname, parent, quals, included, path_weight, amweight,"
-        "\n  row_number() OVER ("
-        "\n    PARTITION BY relid"
-        "\n    ORDER BY path_weight DESC, amweight) AS rownum"
-        "\n  FROM computed"
-        "\n)"
-        "\n -- and finally choose the higher rank final path for each relation."
-        "\n SELECT relid, amname, parent,"
-        "\n    (quals).qualnodeids as quals, (quals).queryids as queryids,"
-        "\n    included, path_weight"
-        "\n FROM final WHERE amname='btree'";
-
-char *query =
-"WITH pgqs AS ("
-"\n          SELECT dbid, min(am.oid) amoid, amname, qualid, qualnodeid,"
-"\n            (coalesce(lrelid, rrelid), coalesce(lattnum, rattnum),"
-"\n            opno, eval_type)::qual AS qual, queryid,"
-"\n            round(avg(execution_count)) AS execution_count,"
-"\n            sum(occurences) AS occurences,"
-"\n            round(sum(nbfiltered)::numeric / sum(occurences)) AS avg_filter,"
-"\n            CASE WHEN sum(execution_count) = 0"
-"\n              THEN 0"
-"\n              ELSE round(sum(nbfiltered::numeric) / sum(execution_count) * 100)"
-"\n            END AS avg_selectivity"
-"\n          FROM pg_qualstats() q"
-"\n          JOIN pg_catalog.pg_database d ON q.dbid = d.oid"
-"\n          JOIN pg_catalog.pg_operator op ON op.oid = q.opno"
-"\n          JOIN pg_catalog.pg_amop amop ON amop.amopopr = op.oid"
-"\n          JOIN pg_catalog.pg_am am ON am.oid = amop.amopmethod"
-"\n          WHERE d.datname = current_database()"
-"\n          AND eval_type = 'f'"
-"\n          AND coalesce(lrelid, rrelid) != 0"
-"\n          GROUP BY dbid, amname, qualid, qualnodeid, lrelid, rrelid,"
-"\n            lattnum, rattnum, opno, eval_type, queryid ORDER BY lattnum, rattnum"
-"\n        ),"
-"\n        -- apply cardinality and selectivity restrictions"
-"\n        filtered AS ("
-"\n          SELECT (qual).relid, min(amoid) amoid, amname, coalesce(qualid, qualnodeid) AS parent,"
-"\n            count(*) AS weight,"
-"\n            array_agg(DISTINCT((qual).attnum) ORDER BY ((qual).attnum)) AS attnumlist,"
-"\n            array_agg(qualnodeid) AS qualidlist,"
-"\n            array_agg(DISTINCT(queryid)) AS queryidlist"
-"\n          FROM pgqs"
-"\n          GROUP BY (qual).relid, amname, parent"
-"\n        )"
-"\nSELECT * FROM filtered where amname !='hash' ORDER BY relid, amname DESC, cardinality(attnumlist);";
-
-typedef struct IndexCandidate
-{
-	Oid		relid;
-	Oid		amoid;
-	char   *amname;
-	int		nattrs;
-	int	   *attnum;
-	int		nqueryids;
-	int64  *queryids;
-	int64	nupdates;
-	int	   *queryinfoidx;
-	int		nupdatefreq;
-	double	benefit;
-	double	overhead;
-	char   *indexstmt;
-	bool	isvalid;
-	bool	isselected;
-} IndexCandidate;
-
-typedef struct IndexCombContext
-{
-	int		nqueries;
-	int		ncandidates;
-	int		maxcand;
-	double		  **benefitmat;
-	IndexCandidate *candidates;
-	QueryInfo	   *queryinfos;
-	Bitmapset	   *memberattr;
-} IndexCombContext;
-
-static void
-print_candidates(IndexCandidate *candidates, int ncandidates)
-{
-	int			i;
-
-	for (i = 0; i < ncandidates; i++)
-	{
-		elog(NOTICE, "Index: %s: update: %lld freq: %d valid:%d", candidates[i].indexstmt,
-			 (long long int) candidates[i].nupdates, candidates[i].nupdatefreq, candidates[i].isvalid);
-	}
-}
-
-static void
-print_benefit_matrix(IndexCombContext *context)
-{
-	IndexCandidate *candidates = context->candidates;
-	QueryInfo	   *queryinfos = context->queryinfos;
-	double		  **benefitmat = context->benefitmat;
-	int 	ncandidates = context->ncandidates;
-	int		i;
-	StringInfoData	row;
-
-	initStringInfo(&row);
-
-	appendStringInfo(&row, "======Benefit Matrix Start=======\n");
-	for (i = 0; i < ncandidates; i++)
-	{
-		int	j;
-
-		for (j = 0; j < context->nqueries; j++)
-			appendStringInfo(&row, "%f\t", benefitmat[j][i]);
-		appendStringInfo(&row, "\n");
-	}
-	appendStringInfo(&row, "======Benefit Matrix End=======\n");
-	elog(NOTICE, "%s", row.data);
-	pfree(row.data);
-}
 
 #if 0
 /* Given two sorted array check whether array a is subarray of array b. */
@@ -3602,117 +3209,7 @@ pg_qualstats_mark_duplicates(IndexCandidate *candidates, int ncandidates)
 }
 #endif
 
-static bool
-pg_qulstat_is_queryid_exists(int64 *queryids, int nqueryids, int64 queryid,
-							 int *idx)
-{
-	int			i;
 
-	for (i = 0; i < nqueryids ; i++)
-	{
-		if (queryids[i] == queryid)
-		{
-			*idx = i;
-			return true;
-		}
-	}
-
-	return false;
-}
-
-static char *
-pg_qualstats_get_query(int64 queryid, int *freq)
-{
-	pgqsQueryStringEntry   *entry;
-	pgqsQueryStringHashKey	queryKey;
-	char   *query = NULL;
-	bool	found;
-
-	queryKey.queryid = queryid;
-
-	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
-	entry = hash_search_with_hash_value(pgqs_query_examples_hash, &queryKey,
-										queryid, HASH_FIND, &found);
-	if (!found)
-		return NULL;
-
-	if (entry->isExplain)
-	{
-		query = palloc0(strlen(entry->querytext) + 1);
-		strcpy(query, entry->querytext);
-	}
-	else
-	{
-		int		explainlen = strlen("EXPLAIN ");
-
-		query = palloc0(explainlen + strlen(entry->querytext) + 1);
-		strcpy(query, "EXPLAIN ");
-		strcpy(query + explainlen, entry->querytext);
-	}
-
-	*freq = entry->frequency;
-
-	PGQS_LWL_RELEASE(pgqs->querylock);
-
-	return query;
-}
-
-static QueryInfo *
-pg_qualstats_get_queries(IndexCandidate *candidates, int ncandidates,
-						 int *nqueries)
-{
-	int			i;
-	int			j;
-	int			nids = 0;
-	int			maxids = ncandidates;
-	int64	   *queryids;
-	QueryInfo  *queryinfos;
-
-	queryids = palloc(maxids * sizeof(int64));
-
-	for (i = 0; i < ncandidates; i++)
-	{
-		IndexCandidate *cand = &candidates[i];
-
-		cand->queryinfoidx = palloc(cand->nqueryids * sizeof(int));
-
-		for (j = 0; j < cand->nqueryids ; j++)
-		{
-			int index = -1;
-
-			if (pg_qulstat_is_queryid_exists(queryids, nids, cand->queryids[j],
-											 &index))
-			{
-				cand->queryinfoidx[j] = index;
-				continue;
-			}
-
-			if (nids >= maxids)
-			{
-				maxids *= 2;
-				queryids = repalloc(queryids, maxids * sizeof(int64));
-			}
-			queryids[nids] = cand->queryids[j];
-			cand->queryinfoidx[j] = nids;
-			nids++;
-		}
-	}
-
-	queryinfos = (QueryInfo *) palloc(nids * sizeof(QueryInfo));
-
-	for (i = 0; i < nids; i++)
-	{
-		queryinfos[i].query = pg_qualstats_get_query(queryids[i],
-													 &queryinfos[i].frequency);
-		elog(NOTICE, "query %d: %s-freq:%d", i, queryinfos[i].query, queryinfos[i].frequency);
-	}
-
-	pfree(queryids);
-
-	*nqueries = nids;
-
-	return queryinfos;
-}
 
 #if 0
 /* 
@@ -3776,306 +3273,7 @@ pg_qualstats_idx_updates(Oid dbid, Oid relid, int *attrs, int nattr)
 }
 #endif
 
-static double
-pg_qualstats_get_index_overhead(IndexCandidate *cand, Oid idxid)
-{
-	double		T;
-	double		index_pages;
-	double		update_io_cost;
-	double		update_cpu_cost;
-	double		overhead;
-	int			navgupdate = cand->nupdates;
-	int			nfrequency = cand->nupdatefreq;
-	int			size = pg_qualstats_hypoindex_size(idxid);
-
-	/* total index pages. */
-	T  = size / BLCKSZ;
-
-	/* 
-	 * We are commputing the page acccess cost and tuple cost based on total
-	 * accumulated tuple count so we don't need to use update query frequency.
-	 */
-	index_pages = (2 * T * navgupdate) / (2 * T + navgupdate);
-	update_io_cost = (index_pages * nfrequency) * random_page_cost;
-	update_cpu_cost = (navgupdate * nfrequency) * cpu_tuple_cost;
-
-	overhead = update_io_cost + update_cpu_cost;
-
-	/* XXX overhead of index based on number of size and number of columns. */
-	overhead += T;
-	overhead += (cand->nattrs * 1000);
-
-	return overhead;
-}
-
-/*
- * Process each index candidate and compute the number of updated tuple for
- * each index candidates based on the index column update counts.
- */
-static void
-pg_qualstats_get_updates(IndexCandidate *candidates, int ncandidates)
-{
-	HASH_SEQ_STATUS 		hash_seq;
-	int64	   *qrueryid_done;
-	int64		nupdates = 0;
-	int			nupdatefreq = 0;
-	int			nqueryiddone = 0;
-	int			maxqueryids = 50;
-	int			i;
-
-	qrueryid_done = palloc(sizeof(int64) * maxqueryids);
-
-	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
-
-	for (i = 0; i < ncandidates; i++)
-	{
-		pgqsUpdateHashEntry	   *entry;
-		IndexCandidate		   *cand = &candidates[i];
-
-		hash_seq_init(&hash_seq, pgqs_update_hash);
-
-		while ((entry = hash_seq_search(&hash_seq)) != NULL)
-		{
-			int			i;
-
-			if (entry->key.dbid != MyDatabaseId)
-				continue;
-			if (entry->key.relid != cand->relid)
-				continue;
-			for (i = 0; i < cand->nattrs; i++)
-			{
-				if (entry->key.attnum == cand->attnum[i])
-					break;
-			}
-
-			if (i == cand->nattrs)
-				continue;
-
-			for (i = 0; i < nqueryiddone; i++)
-			{
-				if (entry->key.queryid == qrueryid_done[i])
-					break;
-			}
-			if (i < nqueryiddone)
-				continue;
-
-			if (nqueryiddone == maxqueryids)
-			{
-				maxqueryids *= 2;
-				qrueryid_done = repalloc(qrueryid_done, sizeof(int64) * maxqueryids);
-			}
-			qrueryid_done[nqueryiddone++] = entry->key.queryid;
-
-			/* average update per query. */
-			nupdates += entry->updated_rows;
-			nupdatefreq += entry->frequency;
-		}
-
-		if (nupdates > 0)
-		{
-			cand->nupdates = nupdates / nupdatefreq;
-			cand->nupdatefreq = nupdatefreq;
-		}
-
-		nupdates = 0;
-		nupdatefreq = 0;
-		nqueryiddone = 0;
-	}
-
-	PGQS_LWL_RELEASE(pgqs->querylock);
-
-}
-
-static bool
-pg_qualstats_generate_index_queries(IndexCandidate *candidates, int ncandidates)
-{
-	int		i;
-	int		j;
-	Relation	relation;
-	StringInfoData buf;
-
-	relation = RelationIdGetRelation(candidates[0].relid);
-	if (relation == NULL)
-		return false;
-
-	initStringInfo(&buf);
-
-	for (i = 0; i < ncandidates; i++)
-	{
-		IndexCandidate *cand = &candidates[i];
-
-		appendStringInfo(&buf, "CREATE INDEX ON %s USING %s (",
-						 relation->rd_rel->relname.data,
-						 cand->amname);
-
-		for (j = 0; j < cand->nattrs; j++)
-		{
-			if (j > 0)
-				appendStringInfo(&buf, ",");
-			appendStringInfo(&buf, "%s", relation->rd_att->attrs[cand->attnum[j] - 1].attname.data);
-		}
-
-		appendStringInfo(&buf, ");");
-		cand->indexstmt = palloc(buf.len + 1);
-		strcpy(cand->indexstmt, buf.data);
-		resetStringInfo(&buf);
-	}
-	RelationClose(relation);
-	return true;
-}
-
-static bool
-pg_qualstats_is_exists(IndexCandidate *candidates, int ncandidates,
-					   IndexCandidate *newcand, int *match)
-{
-	int		i;
-	int		j;
-
-	for (i = 0; i < ncandidates; i++)
-	{
-		IndexCandidate *oldcand = &candidates[i];
-
-		if (oldcand->nattrs != newcand->nattrs)
-			continue;
-		if (oldcand->amoid != newcand->amoid)
-			continue;
-
-		for (j = 0; j < oldcand->nattrs; j++)
-		{
-			if (oldcand->attnum[j] != newcand->attnum[j])
-				break;
-		}
-
-		if (j == oldcand->nattrs)
-		{
-			*match = i;
-			return true;
-		}
-	}
-
-	return false;
-}
-
-static IndexCandidate *
-pg_qualstats_add_candidate_if_not_exists(IndexCandidate *candidates,
-										 IndexCandidate *cand,
-										 int *ncandidates, int *nmaxcand)
-{
-	IndexCandidate *finalcand = candidates;
-	int				match = -1;
-
-	if (!pg_qualstats_is_exists(candidates, *ncandidates, cand, &match))
-	{
-		if (*ncandidates == *nmaxcand)
-		{
-			(*nmaxcand) *= 2;
-			finalcand = repalloc(finalcand,
-								 sizeof(IndexCandidate) * (*nmaxcand));
-		}
-		memcpy(&finalcand[*ncandidates], cand, sizeof(IndexCandidate));
-		(*ncandidates)++;
-	}
-	else
-	{
-		IndexCandidate *oldcand = &candidates[match];
-		int		i;
-		int 	j;
-		int		nqueryidx = oldcand->nqueryids;
-		bool	isfirst = true;
-
-		for (i = 0; i < cand->nqueryids; i++)
-		{
-			for (j = 0; j < oldcand->nqueryids; j++)
-			{
-				if (cand->queryinfoidx[i] == oldcand->queryinfoidx[j])
-					break;
-			}
-			/* not found */
-			if (j == oldcand->nqueryids)
-			{
-				if (isfirst)
-				{
-					int		newsize = cand->nqueryids + oldcand->nqueryids;
-					int	   *queryinfoidx;
-
-					/* 
-						* Allocate new memory instead of repallocing as
-						* multiple candidate which are derived from same
-						* parent might share same memory.
-						*/
-					queryinfoidx = (int *) palloc(newsize * sizeof(int));
-					memcpy(queryinfoidx, oldcand->queryinfoidx,
-							sizeof(int) * oldcand->nqueryids);
-					oldcand->queryinfoidx = queryinfoidx;
-
-					isfirst = false;
-				}
-				oldcand->queryinfoidx[nqueryidx++] = cand->queryinfoidx[i];
-			}
-		}
-		pfree(cand->attnum);
-		oldcand->nqueryids = nqueryidx;
-	}
-
-	return finalcand;
-}
-
-/*
- * From given index candidate list generate single column and two columns
- * index candidate array.
- */
-static IndexCandidate *
-pg_qualstats_get_index_combination(IndexCandidate *candidates,
-								   int *ncandidates)
-{
-	IndexCandidate *finalcand;
-	IndexCandidate	cand;
-	int				nfinalcand = 0;
-	int				nmaxcand = *ncandidates;
-	int				i;
-	int				j;
-	int				k = 0;
-
-	finalcand = palloc(sizeof(IndexCandidate) * nmaxcand);
-
-	/* genrate all one and tow length index combinations. */
-	for (i = 0; i < *ncandidates; i++)
-	{
-		for (j = 0; j < candidates[i].nattrs; j++)
-		{
-			/* generae one column index */
-			memcpy(&cand, &candidates[i], sizeof(IndexCandidate));
-			cand.nattrs = 1;
-			cand.attnum = (int *) palloc0(sizeof(int));
-			cand.attnum[0] = candidates[i].attnum[j];
-
-			finalcand = pg_qualstats_add_candidate_if_not_exists(finalcand,
-																 &cand,
-																 &nfinalcand,
-																 &nmaxcand);
-
-			/* generate two column indexes. */
-			for (k = 0; k < candidates[i].nattrs; k++)
-			{
-				if (k == j)
-					continue;
-
-				cand.nattrs = 2;
-				cand.attnum = (int *) palloc0(sizeof(int) * 2);
-
-				cand.attnum[0] = candidates[i].attnum[j];
-				cand.attnum[1] = candidates[i].attnum[k];
-
-				finalcand = pg_qualstats_add_candidate_if_not_exists(finalcand,
-												&cand, &nfinalcand, &nmaxcand);
-			}
-		}
-	}
-
-	*ncandidates = nfinalcand;
-
-	return finalcand;
-}
+#if 0
 
 static void
 pg_qualstats_bms_add_candattr(IndexCombContext *context, IndexCandidate *cand)
@@ -4140,6 +3338,34 @@ pg_qualstats_compare_path(IndexCombination *path1,
 }
 
 int count = 0;
+
+/*
+ * Plan all give queries to compute the total cost.
+ */
+static double
+pg_qualstats_get_cost(QueryInfo *queryinfos, int nqueries, int *queryidxs)
+{
+	int		i;
+	double	cost = 0.0;
+
+	pgqs_cost_track_enable = true;
+
+	/* 
+	 * replan each query and compute the total weighted cost by multiplying
+	 * each query cost with its frequency.
+	 */
+	for (i = 0; i < nqueries; i++)
+	{
+		int		index = (queryidxs != NULL) ? queryidxs[i] : i;
+
+		pg_qualstats_plan_query(queryinfos[index].query);
+		cost += (pgqs_plan_cost * queryinfos[index].frequency);
+	}
+
+	pgqs_cost_track_enable = false;
+
+	return cost;
+}
 
 /*
  * Perform a exhaustive search with different index combinations.
@@ -4299,261 +3525,77 @@ pg_qualstats_mark_useless_candidate(IndexCandidate *candidates,
 			cand->isvalid = false;
 	}
 }
+#endif
 
-/*
- * Plan all give queries to compute the total cost.
- */
+char *query =
+"WITH pgqs AS ("
+"\n          SELECT dbid, min(am.oid) amoid, amname, qualid, qualnodeid,"
+"\n            (coalesce(lrelid, rrelid), coalesce(lattnum, rattnum),"
+"\n            opno, eval_type)::qual AS qual, queryid,"
+"\n            round(avg(execution_count)) AS execution_count,"
+"\n            sum(occurences) AS occurences,"
+"\n            round(sum(nbfiltered)::numeric / sum(occurences)) AS avg_filter,"
+"\n            CASE WHEN sum(execution_count) = 0"
+"\n              THEN 0"
+"\n              ELSE round(sum(nbfiltered::numeric) / sum(execution_count) * 100)"
+"\n            END AS avg_selectivity"
+"\n          FROM pg_qualstats() q"
+"\n          JOIN pg_catalog.pg_database d ON q.dbid = d.oid"
+"\n          JOIN pg_catalog.pg_operator op ON op.oid = q.opno"
+"\n          JOIN pg_catalog.pg_amop amop ON amop.amopopr = op.oid"
+"\n          JOIN pg_catalog.pg_am am ON am.oid = amop.amopmethod"
+"\n          WHERE d.datname = current_database()"
+"\n          AND eval_type = 'f'"
+"\n          AND coalesce(lrelid, rrelid) != 0"
+"\n          GROUP BY dbid, amname, qualid, qualnodeid, lrelid, rrelid,"
+"\n            lattnum, rattnum, opno, eval_type, queryid ORDER BY lattnum, rattnum"
+"\n        ),"
+"\n        -- apply cardinality and selectivity restrictions"
+"\n        filtered AS ("
+"\n          SELECT (qual).relid, min(amoid) amoid, amname, coalesce(qualid, qualnodeid) AS parent,"
+"\n            count(*) AS weight,"
+"\n            array_agg(DISTINCT((qual).attnum) ORDER BY ((qual).attnum)) AS attnumlist,"
+"\n            array_agg(qualnodeid) AS qualidlist,"
+"\n            array_agg(DISTINCT(queryid)) AS queryidlist"
+"\n          FROM pgqs"
+"\n          GROUP BY (qual).relid, amname, parent"
+"\n        )"
+"\nSELECT * FROM filtered where amname !='hash' ORDER BY relid, amname DESC, cardinality(attnumlist);";
+
 static void
-pg_qualstats_fill_query_basecost(QueryInfo *queryinfos, int nqueries, int *queryidxs)
+print_candidates(IndexCandidate *candidates, int ncandidates)
 {
-	int		i;
-
-	pgqs_cost_track_enable = true;
-
-	/* 
-	 * plan each query and get its cost
-	 */
-	for (i = 0; i < nqueries; i++)
-	{
-		int		index = (queryidxs != NULL) ? queryidxs[i] : i;
-
-		pg_qualstats_plan_query(queryinfos[index].query);
-		queryinfos[i].cost = pgqs_plan_cost;
-	}
-
-	pgqs_cost_track_enable = false;
-}
-
-static bool
-pg_qualstats_is_index_useful(double basecost, double indexcost,
-							 double indexoverhead)
-{
-	if (indexcost + indexoverhead < basecost)
-		return true;
-	return false;
-}
-/*
- * check individiual index benefit for each query and fill in the matrix.
- */
-static void
-pg_qualstats_compuete_index_benefit(IndexCombContext *context,
-									int nqueries, int *queryidxs)
-{
-	IndexCandidate *candidates = context->candidates;
-	QueryInfo  *queryinfos = context->queryinfos;
-	double	  **benefit = context->benefitmat;
-	int 		ncandidates = context->ncandidates;
 	int			i;
-
-	pgqs_cost_track_enable = true;
 
 	for (i = 0; i < ncandidates; i++)
 	{
-		IndexCandidate *cand = &candidates[i];
-		Oid		idxid;
-		int		j;
-
-		/* 
-		 * If candiate is already identified as it has no value or it is
-		 * seletced in the final combination then in the recheck its benefits.
-		 */
-		if (!cand->isvalid || cand->isselected)
-			continue;
-
-		idxid = pg_qualstats_create_hypoindex(cand->indexstmt);
-
-		/* If candidate overhead is not yet computed then do it now */
-		if (cand->overhead == 0)
-			cand->overhead = pg_qualstats_get_index_overhead(cand, idxid);
-
-		/* 
-		 * replan each query and compute the total weighted cost by multiplying
-		 * each query cost with its frequency.
-		 */
-		for (j = 0; j < nqueries; j++)
-		{
-			int		index = (queryidxs != NULL) ? queryidxs[j] : j;
-
-			pg_qualstats_plan_query(queryinfos[index].query);
-
-			if (pg_qualstats_is_index_useful(queryinfos[index].cost,
-										 	 pgqs_plan_cost, cand->overhead))
-			{
-				benefit[index][i] = queryinfos[index].cost - pgqs_plan_cost;
-			}
-			else
-				benefit[index][i] = 0;
-		}
-
-		pg_qualstats_drop_hypoindex(idxid);
+		elog(NOTICE, "Index: %s: update: %lld freq: %d valid:%d", candidates[i].indexstmt,
+			 (long long int) candidates[i].nupdates, candidates[i].nupdatefreq, candidates[i].isvalid);
 	}
-
-	pgqs_cost_track_enable = false;
 }
 
-static int
-pg_qualstats_get_best_candidate(IndexCombContext *context)
+static void
+print_benefit_matrix(IndexCombContext *context)
 {
-	IndexCandidate *candidates = context->candidates;
-	QueryInfo	   *queryinfos = context->queryinfos;
 	double		  **benefitmat = context->benefitmat;
 	int 	ncandidates = context->ncandidates;
 	int		i;
-	int		bestcandidx = -1;
-	double	max_benefit = 0;
-	double	benefit;
+	StringInfoData	row;
 
+	initStringInfo(&row);
+
+	appendStringInfo(&row, "======Benefit Matrix Start=======\n");
 	for (i = 0; i < ncandidates; i++)
 	{
 		int	j;
 
-		if (!candidates[i].isvalid || candidates[i].isselected)
-			continue;
-
-		benefit = 0;
-
 		for (j = 0; j < context->nqueries; j++)
-			benefit += (benefitmat[j][i] * queryinfos[j].frequency);
-
-		if (benefit == 0)
-		{
-			candidates[i].isvalid = false;
-			continue;
-		}
-
-		if (benefit > max_benefit)
-		{
-			max_benefit = benefit;
-			bestcandidx = i;
-		}
+			appendStringInfo(&row, "%f\t", benefitmat[j][i]);
+		appendStringInfo(&row, "\n");
 	}
-
-	return bestcandidx;
-}
-
-static char **
-pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
-							  int ncandidates, int *nindexes,
-							  MemoryContext per_query_ctx)
-{
-	char	  **index_array = NULL;
-	QueryInfo  *queryinfos;
-	int			nqueries;
-	int			i;
-	int			prev_indexes = *nindexes;
-	IndexCandidate *finalcand;
-	IndexCombination   *path;
-	IndexCombContext		context;
-	MemoryContext oldcontext;
-
-	elog(NOTICE, "Candidate Relation %d", candidates[0].relid);
-
-	queryinfos = pg_qualstats_get_queries(candidates, ncandidates, &nqueries);
-
-	/* genrate all one and two length index combinations. */
-	finalcand = pg_qualstats_get_index_combination(candidates, &ncandidates);
-	pg_qualstats_get_updates(finalcand, ncandidates);
-	oldcontext = MemoryContextSwitchTo(per_query_ctx);
-	if (!pg_qualstats_generate_index_queries(finalcand, ncandidates))
-		return prevarray;
-
-	MemoryContextSwitchTo(oldcontext);
-	//pg_qualstats_mark_useless_candidate(finalcand, ncandidates, queryinfos);
-	count = 0;
-	print_candidates(finalcand, ncandidates);
-
-	context.candidates = finalcand;
-	context.ncandidates = ncandidates;
-	context.queryinfos = queryinfos;
-	context.nqueries = nqueries;
-	context.maxcand = ncandidates;//Min(ncandidates, 15);
-	context.memberattr = NULL;
-
-	/* allocate memory for benefit matrix */
-	context.benefitmat = (double **) palloc0(nqueries * sizeof(double *));
-	for (i = 0; i < nqueries; i++)
-		context.benefitmat[i] = (double *) palloc0(ncandidates * sizeof(double));
-
-	path = palloc0(sizeof(IndexCombination) + ncandidates * sizeof(int));
-
-	/*
-	 * First plan query query without any new index and set base cost for each
-	 * query.
-	 */
-	pg_qualstats_fill_query_basecost(queryinfos, nqueries, NULL);
-
-	while (true)
-	{
-		int bestcand;
-
-		/*
-		 * Create every index one at a time and replan every query and fill
-		 * intial values of benefit matrix.
-		 */
-		pg_qualstats_compuete_index_benefit(&context, nqueries, NULL);
-		print_benefit_matrix(&context);
-
-		/*
-		 * Compute the overall benefit of all the candidate and get the  best
-		 * candidate.
-		 */
-		bestcand = pg_qualstats_get_best_candidate(&context);
-		if (bestcand == -1)
-			break;
-
-		/*
-		 * Add best candidates to the path and create the hypoindex for this
-		 * candidate and reiterate for the next round.  For this index we
-		 * create hypoindex and do not drop so that next round assume this
-		 * index is already exist now and check benefit of each candidate by
-		 * assuming this candidate is already finalized.
-		 */
-		pg_qualstats_create_hypoindex(finalcand[bestcand].indexstmt);
-
-		/* 
-		 * Best candidate is seleted so update the query base cost as if this
-		 * index exists before going for next iteration.
-		 */
-		for (i = 0; i < context.nqueries; i++)
-			queryinfos[i].cost -= context.benefitmat[i][bestcand];
-
-		path->indices[path->nindices++] = bestcand;
-		finalcand[bestcand].isselected = true;
-	}
-
-	pg_qualstats_drop_hypoindex(InvalidOid);
-
-#if 0
-	path = pg_qualstats_compare_comb(&context, 0, 0);
-
-	/* 
-	 * If path doesn't include all the candidates then try to add missing
-	 * candidates with greedy approach.
-	 */
-	if (path->nindices < ncandidates)
-		pg_qualstats_complete_comb(&context, path);
-
-	elog(NOTICE, "ncandidates=%d combination tested=%d", ncandidates, count);
-#endif
-
-	if (path->nindices == 0)
-		return prevarray;
-
-	prev_indexes = *nindexes;
-	(*nindexes) += path->nindices;
-
-	oldcontext = MemoryContextSwitchTo(per_query_ctx);
-	if (prev_indexes == 0)
-		index_array = (char **) palloc(path->nindices * sizeof(char *));
-	else
-		index_array = (char ** ) repalloc(prevarray, (*nindexes) * sizeof(char *));
-	MemoryContextSwitchTo(oldcontext);
-
-	/* construct and return array. */
-	for (i = 0; i < path->nindices; i++)
-		index_array[prev_indexes + i] = finalcand[path->indices[i]].indexstmt;
-
-	return index_array;
+	appendStringInfo(&row, "======Benefit Matrix End=======\n");
+	elog(NOTICE, "%s", row.data);
+	pfree(row.data);
 }
 
 Datum
@@ -4659,4 +3701,769 @@ pg_qualstats_test_index_advise(PG_FUNCTION_ARGS)
 	result = construct_array_builtin(key_datums, nindexes, TEXTOID);
 
 	PG_RETURN_ARRAYTYPE_P(result);
+}
+
+static char **
+pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
+							  int ncandidates, int *nindexes,
+							  MemoryContext per_query_ctx)
+{
+	char	  **index_array = NULL;
+	QueryInfo  *queryinfos;
+	int			nqueries;
+	int			i;
+	int			prev_indexes = *nindexes;
+	IndexCandidate *finalcand;
+	IndexCombination   *path;
+	IndexCombContext		context;
+	MemoryContext oldcontext;
+
+	elog(NOTICE, "Candidate Relation %d", candidates[0].relid);
+
+	queryinfos = pg_qualstats_get_queries(candidates, ncandidates, &nqueries);
+
+	/* genrate all one and two length index combinations. */
+	finalcand = pg_qualstats_get_index_combination(candidates, &ncandidates);
+	pg_qualstats_get_updates(finalcand, ncandidates);
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+	if (!pg_qualstats_generate_index_queries(finalcand, ncandidates))
+		return prevarray;
+
+	MemoryContextSwitchTo(oldcontext);
+	print_candidates(finalcand, ncandidates);
+
+	context.candidates = finalcand;
+	context.ncandidates = ncandidates;
+	context.queryinfos = queryinfos;
+	context.nqueries = nqueries;
+	context.maxcand = ncandidates;//Min(ncandidates, 15);
+	context.memberattr = NULL;
+
+	/* allocate memory for benefit matrix */
+	context.benefitmat = (double **) palloc0(nqueries * sizeof(double *));
+	for (i = 0; i < nqueries; i++)
+		context.benefitmat[i] = (double *) palloc0(ncandidates * sizeof(double));
+
+	path = palloc0(sizeof(IndexCombination) + ncandidates * sizeof(int));
+
+	/*
+	 * First plan query query without any new index and set base cost for each
+	 * query.
+	 */
+	pg_qualstats_fill_query_basecost(queryinfos, nqueries, NULL);
+
+	while (true)
+	{
+		int bestcand;
+
+		/*
+		 * Create every index one at a time and replan every query and fill
+		 * intial values of benefit matrix.
+		 */
+		pg_qualstats_compuete_index_benefit(&context, nqueries, NULL);
+		print_benefit_matrix(&context);
+
+		/*
+		 * Compute the overall benefit of all the candidate and get the  best
+		 * candidate.
+		 */
+		bestcand = pg_qualstats_get_best_candidate(&context);
+		if (bestcand == -1)
+			break;
+
+		/*
+		 * Add best candidates to the path and create the hypoindex for this
+		 * candidate and reiterate for the next round.  For this index we
+		 * create hypoindex and do not drop so that next round assume this
+		 * index is already exist now and check benefit of each candidate by
+		 * assuming this candidate is already finalized.
+		 */
+		pg_qualstats_create_hypoindex(finalcand[bestcand].indexstmt);
+
+		/* 
+		 * Best candidate is seleted so update the query base cost as if this
+		 * index exists before going for next iteration.
+		 */
+		for (i = 0; i < context.nqueries; i++)
+			queryinfos[i].cost -= context.benefitmat[i][bestcand];
+
+		path->indices[path->nindices++] = bestcand;
+		finalcand[bestcand].isselected = true;
+	}
+
+	pg_qualstats_drop_hypoindex(InvalidOid);
+
+#if 0
+	path = pg_qualstats_compare_comb(&context, 0, 0);
+
+	/* 
+	 * If path doesn't include all the candidates then try to add missing
+	 * candidates with greedy approach.
+	 */
+	if (path->nindices < ncandidates)
+		pg_qualstats_complete_comb(&context, path);
+
+	elog(NOTICE, "ncandidates=%d combination tested=%d", ncandidates, count);
+#endif
+
+	if (path->nindices == 0)
+		return prevarray;
+
+	prev_indexes = *nindexes;
+	(*nindexes) += path->nindices;
+
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+	if (prev_indexes == 0)
+		index_array = (char **) palloc(path->nindices * sizeof(char *));
+	else
+		index_array = (char ** ) repalloc(prevarray, (*nindexes) * sizeof(char *));
+	MemoryContextSwitchTo(oldcontext);
+
+	/* construct and return array. */
+	for (i = 0; i < path->nindices; i++)
+		index_array[prev_indexes + i] = finalcand[path->indices[i]].indexstmt;
+
+	return index_array;
+}
+
+static QueryInfo *
+pg_qualstats_get_queries(IndexCandidate *candidates, int ncandidates,
+						 int *nqueries)
+{
+	int			i;
+	int			j;
+	int			nids = 0;
+	int			maxids = ncandidates;
+	int64	   *queryids;
+	QueryInfo  *queryinfos;
+
+	queryids = palloc(maxids * sizeof(int64));
+
+	for (i = 0; i < ncandidates; i++)
+	{
+		IndexCandidate *cand = &candidates[i];
+
+		cand->queryinfoidx = palloc(cand->nqueryids * sizeof(int));
+
+		for (j = 0; j < cand->nqueryids ; j++)
+		{
+			int index = -1;
+
+			if (pg_qulstat_is_queryid_exists(queryids, nids, cand->queryids[j],
+											 &index))
+			{
+				cand->queryinfoidx[j] = index;
+				continue;
+			}
+
+			if (nids >= maxids)
+			{
+				maxids *= 2;
+				queryids = repalloc(queryids, maxids * sizeof(int64));
+			}
+			queryids[nids] = cand->queryids[j];
+			cand->queryinfoidx[j] = nids;
+			nids++;
+		}
+	}
+
+	queryinfos = (QueryInfo *) palloc(nids * sizeof(QueryInfo));
+
+	for (i = 0; i < nids; i++)
+	{
+		queryinfos[i].query = pg_qualstats_get_query(queryids[i],
+													 &queryinfos[i].frequency);
+		elog(NOTICE, "query %d: %s-freq:%d", i, queryinfos[i].query, queryinfos[i].frequency);
+	}
+
+	pfree(queryids);
+
+	*nqueries = nids;
+
+	return queryinfos;
+}
+
+static bool
+pg_qulstat_is_queryid_exists(int64 *queryids, int nqueryids, int64 queryid,
+							 int *idx)
+{
+	int			i;
+
+	for (i = 0; i < nqueryids ; i++)
+	{
+		if (queryids[i] == queryid)
+		{
+			*idx = i;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static char *
+pg_qualstats_get_query(int64 queryid, int *freq)
+{
+	pgqsQueryStringEntry   *entry;
+	pgqsQueryStringHashKey	queryKey;
+	char   *query = NULL;
+	bool	found;
+
+	queryKey.queryid = queryid;
+
+	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
+	entry = hash_search_with_hash_value(pgqs_query_examples_hash, &queryKey,
+										queryid, HASH_FIND, &found);
+	if (!found)
+		return NULL;
+
+	if (entry->isExplain)
+	{
+		query = palloc0(strlen(entry->querytext) + 1);
+		strcpy(query, entry->querytext);
+	}
+	else
+	{
+		int		explainlen = strlen("EXPLAIN ");
+
+		query = palloc0(explainlen + strlen(entry->querytext) + 1);
+		strcpy(query, "EXPLAIN ");
+		strcpy(query + explainlen, entry->querytext);
+	}
+
+	*freq = entry->frequency;
+
+	PGQS_LWL_RELEASE(pgqs->querylock);
+
+	return query;
+}
+
+/*
+ * From given index candidate list generate single column and two columns
+ * index candidate array.
+ */
+static IndexCandidate *
+pg_qualstats_get_index_combination(IndexCandidate *candidates,
+								   int *ncandidates)
+{
+	IndexCandidate *finalcand;
+	IndexCandidate	cand;
+	int				nfinalcand = 0;
+	int				nmaxcand = *ncandidates;
+	int				i;
+	int				j;
+	int				k = 0;
+
+	finalcand = palloc(sizeof(IndexCandidate) * nmaxcand);
+
+	/* genrate all one and tow length index combinations. */
+	for (i = 0; i < *ncandidates; i++)
+	{
+		for (j = 0; j < candidates[i].nattrs; j++)
+		{
+			/* generae one column index */
+			memcpy(&cand, &candidates[i], sizeof(IndexCandidate));
+			cand.nattrs = 1;
+			cand.attnum = (int *) palloc0(sizeof(int));
+			cand.attnum[0] = candidates[i].attnum[j];
+
+			finalcand = pg_qualstats_add_candidate_if_not_exists(finalcand,
+																 &cand,
+																 &nfinalcand,
+																 &nmaxcand);
+
+			/* generate two column indexes. */
+			for (k = 0; k < candidates[i].nattrs; k++)
+			{
+				if (k == j)
+					continue;
+
+				cand.nattrs = 2;
+				cand.attnum = (int *) palloc0(sizeof(int) * 2);
+
+				cand.attnum[0] = candidates[i].attnum[j];
+				cand.attnum[1] = candidates[i].attnum[k];
+
+				finalcand = pg_qualstats_add_candidate_if_not_exists(finalcand,
+												&cand, &nfinalcand, &nmaxcand);
+			}
+		}
+	}
+
+	*ncandidates = nfinalcand;
+
+	return finalcand;
+}
+
+static IndexCandidate *
+pg_qualstats_add_candidate_if_not_exists(IndexCandidate *candidates,
+										 IndexCandidate *cand,
+										 int *ncandidates, int *nmaxcand)
+{
+	IndexCandidate *finalcand = candidates;
+	int				match = -1;
+
+	if (!pg_qualstats_is_exists(candidates, *ncandidates, cand, &match))
+	{
+		if (*ncandidates == *nmaxcand)
+		{
+			(*nmaxcand) *= 2;
+			finalcand = repalloc(finalcand,
+								 sizeof(IndexCandidate) * (*nmaxcand));
+		}
+		memcpy(&finalcand[*ncandidates], cand, sizeof(IndexCandidate));
+		(*ncandidates)++;
+	}
+	else
+	{
+		IndexCandidate *oldcand = &candidates[match];
+		int		i;
+		int 	j;
+		int		nqueryidx = oldcand->nqueryids;
+		bool	isfirst = true;
+
+		for (i = 0; i < cand->nqueryids; i++)
+		{
+			for (j = 0; j < oldcand->nqueryids; j++)
+			{
+				if (cand->queryinfoidx[i] == oldcand->queryinfoidx[j])
+					break;
+			}
+			/* not found */
+			if (j == oldcand->nqueryids)
+			{
+				if (isfirst)
+				{
+					int		newsize = cand->nqueryids + oldcand->nqueryids;
+					int	   *queryinfoidx;
+
+					/* 
+						* Allocate new memory instead of repallocing as
+						* multiple candidate which are derived from same
+						* parent might share same memory.
+						*/
+					queryinfoidx = (int *) palloc(newsize * sizeof(int));
+					memcpy(queryinfoidx, oldcand->queryinfoidx,
+							sizeof(int) * oldcand->nqueryids);
+					oldcand->queryinfoidx = queryinfoidx;
+
+					isfirst = false;
+				}
+				oldcand->queryinfoidx[nqueryidx++] = cand->queryinfoidx[i];
+			}
+		}
+		pfree(cand->attnum);
+		oldcand->nqueryids = nqueryidx;
+	}
+
+	return finalcand;
+}
+
+static bool
+pg_qualstats_is_exists(IndexCandidate *candidates, int ncandidates,
+					   IndexCandidate *newcand, int *match)
+{
+	int		i;
+	int		j;
+
+	for (i = 0; i < ncandidates; i++)
+	{
+		IndexCandidate *oldcand = &candidates[i];
+
+		if (oldcand->nattrs != newcand->nattrs)
+			continue;
+		if (oldcand->amoid != newcand->amoid)
+			continue;
+
+		for (j = 0; j < oldcand->nattrs; j++)
+		{
+			if (oldcand->attnum[j] != newcand->attnum[j])
+				break;
+		}
+
+		if (j == oldcand->nattrs)
+		{
+			*match = i;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/*
+ * Process each index candidate and compute the number of updated tuple for
+ * each index candidates based on the index column update counts.
+ */
+static void
+pg_qualstats_get_updates(IndexCandidate *candidates, int ncandidates)
+{
+	HASH_SEQ_STATUS 		hash_seq;
+	int64	   *qrueryid_done;
+	int64		nupdates = 0;
+	int			nupdatefreq = 0;
+	int			nqueryiddone = 0;
+	int			maxqueryids = 50;
+	int			i;
+
+	qrueryid_done = palloc(sizeof(int64) * maxqueryids);
+
+	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
+
+	for (i = 0; i < ncandidates; i++)
+	{
+		pgqsUpdateHashEntry	   *entry;
+		IndexCandidate		   *cand = &candidates[i];
+
+		hash_seq_init(&hash_seq, pgqs_update_hash);
+
+		while ((entry = hash_seq_search(&hash_seq)) != NULL)
+		{
+			int			i;
+
+			if (entry->key.dbid != MyDatabaseId)
+				continue;
+			if (entry->key.relid != cand->relid)
+				continue;
+			for (i = 0; i < cand->nattrs; i++)
+			{
+				if (entry->key.attnum == cand->attnum[i])
+					break;
+			}
+
+			if (i == cand->nattrs)
+				continue;
+
+			for (i = 0; i < nqueryiddone; i++)
+			{
+				if (entry->key.queryid == qrueryid_done[i])
+					break;
+			}
+			if (i < nqueryiddone)
+				continue;
+
+			if (nqueryiddone == maxqueryids)
+			{
+				maxqueryids *= 2;
+				qrueryid_done = repalloc(qrueryid_done, sizeof(int64) * maxqueryids);
+			}
+			qrueryid_done[nqueryiddone++] = entry->key.queryid;
+
+			/* average update per query. */
+			nupdates += entry->updated_rows;
+			nupdatefreq += entry->frequency;
+		}
+
+		if (nupdates > 0)
+		{
+			cand->nupdates = nupdates / nupdatefreq;
+			cand->nupdatefreq = nupdatefreq;
+		}
+
+		nupdates = 0;
+		nupdatefreq = 0;
+		nqueryiddone = 0;
+	}
+
+	PGQS_LWL_RELEASE(pgqs->querylock);
+}
+
+static bool
+pg_qualstats_generate_index_queries(IndexCandidate *candidates, int ncandidates)
+{
+	int		i;
+	int		j;
+	Relation	relation;
+	StringInfoData buf;
+
+	relation = RelationIdGetRelation(candidates[0].relid);
+	if (relation == NULL)
+		return false;
+
+	initStringInfo(&buf);
+
+	for (i = 0; i < ncandidates; i++)
+	{
+		IndexCandidate *cand = &candidates[i];
+
+		appendStringInfo(&buf, "CREATE INDEX ON %s USING %s (",
+						 relation->rd_rel->relname.data,
+						 cand->amname);
+
+		for (j = 0; j < cand->nattrs; j++)
+		{
+			if (j > 0)
+				appendStringInfo(&buf, ",");
+			appendStringInfo(&buf, "%s", relation->rd_att->attrs[cand->attnum[j] - 1].attname.data);
+		}
+
+		appendStringInfo(&buf, ");");
+		cand->indexstmt = palloc(buf.len + 1);
+		strcpy(cand->indexstmt, buf.data);
+		resetStringInfo(&buf);
+	}
+	RelationClose(relation);
+	return true;
+}
+
+/*
+ * Plan all give queries to compute the total cost.
+ */
+static void
+pg_qualstats_fill_query_basecost(QueryInfo *queryinfos, int nqueries, int *queryidxs)
+{
+	int		i;
+
+	pgqs_cost_track_enable = true;
+
+	/* 
+	 * plan each query and get its cost
+	 */
+	for (i = 0; i < nqueries; i++)
+	{
+		int		index = (queryidxs != NULL) ? queryidxs[i] : i;
+
+		pg_qualstats_plan_query(queryinfos[index].query);
+		queryinfos[i].cost = pgqs_plan_cost;
+	}
+
+	pgqs_cost_track_enable = false;
+}
+
+/* Plan a given query */
+static void
+pg_qualstats_plan_query(const char *query)
+{
+	StringInfoData	explainquery;
+
+	initStringInfo(&explainquery);
+	appendStringInfoString(&explainquery, query);
+	SPI_execute(query, false, 0);
+}
+
+/*
+ * check individiual index benefit for each query and fill in the matrix.
+ */
+static void
+pg_qualstats_compuete_index_benefit(IndexCombContext *context,
+									int nqueries, int *queryidxs)
+{
+	IndexCandidate *candidates = context->candidates;
+	QueryInfo  *queryinfos = context->queryinfos;
+	double	  **benefit = context->benefitmat;
+	int 		ncandidates = context->ncandidates;
+	int			i;
+
+	pgqs_cost_track_enable = true;
+
+	for (i = 0; i < ncandidates; i++)
+	{
+		IndexCandidate *cand = &candidates[i];
+		Oid		idxid;
+		int		j;
+
+		/* 
+		 * If candiate is already identified as it has no value or it is
+		 * seletced in the final combination then in the recheck its benefits.
+		 */
+		if (!cand->isvalid || cand->isselected)
+			continue;
+
+		idxid = pg_qualstats_create_hypoindex(cand->indexstmt);
+
+		/* If candidate overhead is not yet computed then do it now */
+		if (cand->overhead == 0)
+			cand->overhead = pg_qualstats_get_index_overhead(cand, idxid);
+
+		/* 
+		 * replan each query and compute the total weighted cost by multiplying
+		 * each query cost with its frequency.
+		 */
+		for (j = 0; j < nqueries; j++)
+		{
+			int		index = (queryidxs != NULL) ? queryidxs[j] : j;
+
+			pg_qualstats_plan_query(queryinfos[index].query);
+
+			if (pg_qualstats_is_index_useful(queryinfos[index].cost,
+										 	 pgqs_plan_cost, cand->overhead))
+			{
+				benefit[index][i] = queryinfos[index].cost - pgqs_plan_cost;
+			}
+			else
+				benefit[index][i] = 0;
+		}
+
+		pg_qualstats_drop_hypoindex(idxid);
+	}
+
+	pgqs_cost_track_enable = false;
+}
+
+static double
+pg_qualstats_get_index_overhead(IndexCandidate *cand, Oid idxid)
+{
+	double		T;
+	double		index_pages;
+	double		update_io_cost;
+	double		update_cpu_cost;
+	double		overhead;
+	int			navgupdate = cand->nupdates;
+	int			nfrequency = cand->nupdatefreq;
+	int			size = pg_qualstats_hypoindex_size(idxid);
+
+	/* total index pages. */
+	T  = size / BLCKSZ;
+
+	/* 
+	 * We are commputing the page acccess cost and tuple cost based on total
+	 * accumulated tuple count so we don't need to use update query frequency.
+	 */
+	index_pages = (2 * T * navgupdate) / (2 * T + navgupdate);
+	update_io_cost = (index_pages * nfrequency) * random_page_cost;
+	update_cpu_cost = (navgupdate * nfrequency) * cpu_tuple_cost;
+
+	overhead = update_io_cost + update_cpu_cost;
+
+	/* XXX overhead of index based on number of size and number of columns. */
+	overhead += T;
+	overhead += (cand->nattrs * 1000);
+
+	return overhead;
+}
+
+static bool
+pg_qualstats_is_index_useful(double basecost, double indexcost,
+							 double indexoverhead)
+{
+	if (indexcost + indexoverhead < basecost)
+		return true;
+	return false;
+}
+
+static Oid
+pg_qualstats_create_hypoindex(const char *index)
+{
+	int				ret;
+	Oid				idxid;
+	StringInfoData	hypoindex;
+
+	initStringInfo(&hypoindex);
+	appendStringInfoString(&hypoindex, "SELECT indexrelid FROM hypopg_create_index('");
+	appendStringInfoString(&hypoindex, index);
+	appendStringInfoString(&hypoindex, "')");
+
+	ret = SPI_execute(hypoindex.data, false, 0);
+
+	if (ret != SPI_OK_SELECT)
+	{
+		SPI_finish();
+		elog(ERROR, "pg_qualstat: could not create hypo index");
+	}
+
+	idxid = atooid(SPI_getvalue(SPI_tuptable->vals[0],
+				 SPI_tuptable->tupdesc,
+				 1));
+
+	Assert(OidIsValid(idxid));
+
+	return idxid;
+}
+
+static void
+pg_qualstats_drop_hypoindex(Oid idxid)
+{
+	int				ret;
+	StringInfoData	hypoindex;
+
+	initStringInfo(&hypoindex);
+	if (OidIsValid(idxid))
+		appendStringInfo(&hypoindex, "SELECT hypopg_drop_index(%d)", idxid);
+	else
+		appendStringInfo(&hypoindex, "SELECT hypopg_reset_index()");
+
+	ret = SPI_execute(hypoindex.data, false, 0);
+	if (ret != SPI_OK_SELECT)
+	{
+		SPI_finish();
+		elog(ERROR, "pg_qualstat: could not drop hypo index");
+	}
+
+#if 0
+	if (!parse_bool(SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1), &res))
+	{
+		SPI_finish();
+		elog(ERROR, "pg_qualstat: drop hypo index should return boolean");
+	}
+
+	if (!res)
+	{
+		SPI_finish();
+		elog(ERROR, "pg_qualstat: could not drop hypo index");
+	}
+#endif
+}
+
+static int
+pg_qualstats_hypoindex_size(Oid idxid)
+{
+	int				ret;
+	uint64			size;
+	StringInfoData	hypoindex;
+
+	initStringInfo(&hypoindex);
+	appendStringInfo(&hypoindex, "SELECT hypopg_relation_size(%d)", idxid);
+
+	ret = SPI_execute(hypoindex.data, false, 0);
+	if (ret != SPI_OK_SELECT)
+	{
+		SPI_finish();
+		elog(ERROR, "pg_qualstat: could not get hypo index size");
+	}
+
+	size = strtou64(SPI_getvalue(SPI_tuptable->vals[0],
+					SPI_tuptable->tupdesc,
+					1), NULL, 10);
+
+	return size;
+}
+
+static int
+pg_qualstats_get_best_candidate(IndexCombContext *context)
+{
+	IndexCandidate *candidates = context->candidates;
+	QueryInfo	   *queryinfos = context->queryinfos;
+	double		  **benefitmat = context->benefitmat;
+	int 	ncandidates = context->ncandidates;
+	int		i;
+	int		bestcandidx = -1;
+	double	max_benefit = 0;
+	double	benefit;
+
+	for (i = 0; i < ncandidates; i++)
+	{
+		int	j;
+
+		if (!candidates[i].isvalid || candidates[i].isselected)
+			continue;
+
+		benefit = 0;
+
+		for (j = 0; j < context->nqueries; j++)
+			benefit += (benefitmat[j][i] * queryinfos[j].frequency);
+
+		if (benefit == 0)
+		{
+			candidates[i].isvalid = false;
+			continue;
+		}
+
+		if (benefit > max_benefit)
+		{
+			max_benefit = benefit;
+			bestcandidx = i;
+		}
+	}
+
+	return bestcandidx;
 }

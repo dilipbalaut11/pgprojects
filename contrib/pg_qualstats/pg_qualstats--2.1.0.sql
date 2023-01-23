@@ -34,15 +34,7 @@ RETURNS text[]
 AS 'MODULE_PATHNAME'
 LANGUAGE C;*/
 
-CREATE FUNCTION pg_qualstats_overhead(OUT queryid bigint, OUT relid oid, OUT attnum int, OUT frequency int, OUT total_updated bigint)
-RETURNS SETOF record
-AS 'MODULE_PATHNAME'
-LANGUAGE C;
 
-CREATE FUNCTION pg_qualstats_qualnodeid_combination(queryid bigint[])
-RETURNS bigint[]
-AS 'MODULE_PATHNAME'
-LANGUAGE C;
 
 CREATE FUNCTION pg_qualstats_test_index_advise()
 RETURNS text[]

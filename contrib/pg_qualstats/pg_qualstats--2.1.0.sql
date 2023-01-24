@@ -36,7 +36,7 @@ LANGUAGE C;*/
 
 
 
-CREATE FUNCTION pg_qualstats_test_index_advise()
+CREATE FUNCTION pg_qualstats_test_index_advise(bool)
 RETURNS text[]
 AS 'MODULE_PATHNAME'
 LANGUAGE C;

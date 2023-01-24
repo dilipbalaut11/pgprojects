@@ -430,7 +430,8 @@ static Size pgqs_sampled_array_size(void);
 static char **pg_qualstats_index_advise_rel(char **prevarray,
 											 IndexCandidate *candidates,
 											 int ncandidates, int *nindexes,
-											 MemoryContext per_query_ctx);
+											 MemoryContext per_query_ctx,
+											 bool iterative);
 static QueryInfo *pg_qualstats_get_queries(IndexCandidate *candidates,
 											int ncandidates, int *nqueries);
 static bool pg_qulstat_is_queryid_exists(int64 *queryids, int nqueryids,
@@ -453,7 +454,7 @@ static bool pg_qualstats_generate_index_queries(IndexCandidate *candidates,
 static void pg_qualstats_fill_query_basecost(QueryInfo *queryinfos,
 											 int nqueries, int *queryidxs);
 static void pg_qualstats_plan_query(const char *query);
-static void pg_qualstats_compuete_index_benefit(IndexCombContext *context,
+static void pg_qualstats_compute_index_benefit(IndexCombContext *context,
 												int nqueries, int *queryidxs);
 static double pg_qualstats_get_index_overhead(IndexCandidate *cand, Oid idxid);
 static bool pg_qualstats_is_index_useful(double basecost, double indexcost,
@@ -3273,8 +3274,7 @@ pg_qualstats_idx_updates(Oid dbid, Oid relid, int *attrs, int nattr)
 }
 #endif
 
-#if 0
-
+#if 1 //exhaustive
 static void
 pg_qualstats_bms_add_candattr(IndexCombContext *context, IndexCandidate *cand)
 {
@@ -3500,7 +3500,8 @@ pg_qualstats_complete_comb(IndexCombContext *context,
  */
 static void
 pg_qualstats_mark_useless_candidate(IndexCandidate *candidates,
-									int ncandidates, QueryInfo  *queryinfos)
+									int ncandidates, int nqueries,
+									QueryInfo *queryinfos)
 {
 	int		i;
 
@@ -3511,12 +3512,9 @@ pg_qualstats_mark_useless_candidate(IndexCandidate *candidates,
 		double	cost2;
 		Oid		idxid;
 
-		cost1 = pg_qualstats_get_cost(queryinfos, cand->nqueryids,
-										cand->queryinfoidx);
-		idxid = pg_qualstats_create_hypoindex(cand->indexstmt);
-							
-		cost2 = pg_qualstats_get_cost(queryinfos, cand->nqueryids,
-										cand->queryinfoidx);
+		cost1 = pg_qualstats_get_cost(queryinfos, nqueries, NULL);
+		idxid = pg_qualstats_create_hypoindex(cand->indexstmt);							
+		cost2 = pg_qualstats_get_cost(queryinfos, nqueries, NULL);
 		pg_qualstats_drop_hypoindex(idxid);
 
 		if (cost2 < cost1 - 100)
@@ -3525,7 +3523,8 @@ pg_qualstats_mark_useless_candidate(IndexCandidate *candidates,
 			cand->isvalid = false;
 	}
 }
-#endif
+
+#endif //exhaustive
 
 char *query =
 "WITH pgqs AS ("
@@ -3601,6 +3600,7 @@ print_benefit_matrix(IndexCombContext *context)
 Datum
 pg_qualstats_test_index_advise(PG_FUNCTION_ARGS)
 {
+	bool		exhaustive = PG_GETARG_BOOL(0);
 	int			ret;
 	int			i;
 	int			ncandidates = 0;
@@ -3675,7 +3675,8 @@ pg_qualstats_test_index_advise(PG_FUNCTION_ARGS)
 			index_array = pg_qualstats_index_advise_rel(index_array,
 														&candidates[idxcand],
 														nrelcand, &nindexes,
-														per_query_ctx);
+														per_query_ctx,
+														!exhaustive);
 			nrelcand = 0;
 			idxcand = i;
 		}
@@ -3686,7 +3687,8 @@ pg_qualstats_test_index_advise(PG_FUNCTION_ARGS)
 	index_array = pg_qualstats_index_advise_rel(index_array,
 												&candidates[idxcand],
 												nrelcand, &nindexes,
-												per_query_ctx);
+												per_query_ctx,
+												!exhaustive);
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
 	key_datums = (Datum *) palloc(nindexes * sizeof(Datum));
 	MemoryContextSwitchTo(oldcontext);
@@ -3703,10 +3705,93 @@ pg_qualstats_test_index_advise(PG_FUNCTION_ARGS)
 	PG_RETURN_ARRAYTYPE_P(result);
 }
 
+static IndexCombination *
+pg_qualstats_iterative(IndexCombContext	*context)
+{
+	IndexCombination   *path;
+	int			ncandidates = context->ncandidates;
+	int			nqueries = context->nqueries;
+	QueryInfo  *queryinfos = context->queryinfos;
+	IndexCandidate *candidates = context->candidates;
+
+	path = palloc0(sizeof(IndexCombination) + ncandidates * sizeof(int));
+
+	/*
+	 * First plan query query without any new index and set base cost for each
+	 * query.
+	 */
+	pg_qualstats_fill_query_basecost(queryinfos, nqueries, NULL);
+
+	while (true)
+	{
+		int	bestcand;
+		int	i;
+
+		/*
+		 * Create every index one at a time and replan every query and fill
+		 * intial values of benefit matrix.
+		 */
+		pg_qualstats_compute_index_benefit(context, nqueries, NULL);
+		print_benefit_matrix(context);
+
+		/*
+		 * Compute the overall benefit of all the candidate and get the  best
+		 * candidate.
+		 */
+		bestcand = pg_qualstats_get_best_candidate(context);
+		if (bestcand == -1)
+			break;
+
+		/*
+		 * Add best candidates to the path and create the hypoindex for this
+		 * candidate and reiterate for the next round.  For this index we
+		 * create hypoindex and do not drop so that next round assume this
+		 * index is already exist now and check benefit of each candidate by
+		 * assuming this candidate is already finalized.
+		 */
+		pg_qualstats_create_hypoindex(candidates[bestcand].indexstmt);
+
+		/* 
+		 * Best candidate is seleted so update the query base cost as if this
+		 * index exists before going for next iteration.
+		 */
+		for (i = 0; i < context->nqueries; i++)
+			queryinfos[i].cost -= context->benefitmat[i][bestcand];
+
+		path->indices[path->nindices++] = bestcand;
+		candidates[bestcand].isselected = true;
+	}
+
+	pg_qualstats_drop_hypoindex(InvalidOid);
+
+	return path;
+}
+
+static IndexCombination *
+pg_qualstats_exhaustive(IndexCombContext *context)
+{
+	IndexCombination   *path;
+
+	pg_qualstats_mark_useless_candidate(context->candidates,
+										context->ncandidates,
+										context->nqueries,	
+										context->queryinfos);
+	path = pg_qualstats_compare_comb(context, 0, 0);
+
+	/* 
+	 * If path doesn't include all the candidates then try to add missing
+	 * candidates with greedy approach.
+	 */
+	if (path->nindices < context->ncandidates)
+		pg_qualstats_complete_comb(context, path);
+
+	return path;
+}
+
 static char **
 pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 							  int ncandidates, int *nindexes,
-							  MemoryContext per_query_ctx)
+							  MemoryContext per_query_ctx, bool iterative)
 {
 	char	  **index_array = NULL;
 	QueryInfo  *queryinfos;
@@ -3744,67 +3829,10 @@ pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 	for (i = 0; i < nqueries; i++)
 		context.benefitmat[i] = (double *) palloc0(ncandidates * sizeof(double));
 
-	path = palloc0(sizeof(IndexCombination) + ncandidates * sizeof(int));
-
-	/*
-	 * First plan query query without any new index and set base cost for each
-	 * query.
-	 */
-	pg_qualstats_fill_query_basecost(queryinfos, nqueries, NULL);
-
-	while (true)
-	{
-		int bestcand;
-
-		/*
-		 * Create every index one at a time and replan every query and fill
-		 * intial values of benefit matrix.
-		 */
-		pg_qualstats_compuete_index_benefit(&context, nqueries, NULL);
-		print_benefit_matrix(&context);
-
-		/*
-		 * Compute the overall benefit of all the candidate and get the  best
-		 * candidate.
-		 */
-		bestcand = pg_qualstats_get_best_candidate(&context);
-		if (bestcand == -1)
-			break;
-
-		/*
-		 * Add best candidates to the path and create the hypoindex for this
-		 * candidate and reiterate for the next round.  For this index we
-		 * create hypoindex and do not drop so that next round assume this
-		 * index is already exist now and check benefit of each candidate by
-		 * assuming this candidate is already finalized.
-		 */
-		pg_qualstats_create_hypoindex(finalcand[bestcand].indexstmt);
-
-		/* 
-		 * Best candidate is seleted so update the query base cost as if this
-		 * index exists before going for next iteration.
-		 */
-		for (i = 0; i < context.nqueries; i++)
-			queryinfos[i].cost -= context.benefitmat[i][bestcand];
-
-		path->indices[path->nindices++] = bestcand;
-		finalcand[bestcand].isselected = true;
-	}
-
-	pg_qualstats_drop_hypoindex(InvalidOid);
-
-#if 0
-	path = pg_qualstats_compare_comb(&context, 0, 0);
-
-	/* 
-	 * If path doesn't include all the candidates then try to add missing
-	 * candidates with greedy approach.
-	 */
-	if (path->nindices < ncandidates)
-		pg_qualstats_complete_comb(&context, path);
-
-	elog(NOTICE, "ncandidates=%d combination tested=%d", ncandidates, count);
-#endif
+	if (iterative)
+		path = pg_qualstats_iterative(&context);
+	else
+		path = pg_qualstats_exhaustive(&context);
 
 	if (path->nindices == 0)
 		return prevarray;
@@ -4236,6 +4264,9 @@ pg_qualstats_plan_query(const char *query)
 {
 	StringInfoData	explainquery;
 
+	if (query == NULL)
+		return;
+
 	initStringInfo(&explainquery);
 	appendStringInfoString(&explainquery, query);
 	SPI_execute(query, false, 0);
@@ -4245,7 +4276,7 @@ pg_qualstats_plan_query(const char *query)
  * check individiual index benefit for each query and fill in the matrix.
  */
 static void
-pg_qualstats_compuete_index_benefit(IndexCombContext *context,
+pg_qualstats_compute_index_benefit(IndexCombContext *context,
 									int nqueries, int *queryidxs)
 {
 	IndexCandidate *candidates = context->candidates;
@@ -4336,8 +4367,10 @@ static bool
 pg_qualstats_is_index_useful(double basecost, double indexcost,
 							 double indexoverhead)
 {
-	if (indexcost + indexoverhead < basecost)
+	if ((indexcost < basecost * 0.95) &&
+		(indexcost + indexoverhead < basecost))
 		return true;
+
 	return false;
 }
 

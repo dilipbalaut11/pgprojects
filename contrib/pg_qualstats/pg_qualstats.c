@@ -494,6 +494,9 @@ _PG_init(void)
 		shmem_startup_hook = pgqs_shmem_startup;
 	}
 
+	/* Inform the postmaster that we want to enable query_id calculation */
+	EnableQueryId();
+
 	prev_planner_hook = planner_hook;
 	planner_hook = pgqs_planner;
 	prev_ExecutorStart = ExecutorStart_hook;

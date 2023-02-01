@@ -1,0 +1,5 @@
+- Merge pg_qualstat and HypoPG code under single extension
+- Preserve hash to disk - qualstat/workload and overhead on shutdown
+- Simplify the query refer CleanQuerytext and generate_normalized_query
+  Q: Do we need to copy logic from there or maintain dependency?
+

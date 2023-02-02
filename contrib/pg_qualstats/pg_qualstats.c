@@ -1997,6 +1997,8 @@ pgqs_shmem_request(void)
 }
 #endif
 
+static void pgqs_read_dumpfile(void);
+
 static void
 pgqs_shmem_startup(void)
 {
@@ -2074,6 +2076,7 @@ pgqs_shmem_startup(void)
 									 pgqs_max, pgqs_max,
 									 &updateinfo,
 									 HASH_ELEM | HASH_FUNCTION | HASH_FIXED_SIZE);
+	pgqs_read_dumpfile();
 	LWLockRelease(AddinShmemInitLock);
 }
 
@@ -3532,6 +3535,183 @@ pg_qualstats_mark_useless_candidate(IndexCandidate *candidates,
 
 #endif //exhaustive
 
+/* Location of permanent stats file (valid when database is shut down) */
+#define PGQS_DUMP_FILE	"pg_qualstats.stat"
+/* Magic number identifying the stats file format */
+static const uint32 PGQS_FILE_HEADER = 0x20220408;
+
+/* PostgreSQL major version number, changes in which invalidate all entries */
+static const uint32 PGQS_PG_MAJOR_VERSION = PG_VERSION_NUM / 100;
+
+static void pgqs_shmem_shutdown(int code, Datum arg);
+
+static void
+pgqs_read_dumpfile(void)
+{
+	bool		found;
+	HASHCTL		info;
+	FILE	   *file = NULL;
+	FILE	   *qfile = NULL;
+	uint32		header;
+	int32		num;
+	int32		pgver;
+	int32		i;
+	int			buffer_size;
+	char	   *buffer = NULL;
+
+	//TODO: Acquire lock
+	/*
+	 * If we're in the postmaster (or a standalone backend...), set up a shmem
+	 * exit hook to dump the statistics to disk.
+	 */
+	//if (!IsUnderPostmaster)
+		on_shmem_exit(pgqs_shmem_shutdown, (Datum) 0);
+
+	/*
+	 * Attempt to load old statistics from the dump file.
+	 */
+	file = AllocateFile(PGQS_DUMP_FILE, PG_BINARY_R);
+	if (file == NULL)
+	{
+		if (errno != ENOENT)
+			goto read_error;
+		/* No existing persisted stats file, so we're done */
+		return;
+	}
+
+	if (fread(&header, sizeof(uint32), 1, file) != 1 ||
+		fread(&pgver, sizeof(uint32), 1, file) != 1 ||
+		fread(&num, sizeof(int32), 1, file) != 1)
+		goto read_error;
+
+//	if (header != PQSS_FILE_HEADER ||
+//		pgver != PGQS_PG_MAJOR_VERSION)
+//		goto data_error;
+
+	for (i = 0; i < num; i++)
+	{
+		pgqsEntry	temp;
+		pgqsEntry  *entry;
+		Size		query_offset;
+
+		if (fread(&temp, sizeof(pgqsEntry), 1, file) != 1)
+			goto read_error;
+
+		entry = (pgqsEntry *) hash_search(pgqs_hash,
+										  &temp.key,
+										  HASH_ENTER, &found);
+		if (!found)
+			memcpy(entry, &temp, sizeof(pgqsEntry));
+	}
+	FreeFile(file);
+
+	unlink(PGQS_DUMP_FILE);
+
+	return;
+
+read_error:
+	ereport(LOG,
+			(errcode_for_file_access(),
+			 errmsg("could not read file \"%s\": %m",
+					PGQS_DUMP_FILE)));
+	goto fail;
+data_error:
+	ereport(LOG,
+			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			 errmsg("ignoring invalid data in file \"%s\"",
+					PGQS_DUMP_FILE)));
+	goto fail;
+fail:
+	if (file)
+		FreeFile(file);
+
+	/* If possible, throw away the bogus file; ignore any error */
+	unlink(PGQS_DUMP_FILE);
+}
+
+#if 1
+/*
+ * shmem_shutdown hook: Dump statistics into file.
+ *
+ * Note: we don't bother with acquiring lock, because there should be no
+ * other processes running when this is called.
+ */
+static void
+pgqs_shmem_shutdown(int code, Datum arg)
+{
+	FILE	   *file;
+	char	   *qbuffer = NULL;
+	Size		qbuffer_size = 0;
+	HASH_SEQ_STATUS hash_seq;
+	int32		num_entries;
+	pgqsEntry  *entry;
+	int i=1;
+
+	while(i);
+	/* Don't try to dump during a crash. */
+	if (code)
+		return;
+
+	/* Safety check ... shouldn't get here unless shmem is set up. */
+	if (!pgqs || !pgqs_hash)
+		return;
+
+	/* Don't dump if told not to. */
+//	if (!pgqs_save)
+//		return;
+
+	file = AllocateFile(PGQS_DUMP_FILE ".tmp", PG_BINARY_W);
+	if (file == NULL)
+		goto error;
+
+	if (fwrite(&PGQS_FILE_HEADER, sizeof(uint32), 1, file) != 1)
+		goto error;
+	if (fwrite(&PGQS_PG_MAJOR_VERSION, sizeof(uint32), 1, file) != 1)
+		goto error;
+	num_entries = hash_get_num_entries(pgqs_hash);
+	if (fwrite(&num_entries, sizeof(int32), 1, file) != 1)
+		goto error;
+
+	/*
+	 * When serializing to disk, we store query texts immediately after their
+	 * entry data.  Any orphaned query texts are thereby excluded.
+	 */
+	hash_seq_init(&hash_seq, pgqs_hash);
+	while ((entry = hash_seq_search(&hash_seq)) != NULL)
+	{
+		if (fwrite(entry, sizeof(pgqsEntry), 1, file) != 1)
+		{
+			/* note: we assume hash_seq_term won't change errno */
+			hash_seq_term(&hash_seq);
+			goto error;
+		}
+	}
+
+	if (FreeFile(file))
+	{
+		file = NULL;
+		goto error;
+	}
+
+	/*
+	 * Rename file into place, so we atomically replace any old one.
+	 */
+	(void) durable_rename(PGQS_DUMP_FILE ".tmp", PGQS_DUMP_FILE, LOG);
+
+	return;
+
+error:
+	ereport(LOG,
+			(errcode_for_file_access(),
+			 errmsg("could not write file \"%s\": %m",
+					PGQS_DUMP_FILE ".tmp")));
+	free(qbuffer);
+	if (file)
+		FreeFile(file);
+	unlink(PGQS_DUMP_FILE ".tmp");
+}
+
+#endif
 char *query =
 "WITH pgqs AS ("
 "\n          SELECT dbid, min(am.oid) amoid, amname, qualid, qualnodeid,"

@@ -3452,16 +3452,16 @@ pg_qualstats_complete_comb(IndexCombContext *context,
 		if (!cand->isvalid)
 			continue;
 
-		for (j = 0; j < path->nindices; j++)
+		for (j = 0; j < finalpath->nindices; j++)
 		{
-			if (path->indices[j] == i)
+			if (finalpath->indices[j] == i)
 				break;
 		}
 		/* 
 		 * if candidate not found in path then try to add in the path and
 		 * compare cost
 		 */
-		if (j == path->nindices)
+		if (j == finalpath->nindices)
 		{
 			IndexCombination *newpath;
 			int		size;
@@ -3562,7 +3562,7 @@ char *query =
 "\n          FROM pgqs"
 "\n          GROUP BY (qual).relid, amname, parent"
 "\n        )"
-"\nSELECT * FROM filtered where amname ='btree' ORDER BY relid, amname DESC, cardinality(attnumlist);";
+"\nSELECT * FROM filtered where amname='btree' OR amname='brin' ORDER BY relid, amname DESC, cardinality(attnumlist);";
 
 static void
 print_candidates(IndexCandidate *candidates, int ncandidates)
@@ -3803,9 +3803,10 @@ pg_qualstats_exhaustive(IndexCombContext *context)
 	/* 
 	 * If path doesn't include all the candidates then try to add missing
 	 * candidates with greedy approach.
+	 * TODO TRY iterative for remaining candidates.
 	 */
-	if (path->nindices < context->ncandidates)
-		pg_qualstats_complete_comb(context, path);
+	//if (path->nindices < context->ncandidates)
+	//	pg_qualstats_complete_comb(context, path);
 
 	return path;
 }

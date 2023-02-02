@@ -3562,7 +3562,7 @@ char *query =
 "\n          FROM pgqs"
 "\n          GROUP BY (qual).relid, amname, parent"
 "\n        )"
-"\nSELECT * FROM filtered where amname !='hash' ORDER BY relid, amname DESC, cardinality(attnumlist);";
+"\nSELECT * FROM filtered where amname ='btree' ORDER BY relid, amname DESC, cardinality(attnumlist);";
 
 static void
 print_candidates(IndexCandidate *candidates, int ncandidates)
@@ -3714,6 +3714,8 @@ pg_qualstats_iterative(IndexCombContext	*context)
 	IndexCombination   *path;
 	int			ncandidates = context->ncandidates;
 	int			nqueries = context->nqueries;
+	int		   *queryidxs = NULL;
+
 	QueryInfo  *queryinfos = context->queryinfos;
 	IndexCandidate *candidates = context->candidates;
 
@@ -3724,17 +3726,22 @@ pg_qualstats_iterative(IndexCombContext	*context)
 	 * query.
 	 */
 	pg_qualstats_fill_query_basecost(queryinfos, nqueries, NULL);
+	queryidxs = (int *) palloc (nqueries * sizeof (int));
 
 	while (true)
 	{
-		int	bestcand;
-		int	i;
+		int		bestcand;
+		int		i;
 
 		/*
 		 * Create every index one at a time and replan every query and fill
 		 * intial values of benefit matrix.
 		 */
-		pg_qualstats_compute_index_benefit(context, nqueries, NULL);
+		if (nqueries < context->nqueries)
+			pg_qualstats_compute_index_benefit(context, nqueries, queryidxs);
+		else
+			pg_qualstats_compute_index_benefit(context, nqueries, NULL);
+
 		print_benefit_matrix(context);
 
 		/*
@@ -3758,8 +3765,20 @@ pg_qualstats_iterative(IndexCombContext	*context)
 		 * Best candidate is seleted so update the query base cost as if this
 		 * index exists before going for next iteration.
 		 */
+		nqueries = 0;
 		for (i = 0; i < context->nqueries; i++)
-			queryinfos[i].cost -= context->benefitmat[i][bestcand];
+		{
+			if (context->benefitmat[i][bestcand] > 0)
+			{
+				queryinfos[i].cost -= context->benefitmat[i][bestcand];
+
+				/* 
+				 * Remember the queries which got benefited by this index and
+				 * in the next round only plan these queries.
+				 */
+				queryidxs[nqueries++] = i;
+			}
+		}
 
 		path->indices[path->nindices++] = bestcand;
 		candidates[bestcand].isselected = true;

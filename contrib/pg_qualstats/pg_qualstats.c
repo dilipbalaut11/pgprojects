@@ -297,6 +297,7 @@ typedef struct pgqsQueryStringEntry
 	pgqsQueryStringHashKey key;
 	int			frequency;
 	bool		isExplain;		
+	int			qrylen;
 
 	/*
 	 * Imperatively at the end of the struct This is actually of length
@@ -860,6 +861,7 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 		pgqsEntry  *localentry;
 		HASH_SEQ_STATUS local_hash_seq;
 		pgqsWalkerContext *context = palloc(sizeof(pgqsWalkerContext));
+		int			querylen = strlen(queryDesc->sourceText);
 
 		context->queryId = queryDesc->plannedstmt->queryId;
 		context->rtable = queryDesc->plannedstmt->rtable;
@@ -873,9 +875,10 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 		queryKey.queryid = context->queryId;
 
 		/* keep an unormalized query example for each queryid if needed */
-		if (pgqs_track_constants)
+		if (pgqs_track_constants && querylen < pgqs_query_size)
 		{
 			pgqsQueryStringEntry *queryEntry;
+
 
 			/* Lookup the hash table entry with a shared lock. */
 			PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
@@ -908,7 +911,8 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 					else
 						queryEntry->isExplain = false;
 
-					strncpy(queryEntry->querytext, context->querytext, pgqs_query_size);
+					queryEntry->qrylen = querylen;
+					strcpy(queryEntry->querytext, context->querytext);
 					queryEntry->frequency = 1;
 				}
 				else
@@ -2462,7 +2466,6 @@ pg_qualstats_example_queries(PG_FUNCTION_ARGS)
 		values[2] = Int32GetDatum(entry->frequency);
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
-
 	}
 
 	PGQS_LWL_RELEASE(pgqs->querylock);
@@ -3977,7 +3980,7 @@ pg_qualstats_get_query(int64 queryid, int *freq)
 	{
 		int		explainlen = strlen("EXPLAIN ");
 
-		query = palloc0(explainlen + strlen(entry->querytext) + 1);
+		query = palloc0(explainlen + entry->qrylen);
 		strcpy(query, "EXPLAIN ");
 		strcpy(query + explainlen, entry->querytext);
 	}

@@ -1,5 +1,8 @@
 - Merge pg_qualstat and HypoPG code under single extension
 - Preserve hash to disk - qualstat/workload and overhead on shutdown
+  - Take feedback from Tom/Ben that do we need to preserve this hash to disk is there actual use case
+- We can try with initial size of 60MB and see with real time workload how frequently it get overflow and then we can issue a WARNING
+  if it get full so that user can reconfigure different size/ or consider dynamic size hash
 - Simplify the query refer CleanQuerytext and generate_normalized_query
   Q: Do we need to copy logic from there or maintain dependency?
 

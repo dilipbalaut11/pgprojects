@@ -4,61 +4,12 @@
  *
  *-------------------------------------------------------------------------
  */
-#include <limits.h>
-#include <math.h>
-#include "c.h"
 #include "postgres.h"
-#include "access/hash.h"
-#include "access/htup_details.h"
-#if PG_VERSION_NUM >= 90600
-#include "access/parallel.h"
-#endif
-#if PG_VERSION_NUM >= 100000 && PG_VERSION_NUM < 110000
-#include "catalog/pg_authid.h"
-#endif
-#if PG_VERSION_NUM >= 110000
-#include "catalog/pg_authid_d.h"
-#endif
-#include "catalog/pg_class.h"
-#include "catalog/pg_namespace.h"
-#include "catalog/pg_operator.h"
-#include "catalog/pg_type.h"
-#include "commands/dbcommands.h"
-#if PG_VERSION_NUM >= 150000
-#include "common/pg_prng.h"
-#endif
+
 #include "executor/spi.h"
-#include "fmgr.h"
-#include "funcapi.h"
-#include "mb/pg_wchar.h"
 #include "miscadmin.h"
-#include "nodes/execnodes.h"
-#include "nodes/nodeFuncs.h"
-#include "nodes/makefuncs.h"
-#include "optimizer/clauses.h"
-#include "optimizer/planner.h"
 #include "optimizer/optimizer.h"
-#include "parser/analyze.h"
-#include "parser/parse_node.h"
-#include "parser/parsetree.h"
-#if PG_VERSION_NUM >= 150000
-#include "postmaster/autovacuum.h"
-#endif
-#include "postmaster/postmaster.h"
-#if PG_VERSION_NUM >= 150000
-#include "replication/walsender.h"
-#endif
-#include "storage/ipc.h"
-#include "storage/lwlock.h"
-#if PG_VERSION_NUM >= 100000
-#include "storage/shmem.h"
-#endif
-#include "utils/array.h"
 #include "utils/builtins.h"
-#include "utils/guc.h"
-#include "utils/lsyscache.h"
-#include "utils/memutils.h"
-#include "utils/tuplestore.h"
 
 #include "include/hypopg.h"
 #include "include/hypopg_index.h"
@@ -69,15 +20,20 @@
 extern PGDLLEXPORT Datum pg_qualstats_test_index_advise(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(pg_qualstats_test_index_advise);
 
-/* 
+#define DEBUG_INDEX_ADVISOR
+
+/*
  * If 'pgqs_cost_track_enable' is set then the planner will start tracking the
- * cost of queries being planned and compute total cost in
- * 'pgqs_plan_total_cost'
+ * cost of queries being planned and store plan cost in 'pgqs_plan_cost'.
  */
 bool pgqs_cost_track_enable = false;
 static float pgqs_plan_cost = 0.0;
 planner_hook_type prev_planner_hook = NULL;
 
+/*
+ * Store information for a query, i.e. querystring, its base cost and execution
+ * frequency.
+ */
 typedef struct QueryInfo
 {
 	double	cost;
@@ -86,47 +42,53 @@ typedef struct QueryInfo
 } QueryInfo;
 
 /*
- * Track cost for current combination of the indices.
+ * Store information for a index combination.
  */
 typedef struct IndexCombination
 {
-	double	cost;
-	int		nindices;
-	double	overhead;
-	int		indices[FLEXIBLE_ARRAY_MEMBER];
+	double	cost;		/* total cost of queries for the index combination */
+	int		nindices;	/* number of indexes in this combination */
+	double	overhead;	/* total overhead of this combination */
+	int		indices[FLEXIBLE_ARRAY_MEMBER];	/* array of indexes in
+	    									   IndexCandidate array */
 } IndexCombination;
 
+/* Index candidate information. */
 typedef struct IndexCandidate
 {
-	Oid		relid;
-	Oid		amoid;
-	char   *amname;
-	int		nattrs;
-	int	   *attnum;
-	int		nqueryids;
-	int64  *queryids;
-	int64	nupdates;
+	Oid		relid;			/* relation id */
+	Oid		amoid;			/* candidate's index access method oid */
+	char   *amname;			/* candidate's index access method name */
+	int		nattrs;			/* number of key attributes */
+	int	   *attnum;			/* key attribute number array */
+	int		nqueryids;		/* number of queryids related to this index */
+	int64  *queryids;		/* queryids array */
+	int64	nupdates;		/* nupdates done on key attributes involved in this
+							   candididate */
 	int	   *queryinfoidx;
-	int		nupdatefreq;
-	double	benefit;
-	double	overhead;
-	char   *indexstmt;
-	bool	isvalid;
-	bool	isselected;
+	int		nupdatefreq;	/* frequency of the updates on candidate keys */
+	double	benefit;		/* total cost benefit gained by this candidate */
+	double	overhead;		/* overhead of the candidate */
+	char   *indexstmt;		/* sql query for creating index for this candidate */
+	bool	isvalid;		/* is candidate still valid (not rejected)*/
+	bool	isselected;		/* is candidate already selected in final list */
 } IndexCandidate;
 
-typedef struct IndexCombContext
+/*
+ * Index advisor context, store various intermediate information while
+ * evaluating value of candidate indexes and finding out the best combination.
+ */
+typedef struct IndexAdvisorContext
 {
-	int		nqueries;
-	int		ncandidates;
+	int		nqueries;			/* total number of queries */
+	int		ncandidates;		/* total numbed of index candidates */
 	int		maxcand;
-	double		  **benefitmat;
-	IndexCandidate *candidates;
-	QueryInfo	   *queryinfos;
-	Bitmapset	   *memberattr;
-	MemoryContext	queryctx;
+	double		  **benefitmat;	/* index to query benefit matrix (n x m)*/
+	IndexCandidate *candidates;	/* array IndexCandidate for all candidates */
+	QueryInfo	   *queryinfos;	/* array of QueryInfo for all queries */
+	Bitmapset	   *memberattr;	
+	MemoryContext	queryctx;	/* reference to per query context */
 } IndexCombContext;
-
 
 char *query =
 "WITH pgqs AS ("
@@ -163,7 +125,7 @@ char *query =
 "\n        )"
 "\nSELECT * FROM filtered where amname='btree' OR amname='brin' ORDER BY relid, amname DESC, cardinality(attnumlist);";
 
-
+/* static function declarations */
 static char **pg_qualstats_index_advise_rel(char **prevarray,
 											 IndexCandidate *candidates,
 											 int ncandidates, int *nindexes,
@@ -197,13 +159,12 @@ static double pg_qualstats_get_index_overhead(IndexCandidate *cand, Oid idxid);
 static bool pg_qualstats_is_index_useful(double basecost, double indexcost,
 										 double indexoverhead);
 static int pg_qualstats_get_best_candidate(IndexCombContext *context);
-
-MemoryContext HypoMemoryContext;
+static IndexCombination * pg_qualstats_exhaustive(IndexCombContext *context);
 
 /* planner hook */
 PlannedStmt *
 pgqs_planner(Query *parse, const char *query_string,
-						int cursorOptions, ParamListInfo boundParams)
+			 int cursorOptions, ParamListInfo boundParams)
 {
 	PlannedStmt *result;
 
@@ -224,258 +185,6 @@ pgqs_planner(Query *parse, const char *query_string,
 	return result;
 }
 
-#if 1 //exhaustive
-static void
-pg_qualstats_bms_add_candattr(IndexCombContext *context, IndexCandidate *cand)
-{
-	int		i;
-
-	for (i = 0; i < cand->nattrs; i++)
-	{
-		context->memberattr = bms_add_member(context->memberattr,
-											 cand->attnum[i]);
-	}
-}
-
-static void
-pg_qualstats_bms_remove_candattr(IndexCombContext *context,
-								 IndexCandidate *cand)
-{
-	int		i;
-
-	for (i = 0; i < cand->nattrs; i++)	
-	{
-		context->memberattr = bms_del_member(context->memberattr,
-											 cand->attnum[i]);
-	}
-}
-
-static bool
-pg_qualstats_is_cand_overlaps(Bitmapset *bms, IndexCandidate *cand)
-{
-	int		i;
-
-	if (bms == NULL)
-		return false;
-
-	for (i = 0; i < cand->nattrs; i++)
-	{
-		if (bms_is_member(cand->attnum[i], bms))
-			return true;
-	}
-	return false;
-}
-
-/*
- * compare and retutn cheaper path and free non selected path
- *
- */
-static IndexCombination *
-pg_qualstats_compare_path(IndexCombination *path1,
-						  IndexCombination *path2)
-{
-	double	cost1 = path1->cost + path1->overhead;
-	double	cost2 = path2->cost + path2->overhead;
-
-	if (cost1 <= cost2)
-	{
-		pfree(path2);
-		return path1;
-	}
-
-	pfree(path1);
-	return path2;
-}
-
-int count = 0;
-
-/*
- * Plan all give queries to compute the total cost.
- */
-static double
-pg_qualstats_get_cost(QueryInfo *queryinfos, int nqueries, int *queryidxs)
-{
-	int		i;
-	double	cost = 0.0;
-
-	pgqs_cost_track_enable = true;
-
-	/* 
-	 * replan each query and compute the total weighted cost by multiplying
-	 * each query cost with its frequency.
-	 */
-	for (i = 0; i < nqueries; i++)
-	{
-		int		index = (queryidxs != NULL) ? queryidxs[i] : i;
-
-		pg_qualstats_plan_query(queryinfos[index].query);
-		cost += (pgqs_plan_cost * queryinfos[index].frequency);
-	}
-
-	pgqs_cost_track_enable = false;
-
-	return cost;
-}
-
-/*
- * Perform a exhaustive search with different index combinations.
- */
-static IndexCombination *
-pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
-						  int selected_cand)
-{
-	Oid						idxid;
-	BlockNumber				pages;
-	double					overhead;
-	int						max_cand = context->maxcand;
-	IndexCombination   *path1;
-	IndexCombination   *path2;
-	IndexCandidate		   *cand = context->candidates;
-
-	if (cur_cand == max_cand || selected_cand == max_cand)
-	{
-		count++;
-		path1 = palloc0(sizeof(IndexCombination) +
-						context->ncandidates * sizeof(int));
-
-		path1->cost = pg_qualstats_get_cost(context->queryinfos,
-											context->nqueries, NULL);
-		path1->nindices = 0;
-
-		return path1;
-	}
-
-	/* compute total cost excluding this index */
-	path1 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand);
-
-	/*
-	 * If any of the attribute of this candidate is overlapping with any
-	 * existing candidate in this combindation then don't add this candidate
-	 * in the combination.
-	 */
-	if (!cand[cur_cand].isvalid ||
-		pg_qualstats_is_cand_overlaps(context->memberattr, &cand[cur_cand]))
-		return path1;
-
-	pg_qualstats_bms_add_candattr(context, &cand[cur_cand]);
-
-	/* compare cost with and without this index */
-	idxid = hypo_create_index(cand[cur_cand].indexstmt, &pages);
-
-	/* compute total cost including this index */
-	path2 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand + 1);
-	path2->indices[path2->nindices++] = cur_cand;
-
-	overhead = pg_qualstats_get_index_overhead(&cand[cur_cand], pages);
-	path2->overhead += overhead;
-
-	hypo_index_remove(idxid);
-	pg_qualstats_bms_remove_candattr(context, &cand[cur_cand]);
-
-	return pg_qualstats_compare_path(path1, path2);
-}
-
-/*
- * try missing candidate in selected path with greedy approach
- */
-static IndexCombination *
-pg_qualstats_complete_comb(IndexCombContext *context,
-						   IndexCombination *path)
-{
-	int		i;
-	int 	ncand = context->ncandidates;	
-	IndexCandidate		   *cand = context->candidates;
-	IndexCombination   *finalpath = path;
-
-	for (i = 0; i < path->nindices; i++)
-	{
-		hypo_create_index(cand[path->indices[i]].indexstmt, NULL);
-	}
-
-	for (i = 0; i < ncand; i++)
-	{
-		Oid			idxid;
-		int			j;
-
-		if (!cand->isvalid)
-			continue;
-
-		for (j = 0; j < finalpath->nindices; j++)
-		{
-			if (finalpath->indices[j] == i)
-				break;
-		}
-		/* 
-		 * if candidate not found in path then try to add in the path and
-		 * compare cost
-		 */
-		if (j == finalpath->nindices)
-		{
-			IndexCombination *newpath;
-			int		size;
-			double	overhead;
-			BlockNumber		relpages;
-			
-			size = sizeof(IndexCombination) + ncand * sizeof(int);
-
-			newpath = (IndexCombination *) palloc0(size);
-			memcpy(newpath, finalpath, size);
-			newpath->nindices += 1;
-			idxid = hypo_create_index(cand[i].indexstmt, &relpages);
-			overhead = pg_qualstats_get_index_overhead(&cand[i], relpages);
-			newpath->overhead += overhead;
-			newpath->cost = pg_qualstats_get_cost(context->queryinfos,
-												  context->nqueries, NULL);
-			if (newpath->cost > finalpath->cost)
-			{
-				elog(NOTICE, "cost increased in greedy");
-			}
-
-			finalpath = pg_qualstats_compare_path(finalpath, newpath);
-			/* drop this index if this index is not selected. */
-			if (finalpath != newpath)
-				hypo_index_remove(idxid);
-			else
-				elog(NOTICE, "path selected in greedy");
-		}
-	}
-
-	/* reset all hypo indexes. */
-	hypo_index_reset();
-
-	return finalpath;
-}
-
-/*
- * check individiual index usefulness, if not reducing the cost by some margin
- * then mark invalid.
- */
-static void
-pg_qualstats_mark_useless_candidate(IndexCombContext *context)
-{
-	int		i;
-
-	for (i = 0; i < context->ncandidates; i++)
-	{
-		IndexCandidate *cand = &context->candidates[i];
-		double	cost1;
-		double	cost2;
-		Oid		idxid;
-
-		cost1 = pg_qualstats_get_cost(context->queryinfos, context->nqueries, NULL);
-		idxid = hypo_create_index(cand->indexstmt, NULL);
-		cost2 = pg_qualstats_get_cost(context->queryinfos, context->nqueries, NULL);
-		hypo_index_remove(idxid);
-
-		if (cost2 < cost1 - 100)
-			cand->isvalid = true;
-		else
-			cand->isvalid = false;
-	}
-}
-
-#endif //exhaustive
-
 /* Location of permanent stats file (valid when database is shut down) */
 #define PGQS_DUMP_FILE	"pg_qualstats.stat"
 /* Magic number identifying the stats file format */
@@ -484,176 +193,7 @@ static const uint32 PGQS_FILE_HEADER = 0x20220408;
 /* PostgreSQL major version number, changes in which invalidate all entries */
 static const uint32 PGQS_PG_MAJOR_VERSION = PG_VERSION_NUM / 100;
 
-
-#if 0
-static void pgqs_shmem_shutdown(int code, Datum arg);
-
-static void
-pgqs_read_dumpfile(void)
-{
-	bool		found;
-	HASHCTL		info;
-	FILE	   *file = NULL;
-	FILE	   *qfile = NULL;
-	uint32		header;
-	int32		num;
-	int32		pgver;
-	int32		i;
-	int			buffer_size;
-	char	   *buffer = NULL;
-
-	//TODO: Acquire lock
-	/*
-	 * If we're in the postmaster (or a standalone backend...), set up a shmem
-	 * exit hook to dump the statistics to disk.
-	 */
-	//if (!IsUnderPostmaster)
-		on_shmem_exit(pgqs_shmem_shutdown, (Datum) 0);
-
-	/*
-	 * Attempt to load old statistics from the dump file.
-	 */
-	file = AllocateFile(PGQS_DUMP_FILE, PG_BINARY_R);
-	if (file == NULL)
-	{
-		if (errno != ENOENT)
-			goto read_error;
-		/* No existing persisted stats file, so we're done */
-		return;
-	}
-
-	if (fread(&header, sizeof(uint32), 1, file) != 1 ||
-		fread(&pgver, sizeof(uint32), 1, file) != 1 ||
-		fread(&num, sizeof(int32), 1, file) != 1)
-		goto read_error;
-
-//	if (header != PQSS_FILE_HEADER ||
-//		pgver != PGQS_PG_MAJOR_VERSION)
-//		goto data_error;
-
-	for (i = 0; i < num; i++)
-	{
-		pgqsEntry	temp;
-		pgqsEntry  *entry;
-		Size		query_offset;
-
-		if (fread(&temp, sizeof(pgqsEntry), 1, file) != 1)
-			goto read_error;
-
-		entry = (pgqsEntry *) hash_search(pgqs_hash,
-										  &temp.key,
-										  HASH_ENTER, &found);
-		if (!found)
-			memcpy(entry, &temp, sizeof(pgqsEntry));
-	}
-	FreeFile(file);
-
-	unlink(PGQS_DUMP_FILE);
-
-	return;
-
-read_error:
-	ereport(LOG,
-			(errcode_for_file_access(),
-			 errmsg("could not read file \"%s\": %m",
-					PGQS_DUMP_FILE)));
-	goto fail;
-data_error:
-	ereport(LOG,
-			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-			 errmsg("ignoring invalid data in file \"%s\"",
-					PGQS_DUMP_FILE)));
-	goto fail;
-fail:
-	if (file)
-		FreeFile(file);
-
-	/* If possible, throw away the bogus file; ignore any error */
-	unlink(PGQS_DUMP_FILE);
-}
-
-/*
- * shmem_shutdown hook: Dump statistics into file.
- *
- * Note: we don't bother with acquiring lock, because there should be no
- * other processes running when this is called.
- */
-static void
-pgqs_shmem_shutdown(int code, Datum arg)
-{
-	FILE	   *file;
-	char	   *qbuffer = NULL;
-	Size		qbuffer_size = 0;
-	HASH_SEQ_STATUS hash_seq;
-	int32		num_entries;
-	pgqsEntry  *entry;
-	int i=1;
-
-	while(i);
-	/* Don't try to dump during a crash. */
-	if (code)
-		return;
-
-	/* Safety check ... shouldn't get here unless shmem is set up. */
-	if (!pgqs || !pgqs_hash)
-		return;
-
-	/* Don't dump if told not to. */
-//	if (!pgqs_save)
-//		return;
-
-	file = AllocateFile(PGQS_DUMP_FILE ".tmp", PG_BINARY_W);
-	if (file == NULL)
-		goto error;
-
-	if (fwrite(&PGQS_FILE_HEADER, sizeof(uint32), 1, file) != 1)
-		goto error;
-	if (fwrite(&PGQS_PG_MAJOR_VERSION, sizeof(uint32), 1, file) != 1)
-		goto error;
-	num_entries = hash_get_num_entries(pgqs_hash);
-	if (fwrite(&num_entries, sizeof(int32), 1, file) != 1)
-		goto error;
-
-	/*
-	 * When serializing to disk, we store query texts immediately after their
-	 * entry data.  Any orphaned query texts are thereby excluded.
-	 */
-	hash_seq_init(&hash_seq, pgqs_hash);
-	while ((entry = hash_seq_search(&hash_seq)) != NULL)
-	{
-		if (fwrite(entry, sizeof(pgqsEntry), 1, file) != 1)
-		{
-			/* note: we assume hash_seq_term won't change errno */
-			hash_seq_term(&hash_seq);
-			goto error;
-		}
-	}
-
-	if (FreeFile(file))
-	{
-		file = NULL;
-		goto error;
-	}
-
-	/*
-	 * Rename file into place, so we atomically replace any old one.
-	 */
-	(void) durable_rename(PGQS_DUMP_FILE ".tmp", PGQS_DUMP_FILE, LOG);
-
-	return;
-
-error:
-	ereport(LOG,
-			(errcode_for_file_access(),
-			 errmsg("could not write file \"%s\": %m",
-					PGQS_DUMP_FILE ".tmp")));
-	free(qbuffer);
-	if (file)
-		FreeFile(file);
-	unlink(PGQS_DUMP_FILE ".tmp");
-}
-
-#endif
+#ifdef DEBUG_INDEX_ADVISOR
 
 static void
 print_candidates(IndexCandidate *candidates, int ncandidates)
@@ -690,6 +230,7 @@ print_benefit_matrix(IndexCombContext *context)
 	elog(NOTICE, "%s", row.data);
 	pfree(row.data);
 }
+#endif
 
 Datum
 pg_qualstats_test_index_advise(PG_FUNCTION_ARGS)
@@ -833,7 +374,9 @@ pg_qualstats_iterative(IndexCombContext	*context)
 		else
 			pg_qualstats_compute_index_benefit(context, nqueries, NULL);
 
+#ifdef DEBUG_INDEX_ADVISOR
 		print_benefit_matrix(context);
+#endif
 
 		/*
 		 * Compute the overall benefit of all the candidate and get the  best
@@ -880,25 +423,6 @@ pg_qualstats_iterative(IndexCombContext	*context)
 	return path;
 }
 
-static IndexCombination *
-pg_qualstats_exhaustive(IndexCombContext *context)
-{
-	IndexCombination   *path;
-
-	pg_qualstats_mark_useless_candidate(context);
-	path = pg_qualstats_compare_comb(context, 0, 0);
-
-	/* 
-	 * If path doesn't include all the candidates then try to add missing
-	 * candidates with greedy approach.
-	 * TODO TRY iterative for remaining candidates.
-	 */
-	//if (path->nindices < context->ncandidates)
-	//	pg_qualstats_complete_comb(context, path);
-
-	return path;
-}
-
 static char **
 pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 							  int ncandidates, int *nindexes,
@@ -914,7 +438,9 @@ pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 	IndexCombContext		context;
 	MemoryContext oldcontext;
 
-	elog(NOTICE, "Candidate Relation %d", candidates[0].relid);
+#ifdef DEBUG_INDEX_ADVISOR
+	elog(NOTICE, "candidate Relation %d", candidates[0].relid);
+#endif
 
 	queryinfos = pg_qualstats_get_queries(candidates, ncandidates, &nqueries);
 
@@ -926,8 +452,9 @@ pg_qualstats_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 		return prevarray;
 
 	MemoryContextSwitchTo(oldcontext);
+#ifdef DEBUG_INDEX_ADVISOR
 	print_candidates(finalcand, ncandidates);
-
+#endif
 	context.candidates = finalcand;
 	context.ncandidates = ncandidates;
 	context.queryinfos = queryinfos;
@@ -1013,7 +540,9 @@ pg_qualstats_get_queries(IndexCandidate *candidates, int ncandidates,
 	{
 		queryinfos[i].query = pg_qualstats_get_query(queryids[i],
 													 &queryinfos[i].frequency);
+#ifdef DEBUG_INDEX_ADVISOR
 		elog(NOTICE, "query %d: %s-freq:%d", i, queryinfos[i].query, queryinfos[i].frequency);
+#endif
 	}
 
 	pfree(queryids);
@@ -1526,3 +1055,444 @@ pg_qualstats_get_best_candidate(IndexCombContext *context)
 
 	return bestcandidx;
 }
+
+#if 1 //exhaustive
+static void
+pg_qualstats_bms_add_candattr(IndexCombContext *context, IndexCandidate *cand)
+{
+	int		i;
+
+	for (i = 0; i < cand->nattrs; i++)
+	{
+		context->memberattr = bms_add_member(context->memberattr,
+											 cand->attnum[i]);
+	}
+}
+
+static void
+pg_qualstats_bms_remove_candattr(IndexCombContext *context,
+								 IndexCandidate *cand)
+{
+	int		i;
+
+	for (i = 0; i < cand->nattrs; i++)	
+	{
+		context->memberattr = bms_del_member(context->memberattr,
+											 cand->attnum[i]);
+	}
+}
+
+static bool
+pg_qualstats_is_cand_overlaps(Bitmapset *bms, IndexCandidate *cand)
+{
+	int		i;
+
+	if (bms == NULL)
+		return false;
+
+	for (i = 0; i < cand->nattrs; i++)
+	{
+		if (bms_is_member(cand->attnum[i], bms))
+			return true;
+	}
+	return false;
+}
+
+/*
+ * compare and retutn cheaper path and free non selected path
+ *
+ */
+static IndexCombination *
+pg_qualstats_compare_path(IndexCombination *path1,
+						  IndexCombination *path2)
+{
+	double	cost1 = path1->cost + path1->overhead;
+	double	cost2 = path2->cost + path2->overhead;
+
+	if (cost1 <= cost2)
+	{
+		pfree(path2);
+		return path1;
+	}
+
+	pfree(path1);
+	return path2;
+}
+
+/*
+ * Plan all give queries to compute the total cost.
+ */
+static double
+pg_qualstats_get_cost(QueryInfo *queryinfos, int nqueries, int *queryidxs)
+{
+	int		i;
+	double	cost = 0.0;
+
+	pgqs_cost_track_enable = true;
+
+	/* 
+	 * replan each query and compute the total weighted cost by multiplying
+	 * each query cost with its frequency.
+	 */
+	for (i = 0; i < nqueries; i++)
+	{
+		int		index = (queryidxs != NULL) ? queryidxs[i] : i;
+
+		pg_qualstats_plan_query(queryinfos[index].query);
+		cost += (pgqs_plan_cost * queryinfos[index].frequency);
+	}
+
+	pgqs_cost_track_enable = false;
+
+	return cost;
+}
+
+/*
+ * Perform a exhaustive search with different index combinations.
+ */
+static IndexCombination *
+pg_qualstats_compare_comb(IndexCombContext *context, int cur_cand,
+						  int selected_cand)
+{
+	Oid						idxid;
+	BlockNumber				pages;
+	double					overhead;
+	int						max_cand = context->maxcand;
+	IndexCombination   *path1;
+	IndexCombination   *path2;
+	IndexCandidate		   *cand = context->candidates;
+
+	if (cur_cand == max_cand || selected_cand == max_cand)
+	{
+		path1 = palloc0(sizeof(IndexCombination) +
+						context->ncandidates * sizeof(int));
+
+		path1->cost = pg_qualstats_get_cost(context->queryinfos,
+											context->nqueries, NULL);
+		path1->nindices = 0;
+
+		return path1;
+	}
+
+	/* compute total cost excluding this index */
+	path1 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand);
+
+	/*
+	 * If any of the attribute of this candidate is overlapping with any
+	 * existing candidate in this combindation then don't add this candidate
+	 * in the combination.
+	 */
+	if (!cand[cur_cand].isvalid ||
+		pg_qualstats_is_cand_overlaps(context->memberattr, &cand[cur_cand]))
+		return path1;
+
+	pg_qualstats_bms_add_candattr(context, &cand[cur_cand]);
+
+	/* compare cost with and without this index */
+	idxid = hypo_create_index(cand[cur_cand].indexstmt, &pages);
+
+	/* compute total cost including this index */
+	path2 = pg_qualstats_compare_comb(context, cur_cand + 1, selected_cand + 1);
+	path2->indices[path2->nindices++] = cur_cand;
+
+	overhead = pg_qualstats_get_index_overhead(&cand[cur_cand], pages);
+	path2->overhead += overhead;
+
+	hypo_index_remove(idxid);
+	pg_qualstats_bms_remove_candattr(context, &cand[cur_cand]);
+
+	return pg_qualstats_compare_path(path1, path2);
+}
+
+/*
+ * try missing candidate in selected path with greedy approach
+ */
+static IndexCombination *
+pg_qualstats_complete_comb(IndexCombContext *context,
+						   IndexCombination *path)
+{
+	int		i;
+	int 	ncand = context->ncandidates;	
+	IndexCandidate		   *cand = context->candidates;
+	IndexCombination   *finalpath = path;
+
+	for (i = 0; i < path->nindices; i++)
+	{
+		hypo_create_index(cand[path->indices[i]].indexstmt, NULL);
+	}
+
+	for (i = 0; i < ncand; i++)
+	{
+		Oid			idxid;
+		int			j;
+
+		if (!cand->isvalid)
+			continue;
+
+		for (j = 0; j < finalpath->nindices; j++)
+		{
+			if (finalpath->indices[j] == i)
+				break;
+		}
+		/* 
+		 * if candidate not found in path then try to add in the path and
+		 * compare cost
+		 */
+		if (j == finalpath->nindices)
+		{
+			IndexCombination *newpath;
+			int		size;
+			double	overhead;
+			BlockNumber		relpages;
+			
+			size = sizeof(IndexCombination) + ncand * sizeof(int);
+
+			newpath = (IndexCombination *) palloc0(size);
+			memcpy(newpath, finalpath, size);
+			newpath->nindices += 1;
+			idxid = hypo_create_index(cand[i].indexstmt, &relpages);
+			overhead = pg_qualstats_get_index_overhead(&cand[i], relpages);
+			newpath->overhead += overhead;
+			newpath->cost = pg_qualstats_get_cost(context->queryinfos,
+												  context->nqueries, NULL);
+#ifdef DEBUG_INDEX_ADVISOR
+			if (newpath->cost > finalpath->cost)
+			{
+				elog(NOTICE, "cost increased in greedy");
+			}
+#endif
+			finalpath = pg_qualstats_compare_path(finalpath, newpath);
+			/* drop this index if this index is not selected. */
+			if (finalpath != newpath)
+				hypo_index_remove(idxid);
+#ifdef DEBUG_INDEX_ADVISOR
+			else
+				elog(NOTICE, "path selected in greedy");
+#endif				
+		}
+	}
+
+	/* reset all hypo indexes. */
+	hypo_index_reset();
+
+	return finalpath;
+}
+
+/*
+ * check individiual index usefulness, if not reducing the cost by some margin
+ * then mark invalid.
+ */
+static void
+pg_qualstats_mark_useless_candidate(IndexCombContext *context)
+{
+	int		i;
+
+	for (i = 0; i < context->ncandidates; i++)
+	{
+		IndexCandidate *cand = &context->candidates[i];
+		double	cost1;
+		double	cost2;
+		Oid		idxid;
+
+		cost1 = pg_qualstats_get_cost(context->queryinfos, context->nqueries, NULL);
+		idxid = hypo_create_index(cand->indexstmt, NULL);
+		cost2 = pg_qualstats_get_cost(context->queryinfos, context->nqueries, NULL);
+		hypo_index_remove(idxid);
+
+		if (cost2 < cost1 - 100)
+			cand->isvalid = true;
+		else
+			cand->isvalid = false;
+	}
+}
+
+static IndexCombination *
+pg_qualstats_exhaustive(IndexCombContext *context)
+{
+	IndexCombination   *path;
+
+	pg_qualstats_mark_useless_candidate(context);
+	path = pg_qualstats_compare_comb(context, 0, 0);
+
+	/* 
+	 * If path doesn't include all the candidates then try to add missing
+	 * candidates with greedy approach.
+	 * TODO TRY iterative for remaining candidates.
+	 */
+	if (path->nindices < context->ncandidates)
+		pg_qualstats_complete_comb(context, path);
+
+	return path;
+}
+
+#endif //exhaustive
+
+#if 0 /* we do not need to survive restart*/
+static void pgqs_shmem_shutdown(int code, Datum arg);
+
+static void
+pgqs_read_dumpfile(void)
+{
+	bool		found;
+	HASHCTL		info;
+	FILE	   *file = NULL;
+	FILE	   *qfile = NULL;
+	uint32		header;
+	int32		num;
+	int32		pgver;
+	int32		i;
+	int			buffer_size;
+	char	   *buffer = NULL;
+
+	//TODO: Acquire lock
+	/*
+	 * If we're in the postmaster (or a standalone backend...), set up a shmem
+	 * exit hook to dump the statistics to disk.
+	 */
+	//if (!IsUnderPostmaster)
+		on_shmem_exit(pgqs_shmem_shutdown, (Datum) 0);
+
+	/*
+	 * Attempt to load old statistics from the dump file.
+	 */
+	file = AllocateFile(PGQS_DUMP_FILE, PG_BINARY_R);
+	if (file == NULL)
+	{
+		if (errno != ENOENT)
+			goto read_error;
+		/* No existing persisted stats file, so we're done */
+		return;
+	}
+
+	if (fread(&header, sizeof(uint32), 1, file) != 1 ||
+		fread(&pgver, sizeof(uint32), 1, file) != 1 ||
+		fread(&num, sizeof(int32), 1, file) != 1)
+		goto read_error;
+
+//	if (header != PQSS_FILE_HEADER ||
+//		pgver != PGQS_PG_MAJOR_VERSION)
+//		goto data_error;
+
+	for (i = 0; i < num; i++)
+	{
+		pgqsEntry	temp;
+		pgqsEntry  *entry;
+		Size		query_offset;
+
+		if (fread(&temp, sizeof(pgqsEntry), 1, file) != 1)
+			goto read_error;
+
+		entry = (pgqsEntry *) hash_search(pgqs_hash,
+										  &temp.key,
+										  HASH_ENTER, &found);
+		if (!found)
+			memcpy(entry, &temp, sizeof(pgqsEntry));
+	}
+	FreeFile(file);
+
+	unlink(PGQS_DUMP_FILE);
+
+	return;
+
+read_error:
+	ereport(LOG,
+			(errcode_for_file_access(),
+			 errmsg("could not read file \"%s\": %m",
+					PGQS_DUMP_FILE)));
+	goto fail;
+data_error:
+	ereport(LOG,
+			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			 errmsg("ignoring invalid data in file \"%s\"",
+					PGQS_DUMP_FILE)));
+	goto fail;
+fail:
+	if (file)
+		FreeFile(file);
+
+	/* If possible, throw away the bogus file; ignore any error */
+	unlink(PGQS_DUMP_FILE);
+}
+
+/*
+ * shmem_shutdown hook: Dump statistics into file.
+ *
+ * Note: we don't bother with acquiring lock, because there should be no
+ * other processes running when this is called.
+ */
+static void
+pgqs_shmem_shutdown(int code, Datum arg)
+{
+	FILE	   *file;
+	char	   *qbuffer = NULL;
+	Size		qbuffer_size = 0;
+	HASH_SEQ_STATUS hash_seq;
+	int32		num_entries;
+	pgqsEntry  *entry;
+	int i=1;
+
+	while(i);
+	/* Don't try to dump during a crash. */
+	if (code)
+		return;
+
+	/* Safety check ... shouldn't get here unless shmem is set up. */
+	if (!pgqs || !pgqs_hash)
+		return;
+
+	/* Don't dump if told not to. */
+//	if (!pgqs_save)
+//		return;
+
+	file = AllocateFile(PGQS_DUMP_FILE ".tmp", PG_BINARY_W);
+	if (file == NULL)
+		goto error;
+
+	if (fwrite(&PGQS_FILE_HEADER, sizeof(uint32), 1, file) != 1)
+		goto error;
+	if (fwrite(&PGQS_PG_MAJOR_VERSION, sizeof(uint32), 1, file) != 1)
+		goto error;
+	num_entries = hash_get_num_entries(pgqs_hash);
+	if (fwrite(&num_entries, sizeof(int32), 1, file) != 1)
+		goto error;
+
+	/*
+	 * When serializing to disk, we store query texts immediately after their
+	 * entry data.  Any orphaned query texts are thereby excluded.
+	 */
+	hash_seq_init(&hash_seq, pgqs_hash);
+	while ((entry = hash_seq_search(&hash_seq)) != NULL)
+	{
+		if (fwrite(entry, sizeof(pgqsEntry), 1, file) != 1)
+		{
+			/* note: we assume hash_seq_term won't change errno */
+			hash_seq_term(&hash_seq);
+			goto error;
+		}
+	}
+
+	if (FreeFile(file))
+	{
+		file = NULL;
+		goto error;
+	}
+
+	/*
+	 * Rename file into place, so we atomically replace any old one.
+	 */
+	(void) durable_rename(PGQS_DUMP_FILE ".tmp", PGQS_DUMP_FILE, LOG);
+
+	return;
+
+error:
+	ereport(LOG,
+			(errcode_for_file_access(),
+			 errmsg("could not write file \"%s\": %m",
+					PGQS_DUMP_FILE ".tmp")));
+	free(qbuffer);
+	if (file)
+		FreeFile(file);
+	unlink(PGQS_DUMP_FILE ".tmp");
+}
+
+#endif

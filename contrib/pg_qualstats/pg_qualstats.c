@@ -653,7 +653,7 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 		pgqsEntry  *localentry;
 		HASH_SEQ_STATUS local_hash_seq;
 		pgqsWalkerContext *context = palloc(sizeof(pgqsWalkerContext));
-		int			querylen = strlen(queryDesc->sourceText);
+		int			querylen = strlen(queryDesc->sourceText) + 1;
 
 		context->queryId = queryDesc->plannedstmt->queryId;
 		context->rtable = queryDesc->plannedstmt->rtable;

@@ -145,9 +145,6 @@ static IndexCandidate *index_advisor_add_candidate_if_not_exists(
 										IndexCandidate *candidates,
 										IndexCandidate *cand,
 										int *ncandidates, int *nmaxcand);
-static bool index_advisor_is_exists(IndexCandidate *candidates,
-								    int ncandidates, IndexCandidate *newcand,
-								    int *match);
 static void index_advisor_get_updates(IndexCandidate *candidates,
 									  int ncandidates);
 
@@ -749,9 +746,30 @@ index_advisor_add_candidate_if_not_exists(IndexCandidate *candidates,
 										 int *ncandidates, int *nmaxcand)
 {
 	IndexCandidate *finalcand = candidates;
-	int				match = -1;
+	int		i;
+	int		j;
+	bool	found = false;
 
-	if (!index_advisor_is_exists(candidates, *ncandidates, cand, &match))
+	for (i = 0; i < *ncandidates; i++)
+	{
+		IndexCandidate *oldcand = &candidates[i];
+
+		if (oldcand->nattrs != cand->nattrs)
+			continue;
+		if (oldcand->amoid != cand->amoid)
+			continue;
+
+		for (j = 0; j < oldcand->nattrs; j++)
+		{
+			if (oldcand->attnum[j] != cand->attnum[j])
+				break;
+		}
+
+		if (j == oldcand->nattrs)
+			found = true;
+	}
+
+	if (!found)
 	{
 		if (*ncandidates == *nmaxcand)
 		{
@@ -764,38 +782,6 @@ index_advisor_add_candidate_if_not_exists(IndexCandidate *candidates,
 	}
 
 	return finalcand;
-}
-
-static bool
-index_advisor_is_exists(IndexCandidate *candidates, int ncandidates,
-					   IndexCandidate *newcand, int *match)
-{
-	int		i;
-	int		j;
-
-	for (i = 0; i < ncandidates; i++)
-	{
-		IndexCandidate *oldcand = &candidates[i];
-
-		if (oldcand->nattrs != newcand->nattrs)
-			continue;
-		if (oldcand->amoid != newcand->amoid)
-			continue;
-
-		for (j = 0; j < oldcand->nattrs; j++)
-		{
-			if (oldcand->attnum[j] != newcand->attnum[j])
-				break;
-		}
-
-		if (j == oldcand->nattrs)
-		{
-			*match = i;
-			return true;
-		}
-	}
-
-	return false;
 }
 
 /*

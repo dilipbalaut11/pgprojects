@@ -7,6 +7,7 @@
 #include "postgres.h"
 
 #include "executor/spi.h"
+#include "funcapi.h"
 #include "miscadmin.h"
 #include "optimizer/optimizer.h"
 #include "utils/builtins.h"
@@ -89,6 +90,14 @@ typedef struct IndexAdvisorContext
 	MemoryContext	queryctx;	/* reference to per query context */
 } IndexCombContext;
 
+/* store index advises for SRF call */
+typedef struct IndexAdvises
+{
+	int		next;
+	int		count;
+	char  **index_array;
+} IndexAdvises;
+
 /*
  * query qual stats from pg_qualstats and group them by based on the relationid
  * index amname and qualid.
@@ -129,6 +138,8 @@ char *query =
 "\nSELECT * FROM filtered where amname='btree' OR amname='brin' ORDER BY relid, amname DESC, cardinality(attnumlist);";
 
 /* static function declarations */
+static IndexAdvises *index_advisor_generate_advise(MemoryContext per_query_ctx,
+												   bool exhaustive);
 static char **index_advisor_advise_one_rel(char **prevarray,
 											 IndexCandidate *candidates,
 											 int ncandidates, int *nindexes,
@@ -229,14 +240,13 @@ print_benefit_matrix(IndexCombContext *context)
 }
 #endif
 
-/*
- * Index advisor entry function, this will generate the advise based on the
+/* 
+ * Main index advisor function,  this will generate the advise based on the
  * predicate and workload stats collected so far.
  */
-Datum
-index_advisor_get_advise(PG_FUNCTION_ARGS)
+static IndexAdvises *
+index_advisor_generate_advise(MemoryContext per_query_ctx, bool exhaustive)
 {
-	bool		exhaustive = PG_GETARG_BOOL(0);
 	int			ret;
 	int			i;
 	int			ncandidates = 0;
@@ -245,15 +255,10 @@ index_advisor_get_advise(PG_FUNCTION_ARGS)
 	int			idxcand = 0;
 	Oid			prevrelid = InvalidOid;
 	char	  **index_array;
-	Datum	   *key_datums;
 	TupleDesc	tupdesc;
-	ArrayType  *result;
+	IndexAdvises   *advise;	
 	IndexCandidate *candidates;
-	ReturnSetInfo  *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-	MemoryContext 	per_query_ctx;
 	MemoryContext 	oldcontext;
-
-	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
 
 	if ((ret = SPI_connect()) < 0)
 		elog(ERROR, "pg_qualstat: SPI_connect returned %d", ret);
@@ -335,19 +340,47 @@ index_advisor_get_advise(PG_FUNCTION_ARGS)
 											   !exhaustive);
 
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
-	key_datums = (Datum *) palloc(nindexes * sizeof(Datum));
+	advise = (IndexAdvises *) palloc(sizeof(IndexAdvises));
 	MemoryContextSwitchTo(oldcontext);
-
 
 	SPI_finish();
 
-	/* construct and return index array. */
-	for (i = 0; i < nindexes; i++)
-		key_datums[i] = CStringGetTextDatum(index_array[i]);
+	advise->count = nindexes;
+	advise->next = 0;
+	advise->index_array = index_array;
 
-	result = construct_array_builtin(key_datums, nindexes, TEXTOID);
+	return advise;
+}
 
-	PG_RETURN_ARRAYTYPE_P(result);
+/*
+ * Index advisor entry function
+ */
+Datum
+index_advisor_get_advise(PG_FUNCTION_ARGS)
+{
+	char	  **index_array;
+	IndexAdvises   *advise;	
+	ReturnSetInfo  *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	FuncCallContext *funcctx;
+
+	if (SRF_IS_FIRSTCALL())
+	{
+		bool exhaustive = PG_GETARG_BOOL(0);
+		MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+
+		funcctx = SRF_FIRSTCALL_INIT();
+		
+		funcctx->user_fctx = index_advisor_generate_advise(per_query_ctx,
+														   exhaustive);
+	}
+	funcctx = SRF_PERCALL_SETUP();
+	advise = (IndexAdvises *) funcctx->user_fctx;
+
+	index_array = advise->index_array;
+	if (advise->next < advise->count)
+		SRF_RETURN_NEXT(funcctx, CStringGetTextDatum(index_array[advise->next++]));
+
+	SRF_RETURN_DONE(funcctx);
 }
 
 /*

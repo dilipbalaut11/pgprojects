@@ -129,7 +129,7 @@ char *query =
 "\nSELECT * FROM filtered where amname='btree' OR amname='brin' ORDER BY relid, amname DESC, cardinality(attnumlist);";
 
 /* static function declarations */
-static char **index_advisor_index_advise_rel(char **prevarray,
+static char **index_advisor_advise_one_rel(char **prevarray,
 											 IndexCandidate *candidates,
 											 int ncandidates, int *nindexes,
 											 MemoryContext per_query_ctx,
@@ -153,14 +153,11 @@ static void index_advisor_get_updates(IndexCandidate *candidates,
 
 static bool index_advisor_generate_index_queries(IndexCandidate *candidates,
 												 int ncandidates);
-static void index_advisor_fill_query_basecost(QueryInfo *queryinfos,
-											  int nqueries, int *queryidxs);
+static void index_advisor_set_basecost(QueryInfo *queryinfos, int nqueries);
 static void index_advisor_plan_query(const char *query);
 static void index_advisor_compute_index_benefit(IndexCombContext *context,
 												int nqueries, int *queryidxs);
 static double index_advisor_get_index_overhead(IndexCandidate *cand, Oid idxid);
-static bool index_advisor_is_index_useful(double basecost, double indexcost,
-										  double indexoverhead);
 static int index_advisor_get_best_candidate(IndexCombContext *context);
 static IndexCombination * index_advisor_exhaustive(IndexCombContext *context);
 
@@ -321,11 +318,11 @@ index_advisor_get_advise(PG_FUNCTION_ARGS)
 	{
 		if (OidIsValid(prevrelid) && prevrelid != candidates[i].relid)
 		{
-			index_array = index_advisor_index_advise_rel(index_array,
-														 &candidates[idxcand],
-														 nrelcand, &nindexes,
-														 per_query_ctx,
-														 !exhaustive);
+			index_array = index_advisor_advise_one_rel(index_array,
+													   &candidates[idxcand],
+													   nrelcand, &nindexes,
+													   per_query_ctx,
+													   !exhaustive);
 			nrelcand = 0;
 			idxcand = i;
 		}
@@ -334,11 +331,11 @@ index_advisor_get_advise(PG_FUNCTION_ARGS)
 	}
 
 	/* process the last relation */
-	index_array = index_advisor_index_advise_rel(index_array,
-												 &candidates[idxcand],
-												 nrelcand, &nindexes,
-												 per_query_ctx,
-												 !exhaustive);
+	index_array = index_advisor_advise_one_rel(index_array,
+											   &candidates[idxcand],
+											   nrelcand, &nindexes,
+											   per_query_ctx,
+											   !exhaustive);
 
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
 	key_datums = (Datum *) palloc(nindexes * sizeof(Datum));
@@ -356,6 +353,9 @@ index_advisor_get_advise(PG_FUNCTION_ARGS)
 	PG_RETURN_ARRAYTYPE_P(result);
 }
 
+/*
+ * Iterative approach for finding the best set of indexes.
+ */
 static IndexCombination *
 index_advisor_iterative(IndexCombContext *context)
 {
@@ -375,19 +375,37 @@ index_advisor_iterative(IndexCombContext *context)
 	comb = palloc0(sizeof(IndexCombination) + ncandidates * sizeof(int));
 
 	/*
-	 * First plan each query without any new index and set base cost for each
-	 * query.
+	 * The main iterative algorithm for selecting the best candidate indexes.
+	 *
+	 * Step1: At first plan all the queries without creating any new index and
+	 * set that as a base cost for each query.
+	 *
+	 * Step2: Now replan all the queries with each index and prepare a
+	 * index-query benefit matrix.  Each element in this matrix will represent
+	 * the cost benefit for a given query if that particular index exists.
+	 *
+	 * Step3: In this step we will compute the total benefit for each index
+	 * i.e. (Sum of each query benefit * query execution frequency).
+	 *
+	 * Step4: Shortlist the index which is giving the maximum benefit and
+	 * assume that this index is now selected.  So update the base cost of each
+	 * query which got benefitted with this index.
+	 *
+	 * Step5: Go to step2 and repeat the process to select the next best
+	 * candidate.  This time instead of replanning all the queries, only replan
+	 * the queries which got benefitted by the previous best candidate. And
+	 * also note that in this round the previously selected candidate are out
+	 * of the selection process.
 	 */
-	index_advisor_fill_query_basecost(queryinfos, nqueries, NULL);
-
+	index_advisor_set_basecost(queryinfos, nqueries);
 	while (true)
 	{
 		int		bestcand;
 		int		i;
 
 		/*
-		 * Create every index one at a time and replan every query and fill
-		 * intial values of benefit matrix.
+		 * Create each index one at a time and replan every query and fill
+		 * index-query benefit matrix.
 		 */
 		index_advisor_compute_index_benefit(context, nqueries, queryidxs);
 
@@ -451,8 +469,14 @@ index_advisor_iterative(IndexCombContext *context)
 	return comb;
 }
 
+/*
+ * Index advisor function for one relation, this will process all the
+ * input index candidates.  Generate all possible single coulmn and two columns
+ * indexes and check their value and finally return the list of indexes which
+ * can get the best value.
+ */
 static char **
-index_advisor_index_advise_rel(char **prevarray, IndexCandidate *candidates,
+index_advisor_advise_one_rel(char **prevarray, IndexCandidate *candidates,
 							   int ncandidates, int *nindexes,
 							   MemoryContext per_query_ctx, bool iterative)
 {
@@ -488,22 +512,33 @@ index_advisor_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 	 */
 	index_advisor_get_updates(finalcand, ncandidates);
 
-	/* We need to output the index statement so store in per query context */
+	/*
+	 * Generate index creation statement for each candidate.  We need to output
+	 * the index statements so store in per query context.
+	 */
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
 	if (!index_advisor_generate_index_queries(finalcand, ncandidates))
 		return prevarray;
+
 	MemoryContextSwitchTo(oldcontext);
 #ifdef DEBUG_INDEX_ADVISOR
 	print_candidates(finalcand, ncandidates);
 #endif
+
+	/* prepare context for index advisor processing */
 	context.candidates = finalcand;
 	context.ncandidates = ncandidates;
 	context.queryinfos = queryinfos;
 	context.nqueries = nqueries;
-	context.maxcand = ncandidates;//Min(ncandidates, 15);
+	context.maxcand = ncandidates;
 	context.memberattr = NULL;
 	context.queryctx = per_query_ctx;
 
+	/*
+	 * Process index candidate with iterative approach and find out the list
+	 * of indexes which can produce least cost for the given set of workload
+	 * queries.
+	 */
 	if (iterative)
 		comb = index_advisor_iterative(&context);
 	else
@@ -529,6 +564,11 @@ index_advisor_index_advise_rel(char **prevarray, IndexCandidate *candidates,
 	return index_array;
 }
 
+/*
+ * Process all candidate and get the list of all the unique queryids from the
+ * queryids stored in each candidate and also fetch the actual query from the
+ * workload hash and store in query info.
+ */
 static QueryInfo *
 index_advisor_get_queries(IndexCandidate *candidates, int ncandidates,
 						  int *nqueries)
@@ -542,6 +582,10 @@ index_advisor_get_queries(IndexCandidate *candidates, int ncandidates,
 
 	queryids = palloc(maxids * sizeof(int64));
 
+	/*
+	 * Process through the queryids stored in each candidate and prepare a
+	 * array of all distinct queryids. 
+	 */
 	for (i = 0; i < ncandidates; i++)
 	{
 		IndexCandidate *cand = &candidates[i];
@@ -566,6 +610,7 @@ index_advisor_get_queries(IndexCandidate *candidates, int ncandidates,
 
 	queryinfos = (QueryInfo *) palloc(nids * sizeof(QueryInfo));
 
+	/* get the actual query and execution frequency for each queryid */
 	for (i = 0; i < nids; i++)
 	{
 		queryinfos[i].query = index_advisor_get_query(queryids[i],
@@ -694,6 +739,10 @@ index_advisor_get_index_combination(IndexCandidate *candidates,
 	return finalcand;
 }
 
+/*
+ * Add 'cand' index candidate to the input 'candidates' array if its not
+ * already present in the array and return the update array.
+ */
 static IndexCandidate *
 index_advisor_add_candidate_if_not_exists(IndexCandidate *candidates,
 										 IndexCandidate *cand,
@@ -826,6 +875,10 @@ index_advisor_get_updates(IndexCandidate *candidates, int ncandidates)
 	LWLockRelease(pgqs->querylock);
 }
 
+/*
+ * Generate index creation statement for each candidate and store in the index
+ * candidate structure for later use.
+ */
 static bool
 index_advisor_generate_index_queries(IndexCandidate *candidates, int ncandidates)
 {
@@ -865,13 +918,15 @@ index_advisor_generate_index_queries(IndexCandidate *candidates, int ncandidates
 }
 
 /*
- * Plan all give queries to compute the total cost.
+ * Plan all given queries without any new index and fill base cost for each
+ * query.
  */
 static void
-index_advisor_fill_query_basecost(QueryInfo *queryinfos, int nqueries, int *queryidxs)
+index_advisor_set_basecost(QueryInfo *queryinfos, int nqueries)
 {
 	int		i;
 
+	/* enable cost tracking before planning queries */
 	pgqs_cost_track_enable = true;
 
 	/* 
@@ -879,12 +934,11 @@ index_advisor_fill_query_basecost(QueryInfo *queryinfos, int nqueries, int *quer
 	 */
 	for (i = 0; i < nqueries; i++)
 	{
-		int		index = (queryidxs != NULL) ? queryidxs[i] : i;
-
-		index_advisor_plan_query(queryinfos[index].query);
+		index_advisor_plan_query(queryinfos[i].query);
 		queryinfos[i].cost = pgqs_plan_cost;
 	}
 
+	/* disable cost tracking */
 	pgqs_cost_track_enable = false;
 }
 
@@ -897,17 +951,23 @@ index_advisor_plan_query(const char *query)
 	if (query == NULL)
 		return;
 
+	/*
+	 * Enable hypo index injection so that we can see the cost with the
+	 * hypothetical indexes we have created.
+	 */
 	hypo_is_enabled = true;
 
 	initStringInfo(&explainquery);
 	appendStringInfoString(&explainquery, query);
 	SPI_execute(query, false, 0);
 
+	/* diable hypo index injection */
 	hypo_is_enabled = false;
 }
 
 /*
- * check individiual index benefit for each query and fill in the matrix.
+ * Plan given set of input queries with each valid and non-selected indexes and
+ * fill the index-query benefit matrix.
  */
 static void
 index_advisor_compute_index_benefit(IndexCombContext *context,
@@ -942,7 +1002,7 @@ index_advisor_compute_index_benefit(IndexCombContext *context,
 			cand->overhead = index_advisor_get_index_overhead(cand, relpages);
 
 		/* 
-		 * replan each query and compute the total weighted cost by multiplying
+		 * Replan each query and compute the total weighted cost by multiplying
 		 * each query cost with its frequency.
 		 */
 		for (j = 0; j < nqueries; j++)
@@ -951,8 +1011,13 @@ index_advisor_compute_index_benefit(IndexCombContext *context,
 
 			index_advisor_plan_query(queryinfos[index].query);
 
-			if (index_advisor_is_index_useful(queryinfos[index].cost,
-										 	 pgqs_plan_cost, cand->overhead))
+			/*
+			 * If the index reduces the cost at least by 5% and cost with index
+			 * including index overhead is lesser than cost without index, then
+			 * consider this index useful and update the benefit matrix
+			 */
+			if ((pgqs_plan_cost < queryinfos[index].cost * 0.95) &&
+				(pgqs_plan_cost + cand->overhead < queryinfos[index].cost))
 			{
 				benefit[index][i] = queryinfos[index].cost - pgqs_plan_cost;
 			}
@@ -994,17 +1059,10 @@ index_advisor_get_index_overhead(IndexCandidate *cand, BlockNumber relpages)
 	return overhead;
 }
 
-static bool
-index_advisor_is_index_useful(double basecost, double indexcost,
-							 double indexoverhead)
-{
-	if ((indexcost < basecost * 0.95) &&
-		(indexcost + indexoverhead < basecost))
-		return true;
-
-	return false;
-}
-
+/*
+ * Compute total benefit of each candidate and return the index of the
+ * candidate which is giving maximum total benefit.
+ */
 static int
 index_advisor_get_best_candidate(IndexCombContext *context)
 {
@@ -1017,6 +1075,11 @@ index_advisor_get_best_candidate(IndexCombContext *context)
 	double	max_benefit = 0;
 	double	benefit;
 
+	/*
+	 * Loop through all index candidate and all queries and compute weighted
+	 * sum of benefit for each candidate.
+	 * total_benefit = Sum(benefit(Qi) * frequency(Qi)).
+	 */
 	for (i = 0; i < ncandidates; i++)
 	{
 		int	j;

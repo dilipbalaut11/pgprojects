@@ -21,7 +21,7 @@
 extern PGDLLEXPORT Datum index_advisor_get_advise(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(index_advisor_get_advise);
 
-//#define DEBUG_INDEX_ADVISOR
+#define DEBUG_INDEX_ADVISOR
 
 /*
  * If 'pgqs_cost_track_enable' is set then the planner will start tracking the
@@ -101,11 +101,14 @@ typedef struct IndexAdvises
 /*
  * query qual stats from pg_qualstats and group them by based on the relationid
  * index amname and qualid.
+ *
+ * XXX instead of doing union of 2 simmilar queries is there any other way to
+ * output two independent rows for lrelid and rrelid.
  */
 char *query =
 "WITH pgqs AS ("
-"\n          SELECT dbid, min(am.oid) amoid, amname, qualid, qualnodeid,"
-"\n            (coalesce(lrelid, rrelid), coalesce(lattnum, rattnum),"
+"\n          (SELECT dbid, min(am.oid) amoid, amname, qualid, qualnodeid,"
+"\n            (lrelid, lattnum,"
 "\n            opno, eval_type)::qual AS qual, queryid,"
 "\n            round(avg(execution_count)) AS execution_count,"
 "\n            sum(occurences) AS occurences,"
@@ -121,9 +124,32 @@ char *query =
 "\n          JOIN pg_catalog.pg_am am ON am.oid = amop.amopmethod"
 "\n          WHERE d.datname = current_database()"
 "\n          AND eval_type = 'f'"
-"\n          AND coalesce(lrelid, rrelid) != 0"
-"\n          GROUP BY dbid, amname, qualid, qualnodeid, lrelid, rrelid,"
-"\n            lattnum, rattnum, opno, eval_type, queryid ORDER BY lattnum, rattnum"
+"\n			 AND lrelid IS NOT NULL"
+"\n          AND lrelid != 0"
+"\n          GROUP BY dbid, amname, qualid, qualnodeid, lrelid,"
+"\n            lattnum, rattnum, opno, eval_type, queryid ORDER BY lattnum)"
+"\n			UNION ALL "
+"\n          (SELECT dbid, min(am.oid) amoid, amname, qualid, qualnodeid,"
+"\n            (rrelid, rattnum,"
+"\n            opno, eval_type)::qual AS qual, queryid,"
+"\n            round(avg(execution_count)) AS execution_count,"
+"\n            sum(occurences) AS occurences,"
+"\n            round(sum(nbfiltered)::numeric / sum(occurences)) AS avg_filter,"
+"\n            CASE WHEN sum(execution_count) = 0"
+"\n              THEN 0"
+"\n              ELSE round(sum(nbfiltered::numeric) / sum(execution_count) * 100)"
+"\n            END AS avg_selectivity"
+"\n          FROM pg_qualstats() q"
+"\n          JOIN pg_catalog.pg_database d ON q.dbid = d.oid"
+"\n          JOIN pg_catalog.pg_operator op ON op.oid = q.opno"
+"\n          JOIN pg_catalog.pg_amop amop ON amop.amopopr = op.oid"
+"\n          JOIN pg_catalog.pg_am am ON am.oid = amop.amopmethod"
+"\n          WHERE d.datname = current_database()"
+"\n          AND eval_type = 'f'"
+"\n          AND rrelid != 0"
+"\n			 AND rrelid IS NOT NULL"
+"\n          GROUP BY dbid, amname, qualid, qualnodeid, rrelid,"
+"\n            lattnum, rattnum, opno, eval_type, queryid ORDER BY rattnum)"
 "\n        ),"
 "\n        -- apply cardinality and selectivity restrictions"
 "\n        filtered AS ("

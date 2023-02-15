@@ -32,17 +32,6 @@ static float pgqs_plan_cost = 0.0;
 planner_hook_type prev_planner_hook = NULL;
 
 /*
- * Store information for a query, i.e. querystring, its base cost and execution
- * frequency.
- */
-typedef struct QueryInfo
-{
-	double	cost;
-	int		frequency;
-	char   *query;
-} QueryInfo;
-
-/*
  * Store information for a index combination.
  */
 typedef struct IndexCombination
@@ -73,6 +62,17 @@ typedef struct IndexCandidate
 	bool	isvalid;		/* is candidate still valid (not rejected)*/
 	bool	isselected;		/* is candidate already selected in final list */
 } IndexCandidate;
+
+/*
+ * Store information for a query, i.e. querystring, its base cost and execution
+ * frequency.
+ */
+typedef struct QueryInfo
+{
+	double	cost;
+	int		frequency;
+	char   *query;
+} QueryInfo;
 
 /*
  * Index advisor context, store various intermediate information while
@@ -353,7 +353,8 @@ index_advisor_generate_advise(MemoryContext per_query_ctx, bool exhaustive)
 }
 
 /*
- * Index advisor entry function
+ * Index advisor entry function, this will returns the index advises in form
+ * of create index queries.
  */
 Datum
 index_advisor_get_advise(PG_FUNCTION_ARGS)
@@ -369,7 +370,8 @@ index_advisor_get_advise(PG_FUNCTION_ARGS)
 		MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
 
 		funcctx = SRF_FIRSTCALL_INIT();
-		
+
+		/* generate index advises and save it for subsequent calls */
 		funcctx->user_fctx = index_advisor_generate_advise(per_query_ctx,
 														   exhaustive);
 	}

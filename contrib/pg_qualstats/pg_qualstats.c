@@ -524,7 +524,8 @@ static void
 pgqs_ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
 	/* Setup instrumentation */
-	if (pgqs_enabled)
+	if (pgqs_enabled  && strlen(queryDesc->sourceText) < pgqs_query_size
+		&& !pgqs_cost_track_enable)
 	{
 		/*
 		 * For rate sampling, randomly choose top-level statement. Either all
@@ -634,7 +635,7 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 
 	if ((pgqs || pgqs_backend) && pgqs_enabled && pgqs_is_query_sampled()
 #if PG_VERSION_NUM >= 90600
-		&& (!IsParallelWorker() && !pgqs_cost_track_enable)
+		&& (!IsParallelWorker())
 #endif
 
 	/*
@@ -653,7 +654,8 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 		pgqsEntry  *localentry;
 		HASH_SEQ_STATUS local_hash_seq;
 		pgqsWalkerContext *context = palloc(sizeof(pgqsWalkerContext));
-		int			querylen = strlen(queryDesc->sourceText) + 1;
+		pgqsQueryStringEntry *queryEntry;
+		int		querylen = strlen(queryDesc->sourceText) + 1;
 
 		context->queryId = queryDesc->plannedstmt->queryId;
 		context->rtable = queryDesc->plannedstmt->rtable;
@@ -666,55 +668,48 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 		context->querytext = queryDesc->sourceText;
 		queryKey.queryid = context->queryId;
 
-		/* keep an unormalized query example for each queryid if needed */
-		if (pgqs_track_constants && querylen < pgqs_query_size)
+		/* Lookup the hash table entry with a shared lock. */
+		PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
+
+		queryEntry = (pgqsQueryStringEntry *) hash_search_with_hash_value(pgqs_query_examples_hash, &queryKey,
+																		  context->queryId,
+																		  HASH_FIND, &found);
+
+		/* Create the new entry if not present */
+		if (!found)
 		{
-			pgqsQueryStringEntry *queryEntry;
+			bool		excl_found;
 
+			/* Need exclusive lock to add a new hashtable entry - promote */
+			PGQS_LWL_RELEASE(pgqs->querylock);
+			PGQS_LWL_ACQUIRE(pgqs->querylock, LW_EXCLUSIVE);
 
-			/* Lookup the hash table entry with a shared lock. */
-			PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
+			while (hash_get_num_entries(pgqs_query_examples_hash) >= pgqs_max)
+				pgqs_queryentry_dealloc();
 
 			queryEntry = (pgqsQueryStringEntry *) hash_search_with_hash_value(pgqs_query_examples_hash, &queryKey,
-																			  context->queryId,
-																			  HASH_FIND, &found);
+																				context->queryId,
+																				HASH_ENTER, &excl_found);
 
-			/* Create the new entry if not present */
-			if (!found)
+			/* Make sure it wasn't added by another backend */
+			if (!excl_found)
 			{
-				bool		excl_found;
-
-				/* Need exclusive lock to add a new hashtable entry - promote */
-				PGQS_LWL_RELEASE(pgqs->querylock);
-				PGQS_LWL_ACQUIRE(pgqs->querylock, LW_EXCLUSIVE);
-
-				while (hash_get_num_entries(pgqs_query_examples_hash) >= pgqs_max)
-					pgqs_queryentry_dealloc();
-
-				queryEntry = (pgqsQueryStringEntry *) hash_search_with_hash_value(pgqs_query_examples_hash, &queryKey,
-																				  context->queryId,
-																				  HASH_ENTER, &excl_found);
-
-				/* Make sure it wasn't added by another backend */
-				if (!excl_found)
-				{
-					if (queryDesc->estate->es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY)
-						queryEntry->isExplain = true;
-					else
-						queryEntry->isExplain = false;
-
-					queryEntry->qrylen = querylen;
-					strcpy(queryEntry->querytext, context->querytext);
-					queryEntry->frequency = 1;
-				}
+				if (queryDesc->estate->es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY)
+					queryEntry->isExplain = true;
 				else
-					queryEntry->frequency++;
+					queryEntry->isExplain = false;
+
+				queryEntry->qrylen = querylen;
+				strcpy(queryEntry->querytext, context->querytext);
+				queryEntry->frequency = 1;
 			}
 			else
 				queryEntry->frequency++;
-
-			PGQS_LWL_RELEASE(pgqs->querylock);
 		}
+		else
+			queryEntry->frequency++;
+
+		PGQS_LWL_RELEASE(pgqs->querylock);
 
 		/* create local hash table if it hasn't been created yet */
 		if (!pgqs_localhash)

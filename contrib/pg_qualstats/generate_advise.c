@@ -104,6 +104,11 @@ typedef struct IndexAdvises
  *
  * XXX instead of doing union of 2 simmilar queries is there any other way to
  * output two independent rows for lrelid and rrelid.
+ *
+ * TODO: We should consider BRIN index only on very large tables
+ *
+ * TODO: We should consider GIN/GIST indexes, for that we need to create
+ * support for them in hypopg.
  */
 char *query =
 "WITH pgqs AS ("
@@ -786,6 +791,12 @@ index_advisor_get_index_combination(IndexCandidate *candidates,
 				cand.attnum[0] = candidates[i].attnum[j];
 				cand.attnum[1] = candidates[i].attnum[k];
 
+				/*
+				 * TODO: for brin index order of column doesn't matter so if
+				 * the index with all column same as new candidate exists then
+				 * we can consider this as duplicate (no need to check strict
+				 * column order)
+				 */
 				finalcand = index_advisor_add_candidate_if_not_exists(finalcand,
 												&cand, &nfinalcand, &nmaxcand);
 			}

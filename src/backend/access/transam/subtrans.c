@@ -33,7 +33,7 @@
 #include "access/transam.h"
 #include "pg_trace.h"
 #include "utils/snapmgr.h"
-
+#include "utils/hsearch.h"
 
 /*
  * Defines for SubTrans page sizes.  A page is the same BLCKSZ as is used
@@ -62,10 +62,104 @@ static SlruCtlData SubTransCtlData;
 
 #define SubTransCtl  (&SubTransCtlData)
 
+typedef struct SubtransBufLookupEnt
+{
+	int		pageno;			/* key */
+	int		slotno;			/* slot number in slru buffer array */
+} SubtransBufLookupEnt;
+
+static HTAB *SubtransBufHash;
 
 static int	ZeroSUBTRANSPage(int pageno);
 static bool SubTransPagePrecedes(int page1, int page2);
 
+static inline uint32
+SubtransHashPartition(int hashcode)
+{
+	return hashcode % NUM_SUBTRANS_PARTITIONS;
+}
+
+static inline LWLock *
+SubtransPartitionLock(uint32 hashcode)
+{
+	return &MainLWLockArray[SUBTRANS_BUF_MAPPING_LWLOCK_OFFSET +
+							SubtransHashPartition(hashcode)].lock;
+}
+
+static inline LWLock *
+SubtransPartitionLockByIndex(uint32 index)
+{
+	return &MainLWLockArray[SUBTRANS_BUF_MAPPING_LWLOCK_OFFSET + index].lock;
+}
+
+static uint32
+SubtransBufTableHashCode(int *key)
+{
+	return get_hash_value(SubtransBufHash, (void *) key);
+}
+
+static int
+SubtransBufTableLookup(int *key, uint32 hashcode)
+{
+	SubtransBufLookupEnt *result;
+
+	result = (SubtransBufLookupEnt *)
+		hash_search_with_hash_value(SubtransBufHash,
+									(void *) key,
+									hashcode,
+									HASH_FIND,
+									NULL);
+
+	if (!result)
+		return -1;
+
+	return result->slotno;
+}
+
+static int
+SubtransBufTableInsert(int *key, uint32 hashcode, int slotno)
+{
+	SubtransBufLookupEnt *result;
+	bool		found;
+
+	Assert(slotno >= 0);		/* -1 is reserved for not-in-table */
+
+	result = (SubtransBufLookupEnt *)
+		hash_search_with_hash_value(SubtransBufHash,
+									(void *) key,
+									hashcode,
+									HASH_ENTER,
+									&found);
+
+	if (found)					/* found something already in the table */
+		return result->slotno;
+
+	result->slotno = slotno;
+
+	return -1;
+}
+
+/*
+ * BufTableDelete
+ *		Delete the hashtable entry for given tag (which must exist)
+ *
+ * Caller must hold exclusive lock on BufMappingLock for tag's partition
+ */
+static void
+SubtransBufTableDelete(int *key, uint32 hashcode)
+{
+	SubtransBufLookupEnt *result;
+
+	result = (SubtransBufLookupEnt *)
+		hash_search_with_hash_value(SubtransBufHash,
+									(void *) key,
+									hashcode,
+									HASH_REMOVE,
+									NULL);
+
+	if (!result)				/* shouldn't happen */
+		elog(ERROR, "shared buffer hash table corrupted");
+}
 
 /*
  * Record the parent of a subtransaction in the subtrans log.
@@ -76,12 +170,26 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 	int			pageno = TransactionIdToPage(xid);
 	int			entryno = TransactionIdToEntry(xid);
 	int			slotno;
+	uint32		hash;
+	LWLock	   *partitionLock;	
 	TransactionId *ptr;
 
 	Assert(TransactionIdIsValid(parent));
 	Assert(TransactionIdFollows(xid, parent));
 
-	LWLockAcquire(SubtransSLRULock, LW_EXCLUSIVE);
+	/* determine its hash code and partition lock ID */
+	hash = SubtransBufTableHashCode(&pageno);
+	partitionLock = SubtransPartitionLock(hash);
+
+	/* see if the block is in the buffer pool already */
+	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
+	slotno = SubtransBufTableLookup(&pageno, hash);
+	if (slotno < 0)
+	{
+		SubTransCtl->shared->ControlLock = partitionLock;
+		slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
+		SubtransBufTableInsert(&pageno, hash, slotno);
+	}
 
 	slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
 	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
@@ -99,7 +207,7 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 		SubTransCtl->shared->page_dirty[slotno] = true;
 	}
 
-	LWLockRelease(SubtransSLRULock);
+	LWLockRelease(partitionLock);
 }
 
 /*
@@ -111,6 +219,8 @@ SubTransGetParent(TransactionId xid)
 	int			pageno = TransactionIdToPage(xid);
 	int			entryno = TransactionIdToEntry(xid);
 	int			slotno;
+	uint32		hash;
+	LWLock	   *partitionLock;
 	TransactionId *ptr;
 	TransactionId parent;
 
@@ -121,15 +231,27 @@ SubTransGetParent(TransactionId xid)
 	if (!TransactionIdIsNormal(xid))
 		return InvalidTransactionId;
 
-	/* lock is acquired by SimpleLruReadPage_ReadOnly */
+	/* determine its hash code and partition lock ID */
+	hash = SubtransBufTableHashCode(&pageno);
+	partitionLock = SubtransPartitionLock(hash);
 
-	slotno = SimpleLruReadPage_ReadOnly(SubTransCtl, pageno, xid);
+	/* see if the block is in the buffer pool already */
+	LWLockAcquire(partitionLock, LW_SHARED);
+	slotno = SubtransBufTableLookup(&pageno, hash);
+	if (slotno < 0)
+	{
+		LWLockRelease(partitionLock);
+		LWLockAcquire(partitionLock, LW_EXCLUSIVE);
+		SubTransCtl->shared->ControlLock = partitionLock;
+		slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
+		SubtransBufTableInsert(&pageno, hash, slotno);
+	}
+
 	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
 	ptr += entryno;
-
 	parent = *ptr;
 
-	LWLockRelease(SubtransSLRULock);
+	LWLockRelease(partitionLock);
 
 	return parent;
 }
@@ -184,16 +306,36 @@ SubTransGetTopmostTransaction(TransactionId xid)
 Size
 SUBTRANSShmemSize(void)
 {
-	return SimpleLruShmemSize(NUM_SUBTRANS_BUFFERS, 0);
+	Size	size;
+
+	size = SimpleLruShmemSize(NUM_SUBTRANS_BUFFERS, 0);
+	size += hash_estimate_size(size, sizeof(SubtransBufLookupEnt));
 }
 
 void
 SUBTRANSShmemInit(void)
 {
+	HASHCTL		info;
+	int			size;
+
+	/* assume no locking is needed yet */
+
+	/* BufferTag maps to Buffer */
+	info.keysize = sizeof(int);
+	info.entrysize = sizeof(SubtransBufLookupEnt);
+	info.num_partitions = NUM_SUBTRANS_PARTITIONS;
+
+	size = NUM_SUBTRANS_BUFFERS + NUM_SUBTRANS_PARTITIONS;
+	SubtransBufHash = ShmemInitHash("Subtrans Buffer Lookup Table",
+									size, size,
+									&info,
+									HASH_ELEM | HASH_BLOBS | HASH_PARTITION);
+
 	SubTransCtl->PagePrecedes = SubTransPagePrecedes;
 	SimpleLruInit(SubTransCtl, "Subtrans", NUM_SUBTRANS_BUFFERS, 0,
 				  SubtransSLRULock, "pg_subtrans",
 				  LWTRANCHE_SUBTRANS_BUFFER, SYNC_HANDLER_NONE);
+
 	SlruPagePrecedesUnitTests(SubTransCtl, SUBTRANS_XACTS_PER_PAGE);
 }
 

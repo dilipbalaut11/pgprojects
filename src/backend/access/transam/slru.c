@@ -478,6 +478,481 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 	}
 }
 
+static void
+SlruInternalWritePage2(SlruCtl ctl, int slotno, SlruWriteAll fdata)
+{
+	SlruShared	shared = ctl->shared;
+	int			pageno = shared->page_number[slotno];
+	bool		ok;
+
+	/* If a write is in progress, wait for it to finish */
+	while (shared->page_status[slotno] == SLRU_PAGE_WRITE_IN_PROGRESS &&
+		   shared->page_number[slotno] == pageno)
+	{
+		LWLockRelease(&shared->buffer_locks[slotno].lock);
+		SimpleLruWaitIO2(ctl, slotno);
+		LWLockAcquire(&shared->buffer_locks[slotno].lock, LW_SHARED);
+	}
+
+	LWLockRelease(&shared->buffer_locks[slotno].lock);
+	LWLockAcquire(&shared->buffer_locks[slotno].lock, LW_EXCLUSIVE);
+	/*
+	 * Do nothing if page is not dirty, or if buffer no longer contains the
+	 * same page we were called for.
+	 */
+	if (!shared->page_dirty[slotno] ||
+		shared->page_status[slotno] != SLRU_PAGE_VALID ||
+		shared->page_number[slotno] != pageno)
+	{
+		LWLockRelease(&shared->buffer_locks[slotno].lock);
+		return;
+	}
+
+	/*
+	 * Mark the slot write-busy, and clear the dirtybit.  After this point, a
+	 * transaction status update on this page will mark it dirty again.
+	 */
+	shared->page_status[slotno] = SLRU_PAGE_WRITE_IN_PROGRESS;
+	shared->page_dirty[slotno] = false;
+
+	/* Do the write */
+	ok = SlruPhysicalWritePage(ctl, pageno, slotno, fdata);
+
+	/* If we failed, and we're in a flush, better close the files */
+	if (!ok && fdata)
+	{
+		int			i;
+
+		for (i = 0; i < fdata->num_files; i++)
+			CloseTransientFile(fdata->fd[i]);
+	}
+
+	Assert(shared->page_number[slotno] == pageno &&
+		   shared->page_status[slotno] == SLRU_PAGE_WRITE_IN_PROGRESS);
+
+	/* If we failed to write, mark the page dirty again */
+	if (!ok)
+		shared->page_dirty[slotno] = true;
+
+	shared->page_status[slotno] = SLRU_PAGE_VALID;
+
+	LWLockRelease(&shared->buffer_locks[slotno].lock);
+
+	/* Now it's okay to ereport if we failed */
+	if (!ok)
+		SlruReportIOError(ctl, pageno, InvalidTransactionId);
+
+	/* If part of a checkpoint, count this as a buffer written. */
+	if (fdata)
+		CheckpointStats.ckpt_bufs_written++;
+}
+
+static void
+SimpleLruWaitIO2(SlruCtl ctl, int slotno)
+{
+	SlruShared	shared = ctl->shared;
+
+	/* See notes at top of file */
+	LWLockAcquire(&shared->buffer_locks[slotno].lock, LW_SHARED);
+
+	/*
+	 * If the slot is still in an io-in-progress state, then either someone
+	 * already started a new I/O on the slot, or a previous I/O failed and
+	 * neglected to reset the page state.  That shouldn't happen, really, but
+	 * it seems worth a few extra cycles to check and recover from it. We can
+	 * cheaply test for failure by seeing if the buffer lock is still held (we
+	 * assume that transaction abort would release the lock).
+	 */
+	if (shared->page_status[slotno] == SLRU_PAGE_READ_IN_PROGRESS ||
+		shared->page_status[slotno] == SLRU_PAGE_WRITE_IN_PROGRESS)
+	{
+		LWLockRelease(&shared->buffer_locks[slotno].lock);
+		LWLockAcquire(&shared->buffer_locks[slotno].lock, LW_EXCLUSIVE);
+
+		/* indeed, the I/O must have failed */
+		if (shared->page_status[slotno] == SLRU_PAGE_READ_IN_PROGRESS)
+			shared->page_status[slotno] = SLRU_PAGE_EMPTY;
+		else				/* write_in_progress */
+		{
+			shared->page_status[slotno] = SLRU_PAGE_VALID;
+			shared->page_dirty[slotno] = true;
+		}
+		LWLockRelease(&shared->buffer_locks[slotno].lock);
+	}
+}
+
+/*
+ * Select the slot to re-use when we need a free slot.
+ *
+ * The target page number is passed because we need to consider the
+ * possibility that some other process reads in the target page while
+ * we are doing I/O to free a slot.  Hence, check or recheck to see if
+ * any slot already holds the target page, and return that slot if so.
+ * Thus, the returned slot is *either* a slot already holding the pageno
+ * (could be any state except EMPTY), *or* a freeable slot (state EMPTY
+ * or CLEAN).
+ *
+ * Control lock must be held at entry, and will be held at exit.
+ */
+static int
+SlruSelectLRUPage2(SlruCtl ctl, int pageno)
+{
+	SlruShared	shared = ctl->shared;
+
+	/* Outer loop handles restart after I/O */
+	for (;;)
+	{
+		int			slotno;
+		int			cur_count;
+		int			prevbestslot = -1;
+		int			bestvalidslot = 0;	/* keep compiler quiet */
+		int			best_valid_delta = -1;
+		int			best_valid_page_number = 0; /* keep compiler quiet */
+		int			bestinvalidslot = 0;	/* keep compiler quiet */
+		int			best_invalid_delta = -1;
+		int			best_invalid_page_number = 0;	/* keep compiler quiet */
+
+		/* See if page already has a buffer assigned */
+		for (slotno = 0; slotno < shared->num_slots; slotno++)
+		{
+			LWLockAcquire(&shared->buffer_locks[slotno].lock, LW_SHARED);
+			if (shared->page_number[slotno] == pageno &&
+				shared->page_status[slotno] != SLRU_PAGE_EMPTY)
+			{
+				return slotno;
+			}
+			LWLockRelease(&shared->buffer_locks[slotno].lock);
+		}
+
+		/*
+		 * If we find any EMPTY slot, just select that one. Else choose a
+		 * victim page to replace.  We normally take the least recently used
+		 * valid page, but we will never take the slot containing
+		 * latest_page_number, even if it appears least recently used.  We
+		 * will select a slot that is already I/O busy only if there is no
+		 * other choice: a read-busy slot will not be least recently used once
+		 * the read finishes, and waiting for an I/O on a write-busy slot is
+		 * inferior to just picking some other slot.  Testing shows the slot
+		 * we pick instead will often be clean, allowing us to begin a read at
+		 * once.
+		 *
+		 * Normally the page_lru_count values will all be different and so
+		 * there will be a well-defined LRU page.  But since we allow
+		 * concurrent execution of SlruRecentlyUsed() within
+		 * SimpleLruReadPage_ReadOnly(), it is possible that multiple pages
+		 * acquire the same lru_count values.  In that case we break ties by
+		 * choosing the furthest-back page.
+		 *
+		 * Notice that this next line forcibly advances cur_lru_count to a
+		 * value that is certainly beyond any value that will be in the
+		 * page_lru_count array after the loop finishes.  This ensures that
+		 * the next execution of SlruRecentlyUsed will mark the page newly
+		 * used, even if it's for a page that has the current counter value.
+		 * That gets us back on the path to having good data when there are
+		 * multiple pages with the same lru_count.
+		 */
+		cur_count = (shared->cur_lru_count)++;
+		for (slotno = 0; slotno < shared->num_slots; slotno++)
+		{
+			int			this_delta;
+			int			this_page_number;
+
+			LWLockAcquire(&shared->buffer_locks[slotno].lock, LW_SHARED);
+			if (shared->page_status[slotno] == SLRU_PAGE_EMPTY)
+			{
+				return slotno;
+			}
+
+			this_delta = cur_count - shared->page_lru_count[slotno];
+			if (this_delta < 0)
+			{
+				/*
+				 * Clean up in case shared updates have caused cur_count
+				 * increments to get "lost".  We back off the page counts,
+				 * rather than trying to increase cur_count, to avoid any
+				 * question of infinite loops or failure in the presence of
+				 * wrapped-around counts.
+				 */
+				shared->page_lru_count[slotno] = cur_count;
+				this_delta = 0;
+			}
+			this_page_number = shared->page_number[slotno];
+			if (this_page_number == shared->latest_page_number)
+			{
+				LWLockRelease(&shared->buffer_locks[slotno].lock);
+				continue;
+			}
+			if (shared->page_status[slotno] == SLRU_PAGE_VALID)
+			{
+				if (this_delta > best_valid_delta ||
+					(this_delta == best_valid_delta &&
+					 ctl->PagePrecedes(this_page_number,
+									   best_valid_page_number)))
+				{
+					LWLockRelease(&shared->buffer_locks[prevbestslot].lock);
+					bestvalidslot = slotno;
+					best_valid_delta = this_delta;
+					best_valid_page_number = this_page_number;
+				}
+			}
+			else
+			{
+				if (this_delta > best_invalid_delta ||
+					(this_delta == best_invalid_delta &&
+					 ctl->PagePrecedes(this_page_number,
+									   best_invalid_page_number)))
+				{
+					bestinvalidslot = slotno;
+					best_invalid_delta = this_delta;
+					best_invalid_page_number = this_page_number;
+				}
+			}
+			if (slotno != bestvalidslot)
+				LWLockRelease(&shared->buffer_locks[slotno].lock);
+			else
+				prevbestslot = bestvalidslot;
+		}
+
+		/*
+		 * If all pages (except possibly the latest one) are I/O busy, we'll
+		 * have to wait for an I/O to complete and then retry.  In that
+		 * unhappy case, we choose to wait for the I/O on the least recently
+		 * used slot, on the assumption that it was likely initiated first of
+		 * all the I/Os in progress and may therefore finish first.
+		 */
+		if (best_valid_delta < 0)
+		{
+			SimpleLruWaitIO2(ctl, bestinvalidslot);
+			continue;
+		}
+
+		/*
+		 * If the selected page is clean, we're set.
+		 */
+		if (!shared->page_dirty[bestvalidslot])
+		{
+			return bestvalidslot;
+		}
+		/*
+		 * Write the page.
+		 */
+		SlruInternalWritePage2(ctl, bestvalidslot, NULL);
+
+		/*
+		 * Now loop back and try again.  This is the easiest way of dealing
+		 * with corner cases such as the victim page being re-dirtied while we
+		 * wrote it.
+		 */
+	}
+}
+
+int
+SimpleLruZeroPage2(SlruCtl ctl, int pageno)
+{
+	SlruShared	shared = ctl->shared;
+	int			slotno;
+
+	for (;;)
+	{
+		int			slotno;
+		int			victimpageno;
+		bool		ok;
+		uint32		hash;
+		LWLock	   *partitionLock;
+
+		/* Find a suitable buffer slot for the page */
+		slotno = SlruSelectLRUPage2(ctl, pageno);
+
+		victimpageno = shared->page_number[slotno];
+
+		LWLockRelease(&shared->buffer_locks[slotno].lock);
+		if (victimpageno != pageno)
+		{
+			/* determine its hash code and partition lock ID */
+			hash = SubtransBufTableHashCode(&victimpageno);
+			partitionLock = SubtransPartitionLock(hash);
+			LWLockAcquire(partitionLock, LW_EXCLUSIVE);
+		}
+		LWLockAcquire(&shared->buffer_locks[slotno].lock, LW_EXCLUSIVE);
+
+		/* We found no match; assert we selected a freeable slot */
+		if (victimpageno != shared->page_number[slotno] ||
+			!(shared->page_status[slotno] == SLRU_PAGE_EMPTY ||
+			 (shared->page_status[slotno] == SLRU_PAGE_VALID &&
+			  !shared->page_dirty[slotno])))
+		{
+			LWLockRelease(&shared->buffer_locks[slotno].lock);
+			LWLockRelease(partitionLock);
+			continue;
+		}
+
+		/* Mark the slot as containing this page */
+		shared->page_number[slotno] = pageno;
+		shared->page_status[slotno] = SLRU_PAGE_VALID;
+		shared->page_dirty[slotno] = true;
+		SlruRecentlyUsed(shared, slotno);
+
+		/* Set the buffer to zeroes */
+		MemSet(shared->page_buffer[slotno], 0, BLCKSZ);
+
+		
+		if ()
+		{
+			/***** TODO: Remove entry from buffer mapping table *****/
+			/* Release control lock while doing I/O */
+			LWLockRelease(partitionLock);
+
+			hash = SubtransBufTableHashCode(&pageno);
+			partitionLock = SubtransPartitionLock(hash);
+			LWLockAcquire(partitionLock, LW_EXCLUSIVE);
+
+			/***** TODO: Insert entry in buffer mapping table *****/
+			LWLockRelease(&shared->buffer_locks[slotno].lock);
+			LWLockRelease(partitionLock);			
+		}
+
+		/* Set the LSNs for this new page to zero */
+		SimpleLruZeroLSNs(ctl, slotno);
+
+		/* Assume this page is now the latest active page */
+		shared->latest_page_number = pageno;
+
+		/* update the stats counter of zeroed pages */
+		pgstat_count_slru_page_zeroed(shared->slru_stats_idx);
+
+		return slotno;
+}
+
+/*
+ * Find a page in a shared buffer, reading it in if necessary.
+ * The page number must correspond to an already-initialized page.
+ *
+ * If write_ok is true then it is OK to return a page that is in
+ * WRITE_IN_PROGRESS state; it is the caller's responsibility to be sure
+ * that modification of the page is safe.  If write_ok is false then we
+ * will not return the page until it is not undergoing active I/O.
+ *
+ * The passed-in xid is used only for error reporting, and may be
+ * InvalidTransactionId if no specific xid is associated with the action.
+ *
+ * Return value is the shared-buffer slot number now holding the page.
+ * The buffer's LRU access info is updated.
+ *
+ * Control lock must be held at entry, and will be held at exit.
+ */
+int
+SimpleLruReadPage2(SlruCtl ctl, int pageno, bool write_ok,
+				  TransactionId xid)
+{
+	SlruShared	shared = ctl->shared;
+
+	/* Outer loop handles restart if we must wait for someone else's I/O */
+	for (;;)
+	{
+		int			slotno;
+		int			victimpageno;
+		bool		ok;
+		uint32		hash;
+		LWLock	   *partitionLock;
+
+		/* See if page already is in memory; if not, pick victim slot */
+		slotno = SlruSelectLRUPage2(ctl, pageno);
+	
+		/* Did we find the page in memory? */
+		if (shared->page_number[slotno] == pageno &&
+			shared->page_status[slotno] != SLRU_PAGE_EMPTY)
+		{
+			/*
+			 * If page is still being read in, we must wait for I/O.  Likewise
+			 * if the page is being written and the caller said that's not OK.
+			 */
+			if (shared->page_status[slotno] == SLRU_PAGE_READ_IN_PROGRESS ||
+				(shared->page_status[slotno] == SLRU_PAGE_WRITE_IN_PROGRESS &&
+				 !write_ok))
+			{
+				LWLockRelease(&shared->buffer_locks[slotno].lock);
+				SimpleLruWaitIO(ctl, slotno);
+				/* Now we must recheck state from the top */
+				continue;
+			}
+			/* Otherwise, it's ready to use */
+			SlruRecentlyUsed(shared, slotno);
+
+			/* update the stats counter of pages found in the SLRU */
+			pgstat_count_slru_page_hit(shared->slru_stats_idx);
+
+			/* release lock ??*/
+
+			return slotno;
+		}
+
+		victimpageno = shared->page_number[slotno];
+
+		/* determine its hash code and partition lock ID */
+		hash = SubtransBufTableHashCode(&victimpageno);
+		partitionLock = SubtransPartitionLock(hash);
+		LWLockRelease(&shared->buffer_locks[slotno].lock);
+		LWLockAcquire(partitionLock, LW_EXCLUSIVE);
+		LWLockAcquire(&shared->buffer_locks[slotno].lock, LW_EXCLUSIVE);
+
+		/* We found no match; assert we selected a freeable slot */
+		if (victimpageno != shared->page_number[slotno] ||
+			!(shared->page_status[slotno] == SLRU_PAGE_EMPTY ||
+			 (shared->page_status[slotno] == SLRU_PAGE_VALID &&
+			  !shared->page_dirty[slotno])))
+		{
+			LWLockRelease(&shared->buffer_locks[slotno].lock);
+			LWLockRelease(partitionLock);
+			continue;
+		}
+
+		Assert(shared->page_status[slotno] == SLRU_PAGE_EMPTY ||
+			   (shared->page_status[slotno] == SLRU_PAGE_VALID &&
+				!shared->page_dirty[slotno]));
+
+		/* Mark the slot read-busy */
+		shared->page_number[slotno] = pageno;
+		shared->page_status[slotno] = SLRU_PAGE_READ_IN_PROGRESS;
+		shared->page_dirty[slotno] = false;
+
+		/***** TODO: Remove entry from buffer mapping table *****/
+
+		/* Release control lock while doing I/O */
+		LWLockRelease(partitionLock);
+
+		/* Do the read */
+		ok = SlruPhysicalReadPage(ctl, pageno, slotno);
+
+		/* Set the LSNs for this newly read-in page to zero */
+		SimpleLruZeroLSNs(ctl, slotno);
+
+		Assert(shared->page_number[slotno] == pageno &&
+			   shared->page_status[slotno] == SLRU_PAGE_READ_IN_PROGRESS &&
+			   !shared->page_dirty[slotno]);
+
+		shared->page_status[slotno] = ok ? SLRU_PAGE_VALID : SLRU_PAGE_EMPTY;
+
+		hash = SubtransBufTableHashCode(&pageno);
+		partitionLock = SubtransPartitionLock(hash);
+		LWLockAcquire(partitionLock, LW_EXCLUSIVE);
+
+		/***** TODO: Insert entry in buffer mapping table *****/
+		LWLockRelease(&shared->buffer_locks[slotno].lock);
+		LWLockRelease(partitionLock);
+
+		/* Now it's okay to ereport if we failed */
+		if (!ok)
+			SlruReportIOError(ctl, pageno, xid);
+
+		SlruRecentlyUsed(shared, slotno);
+
+		/* update the stats counter of pages not found in SLRU */
+		pgstat_count_slru_page_read(shared->slru_stats_idx);
+
+		return slotno;
+	}
+}
+
 /*
  * Find a page in a shared buffer, reading it in if necessary.
  * The page number must correspond to an already-initialized page.

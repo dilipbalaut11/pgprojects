@@ -146,6 +146,9 @@ extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 extern int	SimpleLruZeroPage(SlruCtl ctl, int pageno);
 extern int	SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 							  TransactionId xid);
+extern int SimpleLruZeroPage2(SlruCtl ctl, int pageno);
+extern int	SimpleLruReadPage2(SlruCtl ctl, int pageno, bool write_ok,
+							   TransactionId xid);							  
 extern int	SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno,
 									   TransactionId xid);
 extern void SimpleLruWritePage(SlruCtl ctl, int slotno);

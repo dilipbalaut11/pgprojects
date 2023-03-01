@@ -183,15 +183,19 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 	partitionLock = SubtransPartitionLock(hash);
 
 	/* see if the block is in the buffer pool already */
-	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
-	slotno = SubtransBufTableLookup(&pageno, hash);
-	if (slotno < 0)
+	while(true)
 	{
-		SubTransCtl->shared->ControlLock = partitionLock;
-		slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
-		SubtransBufTableInsert(&pageno, hash, slotno);
+		LWLockAcquire(partitionLock, LW_SHARED);
+		slotno = SubtransBufTableLookup(&pageno, hash);
+		if (slotno >= 0)
+			break;
+
+		LWLockRelease(partitionLock);
+		slotno = SimpleLruReadPage2(SubTransCtl, pageno, true, xid);
 	}
 
+	LWLockAcquire(&SubTransCtl->shared->buffer_locks[slotno].lock, LW_EXCLUSIVE);
+	LWLockRelease(partitionLock);
 	slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
 	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
 	ptr += entryno;
@@ -208,7 +212,7 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 		SubTransCtl->shared->page_dirty[slotno] = true;
 	}
 
-	LWLockRelease(partitionLock);
+	LWLockRelease(&SubTransCtl->shared->buffer_locks[slotno].lock);
 }
 
 /*
@@ -237,22 +241,25 @@ SubTransGetParent(TransactionId xid)
 	partitionLock = SubtransPartitionLock(hash);
 
 	/* see if the block is in the buffer pool already */
-	LWLockAcquire(partitionLock, LW_SHARED);
-	slotno = SubtransBufTableLookup(&pageno, hash);
-	if (slotno < 0)
+	while(true)
 	{
+		LWLockAcquire(partitionLock, LW_SHARED);
+		slotno = SubtransBufTableLookup(&pageno, hash);
+		if (slotno >= 0)
+			break;
+
 		LWLockRelease(partitionLock);
-		LWLockAcquire(partitionLock, LW_EXCLUSIVE);
-		SubTransCtl->shared->ControlLock = partitionLock;
-		slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
-		SubtransBufTableInsert(&pageno, hash, slotno);
+		slotno = SimpleLruReadPage2(SubTransCtl, pageno, true, xid);
 	}
+
+	LWLockAcquire(&SubTransCtl->shared->buffer_locks[slotno].lock, LW_SHARED);
+	LWLockRelease(partitionLock);
 
 	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
 	ptr += entryno;
 	parent = *ptr;
 
-	LWLockRelease(partitionLock);
+	LWLockRelease(&SubTransCtl->shared->buffer_locks[slotno].lock);
 
 	return parent;
 }
@@ -380,7 +387,7 @@ BootStrapSUBTRANS(void)
 static int
 ZeroSUBTRANSPage(int pageno)
 {
-	return SimpleLruZeroPage(SubTransCtl, pageno);
+	return SimpleLruZeroPage2(SubTransCtl, pageno);
 }
 
 /*
@@ -466,20 +473,8 @@ ExtendSUBTRANS(TransactionId newestXact)
 
 	pageno = TransactionIdToPage(newestXact);
 
-
-	/* determine its hash code and partition lock ID */
-	hash = SubtransBufTableHashCode(&pageno);
-	partitionLock = SubtransPartitionLock(hash);
-
-	/* see if the block is in the buffer pool already */
-	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
-
-	SubTransCtl->shared->ControlLock = partitionLock;
-
 	/* Zero the page */
 	ZeroSUBTRANSPage(pageno);
-
-	LWLockRelease(partitionLock);
 }
 
 

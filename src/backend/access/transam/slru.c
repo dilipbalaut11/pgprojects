@@ -202,6 +202,41 @@ SlruUnLockAllPartition(SlruCtl ctl)
 	}
 }
 
+static int
+SlruBufTableInsert(SlruCtl ctl, int *key, int slotno)
+{
+	SlruBufLookupEnt *result;
+	bool		found;
+
+	Assert(slotno >= 0);		/* -1 is reserved for not-in-table */
+
+	result = (SlruBufLookupEnt *) hash_search(ctl->SlruBufHash,
+											  (void *) key,
+											  HASH_ENTER,
+											  &found);
+
+	if (found)					/* found something already in the table */
+		return result->slotno;
+
+	result->slotno = slotno;
+
+	return -1;
+}
+
+static void
+SlruBufTableDelete(SlruCtl ctl, int *key)
+{
+	SlruBufLookupEnt *result;
+
+	result = (SlruBufLookupEnt *) hash_search(ctl->SlruBufHash,
+											  (void *) key,
+											  HASH_REMOVE,
+											  NULL);
+
+//	if (!result)				/* shouldn't happen */
+//		elog(ERROR, "slru buffer hash table corrupted");
+}
+
 /*
  * Initialize, or attach to, a simple LRU cache in shared memory.
  *
@@ -312,6 +347,7 @@ SimpleLruZeroPage(SlruCtl ctl, int pageno)
 {
 	SlruShared	shared = ctl->shared;
 	int			slotno;
+	int			oldpageno;
 
 	/* Find a suitable buffer slot for the page */
 	slotno = SlruSelectLRUPage(ctl, pageno);
@@ -319,6 +355,13 @@ SimpleLruZeroPage(SlruCtl ctl, int pageno)
 		   (shared->page_status[slotno] == SLRU_PAGE_VALID &&
 			!shared->page_dirty[slotno]) ||
 		   shared->page_number[slotno] == pageno);
+
+	oldpageno = shared->page_number[slotno];
+	if (oldpageno != pageno && ctl->SlruBufHash != NULL)
+	{
+		SlruBufTableDelete(ctl, &oldpageno);
+		SlruBufTableInsert(ctl, &pageno, slotno);
+	}
 
 	/* Mark the slot as containing this page */
 	shared->page_number[slotno] = pageno;
@@ -432,6 +475,7 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 	for (;;)
 	{
 		int			slotno;
+		int			oldpageno;
 		bool		ok;
 
 		/* See if page already is in memory; if not, pick victim slot */
@@ -468,6 +512,7 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 				!shared->page_dirty[slotno]));
 
 		/* Mark the slot read-busy */
+		oldpageno = shared->page_number[slotno];
 		shared->page_number[slotno] = pageno;
 		shared->page_status[slotno] = SLRU_PAGE_READ_IN_PROGRESS;
 		shared->page_dirty[slotno] = false;
@@ -486,6 +531,12 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 
 		/* Re-acquire control lock and update page state */
 		SlruLockAllPartition(ctl, LW_EXCLUSIVE);
+
+		if (ctl->SlruBufHash != NULL)
+		{
+			SlruBufTableDelete(ctl, &oldpageno);
+			SlruBufTableInsert(ctl, &pageno, slotno);
+		}
 
 		Assert(shared->page_number[slotno] == pageno &&
 			   shared->page_status[slotno] == SLRU_PAGE_READ_IN_PROGRESS &&

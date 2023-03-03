@@ -63,14 +63,6 @@ static SlruCtlData SubTransCtlData;
 
 #define SubTransCtl  (&SubTransCtlData)
 
-typedef struct SubtransBufLookupEnt
-{
-	int		pageno;			/* key */
-	int		slotno;			/* slot number in slru buffer array */
-} SubtransBufLookupEnt;
-
-static HTAB *SubtransBufHash;
-
 static int	ZeroSUBTRANSPage(int pageno);
 static bool SubTransPagePrecedes(int page1, int page2);
 
@@ -102,9 +94,9 @@ SubtransBufTableHashCode(int *key)
 static int
 SubtransBufTableLookup(int *key, uint32 hashcode)
 {
-	SubtransBufLookupEnt *result;
+	SlruBufLookupEnt *result;
 
-	result = (SubtransBufLookupEnt *)
+	result = (SlruBufLookupEnt *)
 		hash_search_with_hash_value(SubTransCtl->SlruBufHash,
 									(void *) key,
 									hashcode,
@@ -115,29 +107,6 @@ SubtransBufTableLookup(int *key, uint32 hashcode)
 		return -1;
 
 	return result->slotno;
-}
-
-static int
-SubtransBufTableInsert(int *key, uint32 hashcode, int slotno)
-{
-	SubtransBufLookupEnt *result;
-	bool		found;
-
-	Assert(slotno >= 0);		/* -1 is reserved for not-in-table */
-
-	result = (SubtransBufLookupEnt *)
-		hash_search_with_hash_value(SubTransCtl->SlruBufHash,
-									(void *) key,
-									hashcode,
-									HASH_ENTER,
-									&found);
-
-	if (found)					/* found something already in the table */
-		return result->slotno;
-
-	result->slotno = slotno;
-
-	return -1;
 }
 
 /*
@@ -184,7 +153,6 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 		LWLockRelease(partitionLock);
 		SlruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
 		slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
-		SubtransBufTableInsert(&pageno, hash, slotno);
 
 		ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
 		ptr += entryno;
@@ -256,7 +224,6 @@ SubTransGetParent(TransactionId xid)
 		LWLockRelease(partitionLock);
 		SlruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
 		slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
-		SubtransBufTableInsert(&pageno, hash, slotno);
 		ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
 		ptr += entryno;
 		parent = *ptr;

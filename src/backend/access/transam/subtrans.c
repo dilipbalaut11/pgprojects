@@ -96,7 +96,7 @@ SubtransPartitionLockByIndex(uint32 index)
 static uint32
 SubtransBufTableHashCode(int *key)
 {
-	return get_hash_value(SubtransBufHash, (void *) key);
+	return get_hash_value(SubTransCtl->SlruBufHash, (void *) key);
 }
 
 static int
@@ -105,7 +105,7 @@ SubtransBufTableLookup(int *key, uint32 hashcode)
 	SubtransBufLookupEnt *result;
 
 	result = (SubtransBufLookupEnt *)
-		hash_search_with_hash_value(SubtransBufHash,
+		hash_search_with_hash_value(SubTransCtl->SlruBufHash,
 									(void *) key,
 									hashcode,
 									HASH_FIND,
@@ -126,7 +126,7 @@ SubtransBufTableInsert(int *key, uint32 hashcode, int slotno)
 	Assert(slotno >= 0);		/* -1 is reserved for not-in-table */
 
 	result = (SubtransBufLookupEnt *)
-		hash_search_with_hash_value(SubtransBufHash,
+		hash_search_with_hash_value(SubTransCtl->SlruBufHash,
 									(void *) key,
 									hashcode,
 									HASH_ENTER,
@@ -138,28 +138,6 @@ SubtransBufTableInsert(int *key, uint32 hashcode, int slotno)
 	result->slotno = slotno;
 
 	return -1;
-}
-
-/*
- * BufTableDelete
- *		Delete the hashtable entry for given tag (which must exist)
- *
- * Caller must hold exclusive lock on BufMappingLock for tag's partition
- */
-static void
-SubtransBufTableDelete(int *key, uint32 hashcode)
-{
-	SubtransBufLookupEnt *result;
-
-	result = (SubtransBufLookupEnt *)
-		hash_search_with_hash_value(SubtransBufHash,
-									(void *) key,
-									hashcode,
-									HASH_REMOVE,
-									NULL);
-
-	if (!result)				/* shouldn't happen */
-		elog(ERROR, "shared buffer hash table corrupted");
 }
 
 /*
@@ -182,15 +160,6 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 	hash = SubtransBufTableHashCode(&pageno);
 	partitionLock = SubtransPartitionLock(hash);
 
-	/* see if the block is in the buffer pool already */
-	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
-	slotno = SubtransBufTableLookup(&pageno, hash);
-	if (slotno < 0)
-	{
-		SubTransCtl->shared->ControlLock = partitionLock;
-		slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
-		SubtransBufTableInsert(&pageno, hash, slotno);
-	}
 
 	slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
 	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
@@ -208,7 +177,50 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 		SubTransCtl->shared->page_dirty[slotno] = true;
 	}
 
-	LWLockRelease(partitionLock);
+	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
+	slotno = SubtransBufTableLookup(&pageno, hash);
+	if (slotno < 0)
+	{
+		LWLockRelease(partitionLock);
+		SlruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
+		slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
+		SubtransBufTableInsert(&pageno, hash, slotno);
+
+		ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
+		ptr += entryno;
+
+		/*
+		* It's possible we'll try to set the parent xid multiple times but we
+		* shouldn't ever be changing the xid from one valid xid to another valid
+		* xid, which would corrupt the data structure.
+		*/
+		if (*ptr != parent)
+		{
+			Assert(*ptr == InvalidTransactionId);
+			*ptr = parent;
+			SubTransCtl->shared->page_dirty[slotno] = true;
+		}
+		SlruUnLockAllPartition(SubTransCtl);
+	}
+	else
+	{
+		ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
+		ptr += entryno;
+
+		/*
+		* It's possible we'll try to set the parent xid multiple times but we
+		* shouldn't ever be changing the xid from one valid xid to another valid
+		* xid, which would corrupt the data structure.
+		*/
+		if (*ptr != parent)
+		{
+			Assert(*ptr == InvalidTransactionId);
+			*ptr = parent;
+			SubTransCtl->shared->page_dirty[slotno] = true;
+		}
+
+		LWLockRelease(partitionLock);
+	}
 }
 
 /*
@@ -242,17 +254,22 @@ SubTransGetParent(TransactionId xid)
 	if (slotno < 0)
 	{
 		LWLockRelease(partitionLock);
-		LWLockAcquire(partitionLock, LW_EXCLUSIVE);
-		SubTransCtl->shared->ControlLock = partitionLock;
+		SlruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
 		slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
 		SubtransBufTableInsert(&pageno, hash, slotno);
+		ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
+		ptr += entryno;
+		parent = *ptr;
+		SlruUnLockAllPartition(SubTransCtl);
 	}
+	else
+	{
+		ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
+		ptr += entryno;
+		parent = *ptr;
 
-	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
-	ptr += entryno;
-	parent = *ptr;
-
-	LWLockRelease(partitionLock);
+		LWLockRelease(partitionLock);
+	}
 
 	return parent;
 }
@@ -310,7 +327,7 @@ SUBTRANSShmemSize(void)
 	Size	size;
 
 	size = SimpleLruShmemSize(NUM_SUBTRANS_BUFFERS, 0);
-	size += hash_estimate_size(size, sizeof(SubtransBufLookupEnt));
+	size += hash_estimate_size(NUM_SUBTRANS_BUFFERS, sizeof(SlruBufLookupEnt));
 
 	return size;
 }
@@ -320,24 +337,31 @@ SUBTRANSShmemInit(void)
 {
 	HASHCTL		info;
 	int			size;
+	int			i;
 
 	/* assume no locking is needed yet */
 
 	/* BufferTag maps to Buffer */
 	info.keysize = sizeof(int);
-	info.entrysize = sizeof(SubtransBufLookupEnt);
+	info.entrysize = sizeof(SlruBufLookupEnt);
 	info.num_partitions = NUM_SUBTRANS_PARTITIONS;
 
 	size = NUM_SUBTRANS_BUFFERS + NUM_SUBTRANS_PARTITIONS;
-	SubtransBufHash = ShmemInitHash("Subtrans Buffer Lookup Table",
-									size, size,
-									&info,
-									HASH_ELEM | HASH_BLOBS | HASH_PARTITION);
+	SubTransCtl->SlruBufHash = ShmemInitHash("Subtrans Buffer Lookup Table",
+											 size, size,
+											 &info,
+											 HASH_ELEM | HASH_BLOBS |
+											 HASH_PARTITION);
 
 	SubTransCtl->PagePrecedes = SubTransPagePrecedes;
 	SimpleLruInit(SubTransCtl, "Subtrans", NUM_SUBTRANS_BUFFERS, 0,
-				  SubtransSLRULock, "pg_subtrans",
+				  NULL, "pg_subtrans",
 				  LWTRANCHE_SUBTRANS_BUFFER, SYNC_HANDLER_NONE);
+
+	for (i = 0; i < NUM_SUBTRANS_PARTITIONS; i++)
+		SubTransCtl->shared->partlock[i] = SubtransPartitionLockByIndex(i);
+
+	SubTransCtl->shared->num_locks = NUM_SUBTRANS_PARTITIONS;
 
 	SlruPagePrecedesUnitTests(SubTransCtl, SUBTRANS_XACTS_PER_PAGE);
 }
@@ -357,7 +381,7 @@ BootStrapSUBTRANS(void)
 {
 	int			slotno;
 
-	LWLockAcquire(SubtransSLRULock, LW_EXCLUSIVE);
+	SlruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
 
 	/* Create and zero the first page of the subtrans log */
 	slotno = ZeroSUBTRANSPage(0);
@@ -366,7 +390,7 @@ BootStrapSUBTRANS(void)
 	SimpleLruWritePage(SubTransCtl, slotno);
 	Assert(!SubTransCtl->shared->page_dirty[slotno]);
 
-	LWLockRelease(SubtransSLRULock);
+	SlruUnLockAllPartition(SubTransCtl);
 }
 
 /*
@@ -403,7 +427,7 @@ StartupSUBTRANS(TransactionId oldestActiveXID)
 	 * Whenever we advance into a new page, ExtendSUBTRANS will likewise zero
 	 * the new page without regard to whatever was previously on disk.
 	 */
-	LWLockAcquire(SubtransSLRULock, LW_EXCLUSIVE);
+	SlruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
 
 	startPage = TransactionIdToPage(oldestActiveXID);
 	nextXid = ShmemVariableCache->nextXid;
@@ -419,7 +443,7 @@ StartupSUBTRANS(TransactionId oldestActiveXID)
 	}
 	(void) ZeroSUBTRANSPage(startPage);
 
-	LWLockRelease(SubtransSLRULock);
+	SlruUnLockAllPartition(SubTransCtl);
 }
 
 /*
@@ -453,8 +477,6 @@ void
 ExtendSUBTRANS(TransactionId newestXact)
 {
 	int			pageno;
-	uint32		hash;
-	LWLock	   *partitionLock;
 
 	/*
 	 * No work except at first XID of a page.  But beware: just after
@@ -466,20 +488,13 @@ ExtendSUBTRANS(TransactionId newestXact)
 
 	pageno = TransactionIdToPage(newestXact);
 
-
-	/* determine its hash code and partition lock ID */
-	hash = SubtransBufTableHashCode(&pageno);
-	partitionLock = SubtransPartitionLock(hash);
-
 	/* see if the block is in the buffer pool already */
-	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
-
-	SubTransCtl->shared->ControlLock = partitionLock;
+	SlruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
 
 	/* Zero the page */
 	ZeroSUBTRANSPage(pageno);
 
-	LWLockRelease(partitionLock);
+	SlruUnLockAllPartition(SubTransCtl);
 }
 
 

@@ -172,6 +172,36 @@ SimpleLruShmemSize(int nslots, int nlsns)
 	return BUFFERALIGN(sz) + BLCKSZ * nslots;
 }
 
+void
+SlruLockAllPartition(SlruCtl ctl, LWLockMode mode)
+{
+	SlruShared	shared = ctl->shared;
+	int			i;
+
+	if (shared->ControlLock != NULL)
+		LWLockAcquire(shared->ControlLock, mode);
+	else
+	{
+		for (i = 0; i < shared->num_locks; i++)
+			LWLockAcquire(shared->partlock[i], mode);
+	}
+}
+
+void
+SlruUnLockAllPartition(SlruCtl ctl)
+{
+	SlruShared	shared = ctl->shared;
+	int			i;
+
+	if (shared->ControlLock != NULL)
+		LWLockRelease(shared->ControlLock);
+	else
+	{
+		for (i = 0; i < shared->num_locks; i++)
+			LWLockRelease(shared->partlock[i]);
+	}
+}
+
 /*
  * Initialize, or attach to, a simple LRU cache in shared memory.
  *
@@ -344,10 +374,10 @@ SimpleLruWaitIO(SlruCtl ctl, int slotno)
 	SlruShared	shared = ctl->shared;
 
 	/* See notes at top of file */
-	LWLockRelease(shared->ControlLock);
+	SlruUnLockAllPartition(ctl);
 	LWLockAcquire(&shared->buffer_locks[slotno].lock, LW_SHARED);
 	LWLockRelease(&shared->buffer_locks[slotno].lock);
-	LWLockAcquire(shared->ControlLock, LW_EXCLUSIVE);
+	SlruLockAllPartition(ctl, LW_EXCLUSIVE);
 
 	/*
 	 * If the slot is still in an io-in-progress state, then either someone
@@ -446,7 +476,7 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 		LWLockAcquire(&shared->buffer_locks[slotno].lock, LW_EXCLUSIVE);
 
 		/* Release control lock while doing I/O */
-		LWLockRelease(shared->ControlLock);
+		SlruUnLockAllPartition(ctl);
 
 		/* Do the read */
 		ok = SlruPhysicalReadPage(ctl, pageno, slotno);
@@ -455,7 +485,7 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 		SimpleLruZeroLSNs(ctl, slotno);
 
 		/* Re-acquire control lock and update page state */
-		LWLockAcquire(shared->ControlLock, LW_EXCLUSIVE);
+		SlruLockAllPartition(ctl, LW_EXCLUSIVE);
 
 		Assert(shared->page_number[slotno] == pageno &&
 			   shared->page_status[slotno] == SLRU_PAGE_READ_IN_PROGRESS &&
@@ -499,7 +529,7 @@ SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno, TransactionId xid)
 	int			slotno;
 
 	/* Try to find the page while holding only shared lock */
-	LWLockAcquire(shared->ControlLock, LW_SHARED);
+	SlruLockAllPartition(ctl, LW_SHARED);
 
 	/* See if page is already in a buffer */
 	for (slotno = 0; slotno < shared->num_slots; slotno++)
@@ -519,8 +549,8 @@ SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno, TransactionId xid)
 	}
 
 	/* No luck, so switch to normal exclusive lock and do regular read */
-	LWLockRelease(shared->ControlLock);
-	LWLockAcquire(shared->ControlLock, LW_EXCLUSIVE);
+	SlruUnLockAllPartition(ctl);
+	SlruLockAllPartition(ctl, LW_EXCLUSIVE);
 
 	return SimpleLruReadPage(ctl, pageno, true, xid);
 }
@@ -570,7 +600,7 @@ SlruInternalWritePage(SlruCtl ctl, int slotno, SlruWriteAll fdata)
 	LWLockAcquire(&shared->buffer_locks[slotno].lock, LW_EXCLUSIVE);
 
 	/* Release control lock while doing I/O */
-	LWLockRelease(shared->ControlLock);
+	SlruUnLockAllPartition(ctl);
 
 	/* Do the write */
 	ok = SlruPhysicalWritePage(ctl, pageno, slotno, fdata);
@@ -585,7 +615,7 @@ SlruInternalWritePage(SlruCtl ctl, int slotno, SlruWriteAll fdata)
 	}
 
 	/* Re-acquire control lock and update page state */
-	LWLockAcquire(shared->ControlLock, LW_EXCLUSIVE);
+	SlruLockAllPartition(ctl, LW_EXCLUSIVE);
 
 	Assert(shared->page_number[slotno] == pageno &&
 		   shared->page_status[slotno] == SLRU_PAGE_WRITE_IN_PROGRESS);
@@ -1171,7 +1201,7 @@ SimpleLruWriteAll(SlruCtl ctl, bool allow_redirtied)
 	 */
 	fdata.num_files = 0;
 
-	LWLockAcquire(shared->ControlLock, LW_EXCLUSIVE);
+	SlruLockAllPartition(ctl, LW_EXCLUSIVE);
 
 	for (slotno = 0; slotno < shared->num_slots; slotno++)
 	{
@@ -1188,7 +1218,7 @@ SimpleLruWriteAll(SlruCtl ctl, bool allow_redirtied)
 				!shared->page_dirty[slotno]));
 	}
 
-	LWLockRelease(shared->ControlLock);
+	SlruUnLockAllPartition(ctl);
 
 	/*
 	 * Now close any files that were open
@@ -1238,7 +1268,7 @@ SimpleLruTruncate(SlruCtl ctl, int cutoffPage)
 	 * or just after a checkpoint, any dirty pages should have been flushed
 	 * already ... we're just being extra careful here.)
 	 */
-	LWLockAcquire(shared->ControlLock, LW_EXCLUSIVE);
+	SlruLockAllPartition(ctl, LW_EXCLUSIVE);
 
 restart:
 
@@ -1248,7 +1278,7 @@ restart:
 	 */
 	if (ctl->PagePrecedes(shared->latest_page_number, cutoffPage))
 	{
-		LWLockRelease(shared->ControlLock);
+		SlruUnLockAllPartition(ctl);
 		ereport(LOG,
 				(errmsg("could not truncate directory \"%s\": apparent wraparound",
 						ctl->Dir)));
@@ -1289,7 +1319,7 @@ restart:
 		goto restart;
 	}
 
-	LWLockRelease(shared->ControlLock);
+	SlruUnLockAllPartition(ctl);
 
 	/* Now we can remove the old segment(s) */
 	(void) SlruScanDirectory(ctl, SlruScanDirCbDeleteCutoff, &cutoffPage);
@@ -1332,7 +1362,7 @@ SlruDeleteSegment(SlruCtl ctl, int segno)
 	bool		did_write;
 
 	/* Clean out any possibly existing references to the segment. */
-	LWLockAcquire(shared->ControlLock, LW_EXCLUSIVE);
+	SlruLockAllPartition(ctl, LW_EXCLUSIVE);
 restart:
 	did_write = false;
 	for (slotno = 0; slotno < shared->num_slots; slotno++)
@@ -1372,7 +1402,7 @@ restart:
 
 	SlruInternalDeleteSegment(ctl, segno);
 
-	LWLockRelease(shared->ControlLock);
+	SlruUnLockAllPartition(ctl);
 }
 
 /*

@@ -16,6 +16,7 @@
 #include "access/xlogdefs.h"
 #include "storage/lwlock.h"
 #include "storage/sync.h"
+#include "utils/hsearch.h"
 
 
 /*
@@ -53,6 +54,8 @@ typedef enum
 typedef struct SlruSharedData
 {
 	LWLock	   *ControlLock;
+	LWLock	   *partlock[4];
+	int			num_locks;
 
 	/* Number of buffers managed by this SLRU structure */
 	int			num_slots;
@@ -111,6 +114,8 @@ typedef struct SlruCtlData
 {
 	SlruShared	shared;
 
+	HTAB	   *SlruBufHash;
+
 	/*
 	 * Which sync handler function to use when handing sync requests over to
 	 * the checkpointer.  SYNC_HANDLER_NONE to disable fsync (eg pg_notify).
@@ -138,6 +143,11 @@ typedef struct SlruCtlData
 
 typedef SlruCtlData *SlruCtl;
 
+typedef struct SlruBufLookupEnt
+{
+	int		pageno;			/* key */
+	int		slotno;			/* slot number in slru buffer array */
+} SlruBufLookupEnt;
 
 extern Size SimpleLruShmemSize(int nslots, int nlsns);
 extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
@@ -170,5 +180,8 @@ extern bool SlruScanDirCbReportPresence(SlruCtl ctl, char *filename,
 										int segpage, void *data);
 extern bool SlruScanDirCbDeleteAll(SlruCtl ctl, char *filename, int segpage,
 								   void *data);
-
+extern void SlruLockAllPartition(SlruCtl ctl, LWLockMode mode);
+extern void SlruUnLockAllPartition(SlruCtl ctl);
+extern void SlruLockAllPartition(SlruCtl ctl, LWLockMode mode);
+extern void SlruUnLockAllPartition(SlruCtl ctl);
 #endif							/* SLRU_H */

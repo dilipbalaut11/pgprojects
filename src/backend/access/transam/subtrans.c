@@ -118,7 +118,6 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 	int			pageno = TransactionIdToPage(xid);
 	int			entryno = TransactionIdToEntry(xid);
 	int			slotno;
-	uint32		hash;
 	LWLock	   *partitionLock;	
 	TransactionId *ptr;
 
@@ -126,28 +125,10 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 	Assert(TransactionIdFollows(xid, parent));
 
 	/* determine its hash code and partition lock ID */
-	hash = SubtransBufTableHashCode(&pageno);
-	partitionLock = SubtransPartitionLock(hash);
-
-
-	slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
-	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
-	ptr += entryno;
-
-	/*
-	 * It's possible we'll try to set the parent xid multiple times but we
-	 * shouldn't ever be changing the xid from one valid xid to another valid
-	 * xid, which would corrupt the data structure.
-	 */
-	if (*ptr != parent)
-	{
-		Assert(*ptr == InvalidTransactionId);
-		*ptr = parent;
-		SubTransCtl->shared->page_dirty[slotno] = true;
-	}
+	partitionLock = SlruPartitionLockForPageno(SubTransCtl, pageno);
 
 	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
-	slotno = SubtransBufTableLookup(&pageno, hash);
+	slotno = SlruBufTableLookup(SubTransCtl, &pageno);
 	if (slotno < 0)
 	{
 		LWLockRelease(partitionLock);
@@ -200,7 +181,6 @@ SubTransGetParent(TransactionId xid)
 	int			pageno = TransactionIdToPage(xid);
 	int			entryno = TransactionIdToEntry(xid);
 	int			slotno;
-	uint32		hash;
 	LWLock	   *partitionLock;
 	TransactionId *ptr;
 	TransactionId parent;
@@ -213,12 +193,11 @@ SubTransGetParent(TransactionId xid)
 		return InvalidTransactionId;
 
 	/* determine its hash code and partition lock ID */
-	hash = SubtransBufTableHashCode(&pageno);
-	partitionLock = SubtransPartitionLock(hash);
+	partitionLock = SlruPartitionLockForPageno(SubTransCtl, pageno);
 
 	/* see if the block is in the buffer pool already */
 	LWLockAcquire(partitionLock, LW_SHARED);
-	slotno = SubtransBufTableLookup(&pageno, hash);
+	slotno = SlruBufTableLookup(SubTransCtl, &pageno);
 	if (slotno < 0)
 	{
 		LWLockRelease(partitionLock);
@@ -302,34 +281,13 @@ SUBTRANSShmemSize(void)
 void
 SUBTRANSShmemInit(void)
 {
-	HASHCTL		info;
-	int			size;
-	int			i;
-
-	/* assume no locking is needed yet */
-
-	/* BufferTag maps to Buffer */
-	info.keysize = sizeof(int);
-	info.entrysize = sizeof(SlruBufLookupEnt);
-	info.num_partitions = NUM_SUBTRANS_PARTITIONS;
-
-	size = NUM_SUBTRANS_BUFFERS + NUM_SUBTRANS_PARTITIONS;
-	SubTransCtl->SlruBufHash = ShmemInitHash("Subtrans Buffer Lookup Table",
-											 size, size,
-											 &info,
-											 HASH_ELEM | HASH_BLOBS |
-											 HASH_PARTITION);
-
 	SubTransCtl->PagePrecedes = SubTransPagePrecedes;
-	SimpleLruInit(SubTransCtl, "Subtrans", NUM_SUBTRANS_BUFFERS, 0,
+	SimpleLruInit(SubTransCtl, "Subtrans", "Subtrans Buffer Lookup Table",
+				  NUM_SUBTRANS_BUFFERS, 0,
 				  NULL, "pg_subtrans",
-				  LWTRANCHE_SUBTRANS_BUFFER, SYNC_HANDLER_NONE);
-
-	for (i = 0; i < NUM_SUBTRANS_PARTITIONS; i++)
-		SubTransCtl->shared->partlock[i] = SubtransPartitionLockByIndex(i);
-
-	SubTransCtl->shared->num_locks = NUM_SUBTRANS_PARTITIONS;
-
+				  LWTRANCHE_SUBTRANS_BUFFER,
+				  SUBTRANS_BUF_MAPPING_LWLOCK_OFFSET,
+				  SYNC_HANDLER_NONE);
 	SlruPagePrecedesUnitTests(SubTransCtl, SUBTRANS_XACTS_PER_PAGE);
 }
 

@@ -54,11 +54,10 @@ typedef enum
 typedef struct SlruSharedData
 {
 	LWLock	   *ControlLock;
-	LWLock	   *partlock[NUM_SUBTRANS_PARTITIONS];
-	int			num_locks;
 
 	/* Number of buffers managed by this SLRU structure */
 	int			num_slots;
+	int			slru_lock_offset;
 
 	/*
 	 * Arrays holding info for each buffer slot.  Page number is undefined
@@ -150,9 +149,10 @@ typedef struct SlruBufLookupEnt
 } SlruBufLookupEnt;
 
 extern Size SimpleLruShmemSize(int nslots, int nlsns);
-extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
-						  LWLock *ctllock, const char *subdir, int tranche_id,
-						  SyncRequestHandler sync_handler);
+extern void SimpleLruInit(SlruCtl ctl, const char *name, const char *hashname,
+						  int nslots, int nlsns, LWLock *ctllock,
+						  const char *subdir, int tranche_id,
+						  int lock_offset, SyncRequestHandler sync_handler);
 extern int	SimpleLruZeroPage(SlruCtl ctl, int pageno);
 extern int	SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 							  TransactionId xid);
@@ -184,4 +184,5 @@ extern void SlruLockAllPartition(SlruCtl ctl, LWLockMode mode);
 extern void SlruUnLockAllPartition(SlruCtl ctl);
 extern void SlruLockAllPartition(SlruCtl ctl, LWLockMode mode);
 extern void SlruUnLockAllPartition(SlruCtl ctl);
+extern int SlruBufTableLookup(SlruCtl ctl, int *key, uint32 hashcode);
 #endif							/* SLRU_H */

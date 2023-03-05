@@ -172,34 +172,92 @@ SimpleLruShmemSize(int nslots, int nlsns)
 	return BUFFERALIGN(sz) + BLCKSZ * nslots;
 }
 
+static inline uint32
+SlruHashPartition(int hashcode)
+{
+	return hashcode % NUM_SLRU_PARTITIONS;
+}
+
+static inline LWLock *
+SlruPartitionLock(SlruCtl ctl, uint32 hashcode)
+{
+	return &MainLWLockArray[ctl->shared->slru_lock_offset +
+							SubtransHashPartition(hashcode)].lock;
+}
+
+static inline LWLock *
+SlruPartitionLockByIndex(SlruCtl ctl, uint32 index)
+{
+	return &MainLWLockArray[ctl->shared->slru_lock_offset + index].lock;
+}
+
+static uint32
+SlruBufTableHashCode(SlruCtl ctl, int *key)
+{
+	return get_hash_value(ctl->SlruBufHash, (void *) key);
+}
+
+int
+SlruBufTableLookup(SlruCtl ctl, int *key)
+{
+	SlruBufLookupEnt *result;
+
+	result = (SlruBufLookupEnt *) hash_search(ctl->SlruBufHash,
+											  (void *) key,
+											  HASH_FIND,
+											  NULL);
+
+	if (!result)
+		return -1;
+
+	return result->slotno;
+}
+
 void
 SlruLockAllPartition(SlruCtl ctl, LWLockMode mode)
 {
-	SlruShared	shared = ctl->shared;
-	int			i;
-
-	if (shared->ControlLock != NULL)
-		LWLockAcquire(shared->ControlLock, mode);
+	if (ctl->shared->ControlLock != NULL)
+		LWLockAcquire(ctl->shared->ControlLock, mode);
 	else
 	{
-		for (i = 0; i < shared->num_locks; i++)
-			LWLockAcquire(shared->partlock[i], mode);
+		LWLock *lock;
+		int		i;
+
+		for (i = 0; i < NUM_SLRU_PARTITIONS; i++)
+		{
+			lock = SlruPartitionLockByIndex(ctl, i);
+			LWLockAcquire(lock, mode);
+		}
 	}
 }
 
 void
 SlruUnLockAllPartition(SlruCtl ctl)
 {
-	SlruShared	shared = ctl->shared;
-	int			i;
-
-	if (shared->ControlLock != NULL)
-		LWLockRelease(shared->ControlLock);
+	if (ctl->shared->ControlLock != NULL)
+		LWLockRelease(ctl->shared->ControlLock);
 	else
 	{
-		for (i = 0; i < shared->num_locks; i++)
-			LWLockRelease(shared->partlock[i]);
+		LWLock *lock;
+		int		i;
+
+		for (i = 0; i < NUM_SLRU_PARTITIONS; i++)
+		{
+			lock = SlruPartitionLockByIndex(ctl, i);
+			LWLockRelease(lock);
+		}
 	}
+}
+
+void
+SlruPartitionLockForPageno(SlruCtl ctl, int pageno)
+{
+	uint32		hash;
+	LWLock	   *partitionLock;
+	
+	/* determine its hash code and partition lock ID */
+	hash = SlruBufTableHashCode(ctl, &pageno);
+	partitionLock = SlruPartitionLock(ctl, hash);
 }
 
 static int
@@ -250,13 +308,14 @@ SlruBufTableDelete(SlruCtl ctl, int *key)
  * sync_handler: which set of functions to use to handle sync requests
  */
 void
-SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
-			  LWLock *ctllock, const char *subdir, int tranche_id,
-			  SyncRequestHandler sync_handler)
+SimpleLruInit(SlruCtl ctl, const char *name, const char *hashname,int nslots,
+			  int nlsns, LWLock *ctllock, const char *subdir, int tranche_id,
+			  int lock_offset, SyncRequestHandler sync_handler)
 {
 	SlruShared	shared;
 	bool		found;
-
+	HASHCTL		info;
+	int			size;
 	shared = (SlruShared) ShmemInitStruct(name,
 										  SimpleLruShmemSize(nslots, nlsns),
 										  &found);
@@ -272,7 +331,7 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 
 		memset(shared, 0, sizeof(SlruSharedData));
 
-		shared->ControlLock = ctllock;
+		//shared->ControlLock = ctllock;
 
 		shared->num_slots = nslots;
 		shared->lsn_groups_per_page = nlsns;
@@ -324,6 +383,23 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 	}
 	else
 		Assert(found);
+
+	if (hashname)
+	{
+		/* BufferTag maps to Buffer */
+		info.keysize = sizeof(int);
+		info.entrysize = sizeof(SlruBufLookupEnt);
+		info.num_partitions = NUM_SLRU_PARTITIONS;
+
+		size = nslots + NUM_SLRU_PARTITIONS;
+		ctl->SlruBufHash = ShmemInitHash(hashname,
+										 size, size,
+										 &info,
+										 HASH_ELEM | HASH_BLOBS |
+										 HASH_PARTITION);
+
+		shared->slru_lock_offset = lock_offset;
+	}
 
 	/*
 	 * Initialize the unshared control struct, including directory path. We

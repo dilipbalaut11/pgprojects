@@ -94,7 +94,7 @@ extern PGDLLIMPORT int NamedLWLockTrancheRequests;
 #define NUM_BUFFER_PARTITIONS  128
 
 /* Number of partitions of the shared subtrans slru buffer mapping hashtable */
-#define NUM_SUBTRANS_PARTITIONS 4
+#define NUM_SUBTRANS_PARTITIONS 16
 
 /* Number of partitions the shared lock tables are divided into */
 #define LOG2_NUM_LOCK_PARTITIONS  4

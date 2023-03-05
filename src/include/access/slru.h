@@ -54,7 +54,7 @@ typedef enum
 typedef struct SlruSharedData
 {
 	LWLock	   *ControlLock;
-	LWLock	   *partlock[4];
+	LWLock	   *partlock[NUM_SUBTRANS_PARTITIONS];
 	int			num_locks;
 
 	/* Number of buffers managed by this SLRU structure */

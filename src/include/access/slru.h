@@ -185,4 +185,6 @@ extern void SlruUnLockAllPartition(SlruCtl ctl);
 extern void SlruLockAllPartition(SlruCtl ctl, LWLockMode mode);
 extern void SlruUnLockAllPartition(SlruCtl ctl);
 extern int SlruBufTableLookup(SlruCtl ctl, int *key, uint32 hashcode);
+extern LWLock * SlruPartitionLock(SlruCtl ctl, uint32 hashcode);
+extern uint32 SlruBufTableHashCode(SlruCtl ctl, int *key);
 #endif							/* SLRU_H */

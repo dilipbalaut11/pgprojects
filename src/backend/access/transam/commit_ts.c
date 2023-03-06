@@ -520,10 +520,10 @@ CommitTsShmemInit(void)
 	bool		found;
 
 	CommitTsCtl->PagePrecedes = CommitTsPagePrecedes;
-	SimpleLruInit(CommitTsCtl, "CommitTs", CommitTsShmemBuffers(), 0,
+	SimpleLruInit(CommitTsCtl, "CommitTs", NULL, CommitTsShmemBuffers(), 0,
 				  CommitTsSLRULock, "pg_commit_ts",
 				  LWTRANCHE_COMMITTS_BUFFER,
-				  SYNC_HANDLER_COMMIT_TS);
+				  -1, SYNC_HANDLER_COMMIT_TS);
 	SlruPagePrecedesUnitTests(CommitTsCtl, COMMIT_TS_XACTS_PER_PAGE);
 
 	commitTsShared = ShmemInitStruct("CommitTs shared",

@@ -178,11 +178,11 @@ SlruHashPartition(int hashcode)
 	return hashcode % NUM_SLRU_PARTITIONS;
 }
 
-static inline LWLock *
+LWLock *
 SlruPartitionLock(SlruCtl ctl, uint32 hashcode)
 {
 	return &MainLWLockArray[ctl->shared->slru_lock_offset +
-							SubtransHashPartition(hashcode)].lock;
+							SlruHashPartition(hashcode)].lock;
 }
 
 static inline LWLock *
@@ -191,21 +191,22 @@ SlruPartitionLockByIndex(SlruCtl ctl, uint32 index)
 	return &MainLWLockArray[ctl->shared->slru_lock_offset + index].lock;
 }
 
-static uint32
+uint32
 SlruBufTableHashCode(SlruCtl ctl, int *key)
 {
 	return get_hash_value(ctl->SlruBufHash, (void *) key);
 }
 
 int
-SlruBufTableLookup(SlruCtl ctl, int *key)
+SlruBufTableLookup(SlruCtl ctl, int *key, uint32 hashcode)
 {
 	SlruBufLookupEnt *result;
 
-	result = (SlruBufLookupEnt *) hash_search(ctl->SlruBufHash,
-											  (void *) key,
-											  HASH_FIND,
-											  NULL);
+	result = (SlruBufLookupEnt *) hash_search_with_hash_value(ctl->SlruBufHash,
+											  				  (void *) key,
+															  hashcode,
+											  				  HASH_FIND,
+											  				  NULL);
 
 	if (!result)
 		return -1;
@@ -216,48 +217,33 @@ SlruBufTableLookup(SlruCtl ctl, int *key)
 void
 SlruLockAllPartition(SlruCtl ctl, LWLockMode mode)
 {
-	if (ctl->shared->ControlLock != NULL)
-		LWLockAcquire(ctl->shared->ControlLock, mode);
-	else
-	{
-		LWLock *lock;
-		int		i;
+	int		i;
 
-		for (i = 0; i < NUM_SLRU_PARTITIONS; i++)
-		{
-			lock = SlruPartitionLockByIndex(ctl, i);
-			LWLockAcquire(lock, mode);
-		}
+	/* If SLRU has centralised control lock then just lock that and return*/
+	if (ctl->shared->ControlLock != NULL)
+	{
+		LWLockAcquire(ctl->shared->ControlLock, mode);
+		return;
 	}
+
+	for (i = 0; i < NUM_SLRU_PARTITIONS; i++)
+		LWLockAcquire(SlruPartitionLockByIndex(ctl, i), mode);
 }
 
 void
 SlruUnLockAllPartition(SlruCtl ctl)
 {
+	int		i;
+
+	/* If SLRU has centralised control lock then just unlock that and return*/
 	if (ctl->shared->ControlLock != NULL)
-		LWLockRelease(ctl->shared->ControlLock);
-	else
 	{
-		LWLock *lock;
-		int		i;
-
-		for (i = 0; i < NUM_SLRU_PARTITIONS; i++)
-		{
-			lock = SlruPartitionLockByIndex(ctl, i);
-			LWLockRelease(lock);
-		}
+		LWLockRelease(ctl->shared->ControlLock);
+		return;
 	}
-}
 
-void
-SlruPartitionLockForPageno(SlruCtl ctl, int pageno)
-{
-	uint32		hash;
-	LWLock	   *partitionLock;
-	
-	/* determine its hash code and partition lock ID */
-	hash = SlruBufTableHashCode(ctl, &pageno);
-	partitionLock = SlruPartitionLock(ctl, hash);
+	for (i = 0; i < NUM_SLRU_PARTITIONS; i++)
+		LWLockRelease(SlruPartitionLockByIndex(ctl, i));
 }
 
 static int
@@ -291,8 +277,8 @@ SlruBufTableDelete(SlruCtl ctl, int *key)
 											  HASH_REMOVE,
 											  NULL);
 
-//	if (!result)				/* shouldn't happen */
-//		elog(ERROR, "slru buffer hash table corrupted");
+	if (!result)				/* shouldn't happen */
+		elog(ERROR, "slru buffer hash table corrupted");
 }
 
 /*

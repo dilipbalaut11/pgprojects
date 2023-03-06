@@ -543,7 +543,7 @@ InitializeLWLocks(void)
 
 	/* Initialize subtrans slru lmgrs' LWLocks in main array */
 	lock = MainLWLockArray + SUBTRANS_BUF_MAPPING_LWLOCK_OFFSET;
-	for (id = 0; id < NUM_SUBTRANS_PARTITIONS; id++, lock++)
+	for (id = 0; id < NUM_SLRU_PARTITIONS; id++, lock++)
 		LWLockInitialize(&lock->lock, LWTRANCHE_SUBTRANS_BUF_MAPPING);
 
 	/*

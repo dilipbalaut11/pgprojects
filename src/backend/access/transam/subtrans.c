@@ -66,49 +66,6 @@ static SlruCtlData SubTransCtlData;
 static int	ZeroSUBTRANSPage(int pageno);
 static bool SubTransPagePrecedes(int page1, int page2);
 
-static inline uint32
-SubtransHashPartition(int hashcode)
-{
-	return hashcode % NUM_SUBTRANS_PARTITIONS;
-}
-
-static inline LWLock *
-SubtransPartitionLock(uint32 hashcode)
-{
-	return &MainLWLockArray[SUBTRANS_BUF_MAPPING_LWLOCK_OFFSET +
-							SubtransHashPartition(hashcode)].lock;
-}
-
-static inline LWLock *
-SubtransPartitionLockByIndex(uint32 index)
-{
-	return &MainLWLockArray[SUBTRANS_BUF_MAPPING_LWLOCK_OFFSET + index].lock;
-}
-
-static uint32
-SubtransBufTableHashCode(int *key)
-{
-	return get_hash_value(SubTransCtl->SlruBufHash, (void *) key);
-}
-
-static int
-SubtransBufTableLookup(int *key, uint32 hashcode)
-{
-	SlruBufLookupEnt *result;
-
-	result = (SlruBufLookupEnt *)
-		hash_search_with_hash_value(SubTransCtl->SlruBufHash,
-									(void *) key,
-									hashcode,
-									HASH_FIND,
-									NULL);
-
-	if (!result)
-		return -1;
-
-	return result->slotno;
-}
-
 /*
  * Record the parent of a subtransaction in the subtrans log.
  */
@@ -118,58 +75,47 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 	int			pageno = TransactionIdToPage(xid);
 	int			entryno = TransactionIdToEntry(xid);
 	int			slotno;
-	LWLock	   *partitionLock;	
+	bool		found = true;
+	uint32		hashcode;
+	LWLock	   *partitionLock;
 	TransactionId *ptr;
 
 	Assert(TransactionIdIsValid(parent));
 	Assert(TransactionIdFollows(xid, parent));
 
 	/* determine its hash code and partition lock ID */
-	partitionLock = SlruPartitionLockForPageno(SubTransCtl, pageno);
+	hashcode = SlruBufTableHashCode(SubTransCtl, &pageno);
+	partitionLock = SlruPartitionLock(SubTransCtl, hashcode);
 
 	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
-	slotno = SlruBufTableLookup(SubTransCtl, &pageno);
+	slotno = SlruBufTableLookup(SubTransCtl, &pageno, hashcode);
 	if (slotno < 0)
 	{
 		LWLockRelease(partitionLock);
 		SlruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
 		slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
-
-		ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
-		ptr += entryno;
-
-		/*
-		* It's possible we'll try to set the parent xid multiple times but we
-		* shouldn't ever be changing the xid from one valid xid to another valid
-		* xid, which would corrupt the data structure.
-		*/
-		if (*ptr != parent)
-		{
-			Assert(*ptr == InvalidTransactionId);
-			*ptr = parent;
-			SubTransCtl->shared->page_dirty[slotno] = true;
-		}
-		SlruUnLockAllPartition(SubTransCtl);
+		found = false;
 	}
-	else
+
+	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
+	ptr += entryno;
+
+	/*
+	* It's possible we'll try to set the parent xid multiple times but we
+	* shouldn't ever be changing the xid from one valid xid to another valid
+	* xid, which would corrupt the data structure.
+	*/
+	if (*ptr != parent)
 	{
-		ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
-		ptr += entryno;
-
-		/*
-		* It's possible we'll try to set the parent xid multiple times but we
-		* shouldn't ever be changing the xid from one valid xid to another valid
-		* xid, which would corrupt the data structure.
-		*/
-		if (*ptr != parent)
-		{
-			Assert(*ptr == InvalidTransactionId);
-			*ptr = parent;
-			SubTransCtl->shared->page_dirty[slotno] = true;
-		}
-
-		LWLockRelease(partitionLock);
+		Assert(*ptr == InvalidTransactionId);
+		*ptr = parent;
+		SubTransCtl->shared->page_dirty[slotno] = true;
 	}
+
+	if (found)
+		LWLockRelease(partitionLock);
+	else
+		SlruUnLockAllPartition(SubTransCtl);
 }
 
 /*
@@ -181,6 +127,8 @@ SubTransGetParent(TransactionId xid)
 	int			pageno = TransactionIdToPage(xid);
 	int			entryno = TransactionIdToEntry(xid);
 	int			slotno;
+	bool		found = true;
+	uint32		hashcode;
 	LWLock	   *partitionLock;
 	TransactionId *ptr;
 	TransactionId parent;
@@ -191,31 +139,30 @@ SubTransGetParent(TransactionId xid)
 	/* Bootstrap and frozen XIDs have no parent */
 	if (!TransactionIdIsNormal(xid))
 		return InvalidTransactionId;
-
+	
 	/* determine its hash code and partition lock ID */
-	partitionLock = SlruPartitionLockForPageno(SubTransCtl, pageno);
+	hashcode = SlruBufTableHashCode(SubTransCtl, &pageno);
+	partitionLock = SlruPartitionLock(SubTransCtl, hashcode);
 
 	/* see if the block is in the buffer pool already */
 	LWLockAcquire(partitionLock, LW_SHARED);
-	slotno = SlruBufTableLookup(SubTransCtl, &pageno);
+	slotno = SlruBufTableLookup(SubTransCtl, &pageno, hashcode);
 	if (slotno < 0)
 	{
 		LWLockRelease(partitionLock);
 		SlruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
 		slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
-		ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
-		ptr += entryno;
-		parent = *ptr;
-		SlruUnLockAllPartition(SubTransCtl);
+		found = false;
 	}
-	else
-	{
-		ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
-		ptr += entryno;
-		parent = *ptr;
 
+	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
+	ptr += entryno;
+	parent = *ptr;
+
+	if (found)
 		LWLockRelease(partitionLock);
-	}
+	else
+		SlruUnLockAllPartition(SubTransCtl);
 
 	return parent;
 }

@@ -277,8 +277,6 @@ SlruBufTableDelete(SlruCtl ctl, int *key)
 											  HASH_REMOVE,
 											  NULL);
 
-	if (!result)				/* shouldn't happen */
-		elog(ERROR, "slru buffer hash table corrupted");
 }
 
 /*
@@ -317,7 +315,7 @@ SimpleLruInit(SlruCtl ctl, const char *name, const char *hashname,int nslots,
 
 		memset(shared, 0, sizeof(SlruSharedData));
 
-		//shared->ControlLock = ctllock;
+		shared->ControlLock = ctllock;
 
 		shared->num_slots = nslots;
 		shared->lsn_groups_per_page = nlsns;

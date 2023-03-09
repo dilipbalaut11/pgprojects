@@ -89,7 +89,10 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 
 	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
 	slotno = SlruBufTableLookup(SubTransCtl, &pageno, hashcode);
-	if (slotno < 0)
+	if (slotno < 0 ||
+		SubTransCtl->shared->page_number[slotno] != pageno ||
+		SubTransCtl->shared->page_status[slotno] == SLRU_PAGE_EMPTY ||
+		SubTransCtl->shared->page_status[slotno] != SLRU_PAGE_READ_IN_PROGRESS)
 	{
 		LWLockRelease(partitionLock);
 		SlruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
@@ -147,7 +150,11 @@ SubTransGetParent(TransactionId xid)
 	/* see if the block is in the buffer pool already */
 	LWLockAcquire(partitionLock, LW_SHARED);
 	slotno = SlruBufTableLookup(SubTransCtl, &pageno, hashcode);
-	if (slotno < 0)
+
+	if (slotno < 0 ||
+		SubTransCtl->shared->page_number[slotno] != pageno ||
+		SubTransCtl->shared->page_status[slotno] == SLRU_PAGE_EMPTY ||
+		SubTransCtl->shared->page_status[slotno] != SLRU_PAGE_READ_IN_PROGRESS)
 	{
 		LWLockRelease(partitionLock);
 		SlruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);

@@ -92,7 +92,7 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 	if (slotno < 0 ||
 		SubTransCtl->shared->page_number[slotno] != pageno ||
 		SubTransCtl->shared->page_status[slotno] == SLRU_PAGE_EMPTY ||
-		SubTransCtl->shared->page_status[slotno] != SLRU_PAGE_READ_IN_PROGRESS)
+		SubTransCtl->shared->page_status[slotno] == SLRU_PAGE_READ_IN_PROGRESS)
 	{
 		LWLockRelease(partitionLock);
 		SlruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
@@ -154,7 +154,7 @@ SubTransGetParent(TransactionId xid)
 	if (slotno < 0 ||
 		SubTransCtl->shared->page_number[slotno] != pageno ||
 		SubTransCtl->shared->page_status[slotno] == SLRU_PAGE_EMPTY ||
-		SubTransCtl->shared->page_status[slotno] != SLRU_PAGE_READ_IN_PROGRESS)
+		SubTransCtl->shared->page_status[slotno] == SLRU_PAGE_READ_IN_PROGRESS)
 	{
 		LWLockRelease(partitionLock);
 		SlruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);

@@ -143,7 +143,6 @@ PG_FUNCTION_INFO_V1(pg_qualstats_names_2_0);
 PG_FUNCTION_INFO_V1(pg_qualstats_example_query);
 PG_FUNCTION_INFO_V1(pg_qualstats_example_queries);
 
-static void pgqs_backend_mode_startup(void);
 #if PG_VERSION_NUM >= 150000
 static void pgqs_shmem_request(void);
 #endif
@@ -173,7 +172,10 @@ static shmem_request_hook_type prev_shmem_request_hook = NULL;
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 
 static uint32 pgqs_hash_fn(const void *key, Size keysize);
-static uint32 pgqs_update_hash_fn(const void *key, Size keysize);
+static uint32 pgqs_qual_dhhash_fn(const void *key, Size keysize, void *arg);
+static uint32 pgqs_query_dhhash_fn(const void *key, Size keysize, void *arg);
+static uint32 pgqs_update_hash_fn(const void *key, Size keysize, void *arg);
+static Size pgqs_dsa_init_size(void);
 
 #if PG_VERSION_NUM < 90500
 static uint32 pgqs_uint32_hashfn(const void *key, Size keysize);
@@ -221,6 +223,33 @@ typedef struct pgqsWalkerContext
 	const char *querytext;
 } pgqsWalkerContext;
 
+/* parameter for the shared hash */
+static dshash_parameters dsh_qual_params = {
+	sizeof(pgqsHashKey),
+	sizeof(pgqsEntry),
+	dshash_memcmp,
+	pgqs_qual_dhhash_fn,
+	0
+};
+
+/* parameter for the shared hash */
+static dshash_parameters dsh_query_params = {
+	sizeof(pgqsQueryStringHashKey),
+	0,
+	dshash_memcmp,
+	pgqs_query_dhhash_fn,
+	0
+};
+
+/* parameter for the shared hash */
+static dshash_parameters dsh_update_params = {
+	sizeof(pgqsUpdateHashKey),
+	sizeof(pgqsUpdateHashEntry),
+	dshash_memcmp,
+	pgqs_update_hash_fn,
+	0
+};
+
 static bool pgqs_whereclause_tree_walker(Node *node, pgqsWalkerContext *query);
 static pgqsEntry *pgqs_process_opexpr(OpExpr *expr, pgqsWalkerContext *context);
 static pgqsEntry *pgqs_process_scalararrayopexpr(ScalarArrayOpExpr *expr, pgqsWalkerContext *context);
@@ -235,11 +264,9 @@ static Expr *pgqs_resolve_var(Var *var, pgqsWalkerContext *context);
 static void pgqsInsertOverheadHash(ModifyTable *node, pgqsWalkerContext *context);
 
 
-static void pgqs_entry_dealloc(void);
 static inline void pgqs_entry_init(pgqsEntry *entry);
 static inline void pgqs_entry_copy_raw(pgqsEntry *dest, pgqsEntry *src);
 static void pgqs_entry_err_estim(pgqsEntry *e, double *err_estim, int64 occurences);
-static void pgqs_queryentry_dealloc(void);
 static void pgqs_localentry_dealloc(int nvictims);
 static void pgqs_fillnames(pgqsEntryWithNames *entry);
 
@@ -250,6 +277,10 @@ static Size pgqs_sampled_array_size(void);
 
 /* Global Hash */
 HTAB *pgqs_hash = NULL;
+dsa_area *pgqs_dsa = NULL;
+dshash_table *pgqs_dshash = NULL;
+dshash_table *pgqs_query_dshash = NULL;
+dshash_table *pgqs_update_dshash = NULL;
 HTAB *pgqs_query_examples_hash = NULL;
 pgqsSharedState *pgqs = NULL;
 HTAB *pgqs_update_hash = NULL;
@@ -265,7 +296,7 @@ _PG_init(void)
 {
 	if (!process_shared_preload_libraries_in_progress)
 	{
-		elog(WARNING, "Without shared_preload_libraries, only current backend stats will be available.");
+		elog(ERROR, "index advisor can only be loaded via shared_preload_libraries.");
 		pgqs_backend = true;
 	}
 	else
@@ -410,8 +441,6 @@ _PG_init(void)
 #endif		/* pg9.6+ */
 #endif		/* pg15- */
 	}
-	else
-		pgqs_backend_mode_startup();
 
 	HypoMemoryContext = AllocSetContextCreate(TopMemoryContext,
 											  "HypoPG context",
@@ -517,6 +546,56 @@ pgqs_fillnames(pgqsEntryWithNames *entry)
 #undef GET_ATTNAME
 }
 
+static void
+pgqs_attach_dshmem()
+{
+	MemoryContext oldcontext;
+
+	/* Quick exit if we already did this. */
+	if (pgqs->pgqs_dsh != DSHASH_HANDLE_INVALID && pgqs_dshash != NULL)
+		return;
+
+	/* Be sure any local memory allocated by DSA routines is persistent. */
+	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+
+	PGQS_LWL_ACQUIRE(pgqs->lock, LW_EXCLUSIVE);
+	dsh_qual_params.tranche_id = pgqs->tranche_id;
+	dsh_query_params.tranche_id = pgqs->tranche_id;
+	dsh_query_params.entry_size =
+			sizeof(pgqsQueryStringEntry) + pgqs_query_size * sizeof(char);
+	dsh_update_params.tranche_id = pgqs->tranche_id;
+
+	if (pgqs->pgqs_dsh == DSHASH_HANDLE_INVALID)
+	{
+		pgqs_dsa = dsa_create(pgqs->tranche_id);
+		dsa_pin(pgqs_dsa);
+		dsa_pin_mapping(pgqs_dsa);
+		pgqs_dshash = dshash_create(pgqs_dsa, &dsh_qual_params, 0);
+		pgqs_query_dshash = dshash_create(pgqs_dsa, &dsh_query_params, 0);
+		pgqs_update_dshash = dshash_create(pgqs_dsa, &dsh_update_params, 0);
+
+		pgqs->dsa = dsa_get_handle(pgqs_dsa);
+		pgqs->pgqs_dsh = dshash_get_hash_table_handle(pgqs_dshash);
+		pgqs->pgqs_querydsh = dshash_get_hash_table_handle(pgqs_query_dshash);
+		pgqs->pgqs_updatedsh = dshash_get_hash_table_handle(pgqs_update_dshash);
+	}
+	else
+	{
+		pgqs_dsa = dsa_attach(pgqs->dsa);
+		dsa_pin_mapping(pgqs_dsa);
+
+		pgqs_dshash = dshash_attach(pgqs_dsa, &dsh_qual_params,
+									pgqs->pgqs_dsh, 0);
+		pgqs_query_dshash = dshash_attach(pgqs_dsa, &dsh_query_params,
+										  pgqs->pgqs_querydsh, 0);
+		pgqs_update_dshash = dshash_attach(pgqs_dsa, &dsh_update_params,
+										   pgqs->pgqs_updatedsh, 0);
+	}
+	PGQS_LWL_RELEASE(pgqs->lock);
+
+	MemoryContextSwitchTo(oldcontext);
+}
+
 /*
  * Request rows and buffers instrumentation if pgqs is enabled
  */
@@ -527,6 +606,8 @@ pgqs_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	if (pgqs_enabled  && strlen(queryDesc->sourceText) < pgqs_query_size
 		&& !pgqs_cost_track_enable)
 	{
+		pgqs_attach_dshmem();
+
 		/*
 		 * For rate sampling, randomly choose top-level statement. Either all
 		 * nested statements will be explained or none will.
@@ -671,12 +752,12 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 		/* Lookup the hash table entry with a shared lock. */
 		PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
 
-		queryEntry = (pgqsQueryStringEntry *) hash_search_with_hash_value(pgqs_query_examples_hash, &queryKey,
-																		  context->queryId,
-																		  HASH_FIND, &found);
+		queryEntry = (pgqsQueryStringEntry *) dshash_find(pgqs_query_dshash,
+														  &queryKey,
+														  false);
 
 		/* Create the new entry if not present */
-		if (!found)
+		if (queryEntry == NULL)
 		{
 			bool		excl_found;
 
@@ -684,13 +765,9 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 			PGQS_LWL_RELEASE(pgqs->querylock);
 			PGQS_LWL_ACQUIRE(pgqs->querylock, LW_EXCLUSIVE);
 
-			while (hash_get_num_entries(pgqs_query_examples_hash) >= pgqs_max)
-				pgqs_queryentry_dealloc();
-
-			queryEntry = (pgqsQueryStringEntry *) hash_search_with_hash_value(pgqs_query_examples_hash, &queryKey,
-																				context->queryId,
-																				HASH_ENTER, &excl_found);
-
+			queryEntry = (pgqsQueryStringEntry *) dshash_find_or_insert(pgqs_query_dshash,
+																		&queryKey,
+																		&excl_found);
 			/* Make sure it wasn't added by another backend */
 			if (!excl_found)
 			{
@@ -708,6 +785,8 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 		}
 		else
 			queryEntry->frequency++;
+
+		dshash_release_lock(pgqs_query_dshash, queryEntry);
 
 		PGQS_LWL_RELEASE(pgqs->querylock);
 
@@ -751,16 +830,13 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 
 			PGQS_LWL_ACQUIRE(pgqs->lock, LW_EXCLUSIVE);
 
-			while (hash_get_num_entries(pgqs_hash) +
-				   hash_get_num_entries(pgqs_localhash) >= pgqs_max)
-				pgqs_entry_dealloc();
-
 			hash_seq_init(&local_hash_seq, pgqs_localhash);
 			while ((localentry = hash_seq_search(&local_hash_seq)) != NULL)
 			{
-				pgqsEntry *newEntry = (pgqsEntry *) hash_search(pgqs_hash,
-													 &localentry->key,
-													 HASH_ENTER, &found);
+				pgqsEntry *newEntry =
+						(pgqsEntry *) dshash_find_or_insert(pgqs_dshash,
+															&localentry->key,
+															&found);
 
 				if (!found)
 				{
@@ -777,6 +853,8 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 					pgqs_entry_err_estim(newEntry, localentry->mean_err_estim,
 										 localentry->occurences);
 				}
+				dshash_release_lock(pgqs_dshash, newEntry);
+
 				/* cleanup local hash */
 				hash_search(pgqs_localhash, &localentry->key, HASH_REMOVE, NULL);
 			}
@@ -793,68 +871,6 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 		prev_ExecutorEnd(queryDesc);
 	else
 		standard_ExecutorEnd(queryDesc);
-}
-
-/*
- * qsort comparator for sorting into increasing usage order
- */
-static int
-entry_cmp(const void *lhs, const void *rhs)
-{
-	double		l_usage = (*(pgqsEntry *const *) lhs)->usage;
-	double		r_usage = (*(pgqsEntry *const *) rhs)->usage;
-
-	if (l_usage < r_usage)
-		return -1;
-	else if (l_usage > r_usage)
-		return +1;
-	else
-		return 0;
-}
-
-/*
- * Deallocate least used entries.
- * Caller must hold an exlusive lock on pgqs->lock
- */
-static void
-pgqs_entry_dealloc(void)
-{
-	HASH_SEQ_STATUS hash_seq;
-	pgqsEntry **entries;
-	pgqsEntry  *entry;
-	int			nvictims;
-	int			i;
-	int			base_size;
-
-	/*
-	 * Sort entries by usage and deallocate PGQS_USAGE_DEALLOC_PERCENT of
-	 * them. While we're scanning the table, apply the decay factor to the
-	 * usage values.
-	 * pgqs_resolve_oids is irrelevant here as the array stores pointers
-	 * instead of entries. The struct member used for the sort are part of
-	 * pgqsEntry.
-	 */
-	base_size = sizeof(pgqsEntry *);
-
-	entries = palloc(hash_get_num_entries(pgqs_hash) * base_size);
-
-	i = 0;
-	hash_seq_init(&hash_seq, pgqs_hash);
-	while ((entry = hash_seq_search(&hash_seq)) != NULL)
-	{
-		entries[i++] = entry;
-		entry->usage *= 0.99;
-	}
-
-	qsort(entries, i, base_size, entry_cmp);
-
-	nvictims = Max(10, i * PGQS_USAGE_DEALLOC_PERCENT / 100);
-	nvictims = Min(nvictims, i);
-
-	for (i = 0; i < nvictims; i++)
-		hash_search(pgqs_hash, &entries[i]->key, HASH_REMOVE, NULL);
-
-	pfree(entries);
 }
 
 /* Initialize all non-key fields of the given entry. */
@@ -910,27 +926,6 @@ pgqs_entry_err_estim(pgqsEntry *e, double *err_estim, int64 occurences)
 			e->min_err_estim[i] = err_estim[i];
 		if (e->max_err_estim[i] < err_estim[i])
 			e->max_err_estim[i] = err_estim[i];
-	}
-}
-
-/*
- * Deallocate the first example query.
- * Caller must hold an exlusive lock on pgqs->querylock
- */
-static void
-pgqs_queryentry_dealloc(void)
-{
-	HASH_SEQ_STATUS hash_seq;
-	pgqsQueryStringEntry *entry;
-
-	hash_seq_init(&hash_seq, pgqs_query_examples_hash);
-	entry = hash_seq_search(&hash_seq);
-
-	if (entry != NULL)
-	{
-		hash_search_with_hash_value(pgqs_query_examples_hash, &entry->key,
-									entry->key.queryid, HASH_REMOVE, NULL);
-		hash_seq_term(&hash_seq);
 	}
 }
 
@@ -1721,55 +1716,6 @@ pgqs_whereclause_tree_walker(Node *node, pgqsWalkerContext *context)
 	}
 }
 
-static void
-pgqs_backend_mode_startup(void)
-{
-	HASHCTL		info;
-	HASHCTL		queryinfo;
-	HASHCTL		updateinfo;
-
-	memset(&info, 0, sizeof(info));
-	memset(&queryinfo, 0, sizeof(queryinfo));
-	memset(&updateinfo, 0, sizeof(updateinfo));
-	info.keysize = sizeof(pgqsHashKey);
-	info.hcxt = TopMemoryContext;
-	queryinfo.keysize = sizeof(pgqsQueryStringHashKey);
-	queryinfo.entrysize = sizeof(pgqsQueryStringEntry) + pgqs_query_size * sizeof(char);
-	queryinfo.hcxt = TopMemoryContext;
-	updateinfo.keysize = sizeof(pgqsUpdateHashKey);
-	updateinfo.entrysize = sizeof(pgqsUpdateHashEntry);
-	updateinfo.hcxt = TopMemoryContext;
-	updateinfo.hash = pgqs_update_hash_fn;
-
-	if (pgqs_resolve_oids)
-		info.entrysize = sizeof(pgqsEntryWithNames);
-	else
-		info.entrysize = sizeof(pgqsEntry);
-
-	info.hash = pgqs_hash_fn;
-
-	pgqs_hash = hash_create("pg_qualstatements_hash",
-							 pgqs_max,
-							 &info,
-							 HASH_ELEM | HASH_FUNCTION | HASH_CONTEXT);
-
-	pgqs_query_examples_hash = hash_create("pg_qualqueryexamples_hash",
-											 pgqs_max,
-											 &queryinfo,
-
-/* On PG > 9.5, use the HASH_BLOBS optimization for uint32 keys. */
-#if PG_VERSION_NUM >= 90500
-											 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
-#else
-											 HASH_ELEM | HASH_FUNCTION | HASH_CONTEXT);
-#endif
-
-	pgqs_update_hash = hash_create("pg_update_hash",
-									pgqs_max,
-									&updateinfo,
-									HASH_ELEM | HASH_FUNCTION | HASH_CONTEXT);
-}
-
 #if PG_VERSION_NUM >= 150000
 static void
 pgqs_shmem_request(void)
@@ -1787,9 +1733,6 @@ pgqs_shmem_request(void)
 static void
 pgqs_shmem_startup(void)
 {
-	HASHCTL		info;
-	HASHCTL		queryinfo;
-	HASHCTL		updateinfo;
 	bool		found;
 
 	Assert(!pgqs_backend);
@@ -1806,22 +1749,7 @@ pgqs_shmem_startup(void)
 #endif
 							),
 						   &found);
-	memset(&info, 0, sizeof(info));
-	memset(&queryinfo, 0, sizeof(queryinfo));
-	memset(&updateinfo, 0, sizeof(updateinfo));
-	info.keysize = sizeof(pgqsHashKey);
-	queryinfo.keysize = sizeof(pgqsQueryStringHashKey);
-	queryinfo.entrysize = sizeof(pgqsQueryStringEntry) + pgqs_query_size * sizeof(char);
-	updateinfo.keysize = sizeof(pgqsUpdateHashKey);
-	updateinfo.entrysize = sizeof(pgqsUpdateHashEntry);
-	updateinfo.hash = pgqs_update_hash_fn;
 
-	if (pgqs_resolve_oids)
-		info.entrysize = sizeof(pgqsEntryWithNames);
-	else
-		info.entrysize = sizeof(pgqsEntry);
-
-	info.hash = pgqs_hash_fn;
 	if (!found)
 	{
 		/* First time through ... */
@@ -1837,31 +1765,14 @@ pgqs_shmem_startup(void)
 		pgqs->lock = LWLockAssign();
 		pgqs->querylock = LWLockAssign();
 #endif
+
+		pgqs->tranche_id = LWLockNewTrancheId();
+		LWLockRegisterTranche(pgqs->tranche_id, "index_advisor_dsa_tranche");
+		pgqs->dsa = DSA_HANDLE_INVALID;
+		pgqs->pgqs_dsh = DSHASH_HANDLE_INVALID;
+		pgqs->pgqs_querydsh = DSHASH_HANDLE_INVALID;
 	}
-#if PG_VERSION_NUM < 90500
-	queryinfo.hash = pgqs_uint32_hashfn;
-#endif
-	pgqs_hash = ShmemInitHash("pg_qualstatements_hash",
-							  pgqs_max, pgqs_max,
-							  &info,
-							  HASH_ELEM | HASH_FUNCTION | HASH_FIXED_SIZE);
 
-	pgqs_query_examples_hash = ShmemInitHash("pg_qualqueryexamples_hash",
-											 pgqs_max, pgqs_max,
-											 &queryinfo,
-
-/* On PG > 9.5, use the HASH_BLOBS optimization for uint32 keys. */
-#if PG_VERSION_NUM >= 90500
-											 HASH_ELEM | HASH_BLOBS | HASH_FIXED_SIZE);
-#else
-											 HASH_ELEM | HASH_FUNCTION | HASH_FIXED_SIZE);
-#endif
-
-	pgqs_update_hash = ShmemInitHash("pg_update_hash",
-									 pgqs_max, pgqs_max,
-									 &updateinfo,
-									 HASH_ELEM | HASH_FUNCTION | HASH_FIXED_SIZE);
-	//pgqs_read_dumpfile();
 	LWLockRelease(AddinShmemInitLock);
 }
 
@@ -1940,7 +1851,7 @@ pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
 	Tuplestorestate *tupstore;
 	MemoryContext per_query_ctx;
 	MemoryContext oldcontext;
-	HASH_SEQ_STATUS hash_seq;
+	dshash_seq_status hstat;
 	Oid			userid = GetUserId();
 	bool		is_allowed_role = false;
 	pgqsEntry  *entry;
@@ -1958,7 +1869,7 @@ pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
 	is_allowed_role = superuser();
 #endif
 
-	if ((!pgqs && !pgqs_backend) || !pgqs_hash)
+	if ((!pgqs && !pgqs_backend) || !pgqs_dshash)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("pg_qualstats must be loaded via shared_preload_libraries")));
@@ -2002,7 +1913,7 @@ pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
 	rsinfo->setDesc = tupdesc;
 
 	PGQS_LWL_ACQUIRE(pgqs->lock, LW_SHARED);
-	hash_seq_init(&hash_seq, pgqs_hash);
+	dshash_seq_init(&hstat, pgqs_dshash, false);
 
 	if (api_version == PGQS_V1_0)
 		nb_columns = PG_QUALSTATS_COLS_V1_0;
@@ -2016,7 +1927,7 @@ pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
 
 	values = palloc0(sizeof(Datum) * nb_columns);
 	nulls = palloc0(sizeof(bool) * nb_columns);
-	while ((entry = hash_seq_search(&hash_seq)) != NULL)
+	while ((entry = dshash_seq_next(&hstat)) != NULL)
 	{
 		int			i = 0;
 
@@ -2151,6 +2062,7 @@ pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
 		Assert(i == nb_columns);
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	}
+	dshash_seq_term(&hstat);
 
 	PGQS_LWL_RELEASE(pgqs->lock);
 	tuplestore_donestoring(tupstore);
@@ -2169,9 +2081,8 @@ pg_qualstats_example_query(PG_FUNCTION_ARGS)
 #endif
 	pgqsQueryStringEntry *entry;
 	pgqsQueryStringHashKey queryKey;
-	bool		found;
 
-	if ((!pgqs && !pgqs_backend) || !pgqs_hash)
+	if ((!pgqs && !pgqs_backend) || !pgqs_dshash)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("pg_qualstats must be loaded via shared_preload_libraries")));
@@ -2183,14 +2094,15 @@ pg_qualstats_example_query(PG_FUNCTION_ARGS)
 	queryKey.queryid = queryid;
 
 	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
-	entry = hash_search_with_hash_value(pgqs_query_examples_hash, &queryKey,
-										queryid, HASH_FIND, &found);
+	entry = (pgqsQueryStringEntry *) dshash_find(pgqs_query_dshash,
+												 &queryKey, false);
 	PGQS_LWL_RELEASE(pgqs->querylock);
 
-	if (found)
-		PG_RETURN_TEXT_P(cstring_to_text(entry->querytext));
-	else
+	if (entry == NULL)
 		PG_RETURN_NULL();
+
+	dshash_release_lock(pgqs_query_dshash, entry);
+	PG_RETURN_TEXT_P(cstring_to_text(entry->querytext));
 }
 
 Datum
@@ -2201,10 +2113,10 @@ pg_qualstats_example_queries(PG_FUNCTION_ARGS)
 	Tuplestorestate *tupstore;
 	MemoryContext per_query_ctx;
 	MemoryContext oldcontext;
-	HASH_SEQ_STATUS hash_seq;
 	pgqsQueryStringEntry *entry;
+	dshash_seq_status	hash_seq;
 
-	if ((!pgqs && !pgqs_backend) || !pgqs_query_examples_hash)
+	if ((!pgqs && !pgqs_backend) || !pgqs_query_dshash)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("pg_qualstats must be loaded via shared_preload_libraries")));
@@ -2238,9 +2150,9 @@ pg_qualstats_example_queries(PG_FUNCTION_ARGS)
 		return (Datum) 0;
 
 	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
-	hash_seq_init(&hash_seq, pgqs_query_examples_hash);
+	dshash_seq_init(&hash_seq, pgqs_query_dshash, false);
 
-	while ((entry = hash_seq_search(&hash_seq)) != NULL)
+	while ((entry = dshash_seq_next(&hash_seq)) != NULL)
 	{
 		Datum		values[3];
 		bool		nulls[3];
@@ -2256,6 +2168,7 @@ pg_qualstats_example_queries(PG_FUNCTION_ARGS)
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	}
 
+	dshash_seq_term(&hash_seq);
 	PGQS_LWL_RELEASE(pgqs->querylock);
 
 	return (Datum) 0;
@@ -2281,7 +2194,27 @@ pgqs_hash_fn(const void *key, Size keysize)
  * Calculate hash value for a key
  */
 static uint32
-pgqs_update_hash_fn(const void *key, Size keysize)
+pgqs_qual_dhhash_fn(const void *key, Size keysize, void *arg)
+{
+	return pgqs_hash_fn(key, keysize);
+}
+
+/*
+ * Calculate hash value for a key
+ */
+static uint32
+pgqs_query_dhhash_fn(const void *key, Size keysize, void *arg)
+{
+	const pgqsQueryStringHashKey *k = (const pgqsQueryStringHashKey *) key;
+
+	return hash_uint32((uint32) k->queryid);
+}
+
+/*
+ * Calculate hash value for a key
+ */
+static uint32
+pgqs_update_hash_fn(const void *key, Size keysize, void *arg)
 {
 	const pgqsUpdateHashKey *k = (const pgqsUpdateHashKey *) key;
 
@@ -2406,6 +2339,18 @@ pgqs_resolve_var(Var *var, pgqsWalkerContext *context)
 }
 
 /*
+ * The size of the shared memory allocation for stats hash table.
+ */
+static Size
+pgqs_dsa_init_size(void)
+{
+	Size		sz;
+
+	sz = 256 * 1024;
+	Assert(dsa_minimum_size() <= sz);
+	return MAXALIGN(sz);
+}
+/*
  * Estimate shared memory space needed.
  */
 static Size
@@ -2414,6 +2359,7 @@ pgqs_memsize(void)
 	Size		size;
 
 	size = MAXALIGN(sizeof(pgqsSharedState));
+	size = add_size(size, pgqs_dsa_init_size());
 	if (pgqs_resolve_oids)
 		size = add_size(size, hash_estimate_size(pgqs_max, sizeof(pgqsEntryWithNames)));
 	else
@@ -2618,9 +2564,10 @@ pgqsInsertOverheadHash(ModifyTable *node, pgqsWalkerContext *context)
 			key.attnum = targetattnum;
 			key.queryid = context->queryId;
 
-			entry = (pgqsUpdateHashEntry *) hash_search(pgqs_update_hash,
-														&key,
-														HASH_ENTER, &found);
+
+			entry = (pgqsUpdateHashEntry *) dshash_find_or_insert(pgqs_update_dshash,
+																  &key,
+																  &found);
 			if (!found)
 			{
 				entry->frequency = 1;
@@ -2631,6 +2578,7 @@ pgqsInsertOverheadHash(ModifyTable *node, pgqsWalkerContext *context)
 				entry->frequency++;
 				entry->updated_rows += instrumentation->ntuples;
 			}
+			dshash_release_lock(pgqs_update_dshash, entry);
 		}
 	}
 	PGQS_LWL_RELEASE(pgqs->querylock);

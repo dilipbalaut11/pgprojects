@@ -235,11 +235,9 @@ static Expr *pgqs_resolve_var(Var *var, pgqsWalkerContext *context);
 static void pgqsInsertOverheadHash(ModifyTable *node, pgqsWalkerContext *context);
 
 
-static void pgqs_entry_dealloc(void);
 static inline void pgqs_entry_init(pgqsEntry *entry);
 static inline void pgqs_entry_copy_raw(pgqsEntry *dest, pgqsEntry *src);
 static void pgqs_entry_err_estim(pgqsEntry *e, double *err_estim, int64 occurences);
-static void pgqs_queryentry_dealloc(void);
 static void pgqs_localentry_dealloc(int nvictims);
 static void pgqs_fillnames(pgqsEntryWithNames *entry);
 
@@ -280,7 +278,9 @@ _PG_init(void)
 	}
 
 	/* Inform the postmaster that we want to enable query_id calculation */
+#if PG_VERSION_NUM >= 150000
 	EnableQueryId();
+#endif
 
 	prev_planner_hook = planner_hook;
 	planner_hook = pgqs_planner;
@@ -624,6 +624,18 @@ pgqs_ExecutorFinish(QueryDesc *queryDesc)
 }
 
 /*
+ * Given an arbitrarily long query string, produce a hash for the purposes of
+ * identifying the query, without normalizing constants.  Used when hashing
+ * utility statements.
+ */
+static uint64
+pgss_hash_string(const char *str, int len)
+{
+	return DatumGetUInt64(hash_any_extended((const unsigned char *) str,
+											len, 0));
+}
+
+/*
  * Save a non normalized query for the queryid if no one already exists, and
  * do all the stat collecting job
  */
@@ -655,9 +667,13 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 		HASH_SEQ_STATUS local_hash_seq;
 		pgqsWalkerContext *context = palloc(sizeof(pgqsWalkerContext));
 		pgqsQueryStringEntry *queryEntry;
-		int		querylen = strlen(queryDesc->sourceText) + 1;
+		int			len = strlen(queryDesc->sourceText) + 1;
 
 		context->queryId = queryDesc->plannedstmt->queryId;
+
+		if (context->queryId == 0)
+			context->queryId = pgss_hash_string(queryDesc->sourceText, len);
+
 		context->rtable = queryDesc->plannedstmt->rtable;
 		context->count = 0;
 		context->qualid = 0;
@@ -684,8 +700,16 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 			PGQS_LWL_RELEASE(pgqs->querylock);
 			PGQS_LWL_ACQUIRE(pgqs->querylock, LW_EXCLUSIVE);
 
-			while (hash_get_num_entries(pgqs_query_examples_hash) >= pgqs_max)
-				pgqs_queryentry_dealloc();
+			if (hash_get_num_entries(pgqs_query_examples_hash) >= pgqs_max)
+			{
+				ereport(WARNING,
+						(errcode(ERRCODE_OUT_OF_MEMORY),
+						 errmsg("workload hash table is full so current query is skipped"),
+						 errhint("reset the stats or increase value of pgqs_max and restart")));
+				PGQS_LWL_RELEASE(pgqs->querylock);
+
+				goto cleanup;
+			}
 
 			queryEntry = (pgqsQueryStringEntry *) hash_search_with_hash_value(pgqs_query_examples_hash, &queryKey,
 																				context->queryId,
@@ -699,7 +723,7 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 				else
 					queryEntry->isExplain = false;
 
-				queryEntry->qrylen = querylen;
+				queryEntry->qrylen = len;
 				strcpy(queryEntry->querytext, context->querytext);
 				queryEntry->frequency = 1;
 			}
@@ -753,7 +777,15 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 
 			while (hash_get_num_entries(pgqs_hash) +
 				   hash_get_num_entries(pgqs_localhash) >= pgqs_max)
-				pgqs_entry_dealloc();
+			{
+				ereport(WARNING,
+						(errcode(ERRCODE_OUT_OF_MEMORY),
+						 errmsg("qual hash table is full so current quals are skipped"),
+						 errhint("reset the stats or increase value of pgqs_max and restart")));
+				PGQS_LWL_RELEASE(pgqs->lock);
+
+				goto cleanup;
+			}
 
 			hash_seq_init(&local_hash_seq, pgqs_localhash);
 			while ((localentry = hash_seq_search(&local_hash_seq)) != NULL)
@@ -789,72 +821,11 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 		
 	}
 
+cleanup:
 	if (prev_ExecutorEnd)
 		prev_ExecutorEnd(queryDesc);
 	else
 		standard_ExecutorEnd(queryDesc);
-}
-
-/*
- * qsort comparator for sorting into increasing usage order
- */
-static int
-entry_cmp(const void *lhs, const void *rhs)
-{
-	double		l_usage = (*(pgqsEntry *const *) lhs)->usage;
-	double		r_usage = (*(pgqsEntry *const *) rhs)->usage;
-
-	if (l_usage < r_usage)
-		return -1;
-	else if (l_usage > r_usage)
-		return +1;
-	else
-		return 0;
-}
-
-/*
- * Deallocate least used entries.
- * Caller must hold an exlusive lock on pgqs->lock
- */
-static void
-pgqs_entry_dealloc(void)
-{
-	HASH_SEQ_STATUS hash_seq;
-	pgqsEntry **entries;
-	pgqsEntry  *entry;
-	int			nvictims;
-	int			i;
-	int			base_size;
-
-	/*
-	 * Sort entries by usage and deallocate PGQS_USAGE_DEALLOC_PERCENT of
-	 * them. While we're scanning the table, apply the decay factor to the
-	 * usage values.
-	 * pgqs_resolve_oids is irrelevant here as the array stores pointers
-	 * instead of entries. The struct member used for the sort are part of
-	 * pgqsEntry.
-	 */
-	base_size = sizeof(pgqsEntry *);
-
-	entries = palloc(hash_get_num_entries(pgqs_hash) * base_size);
-
-	i = 0;
-	hash_seq_init(&hash_seq, pgqs_hash);
-	while ((entry = hash_seq_search(&hash_seq)) != NULL)
-	{
-		entries[i++] = entry;
-		entry->usage *= 0.99;
-	}
-
-	qsort(entries, i, base_size, entry_cmp);
-
-	nvictims = Max(10, i * PGQS_USAGE_DEALLOC_PERCENT / 100);
-	nvictims = Min(nvictims, i);
-
-	for (i = 0; i < nvictims; i++)
-		hash_search(pgqs_hash, &entries[i]->key, HASH_REMOVE, NULL);
-
-	pfree(entries);
 }
 
 /* Initialize all non-key fields of the given entry. */
@@ -910,27 +881,6 @@ pgqs_entry_err_estim(pgqsEntry *e, double *err_estim, int64 occurences)
 			e->min_err_estim[i] = err_estim[i];
 		if (e->max_err_estim[i] < err_estim[i])
 			e->max_err_estim[i] = err_estim[i];
-	}
-}
-
-/*
- * Deallocate the first example query.
- * Caller must hold an exlusive lock on pgqs->querylock
- */
-static void
-pgqs_queryentry_dealloc(void)
-{
-	HASH_SEQ_STATUS hash_seq;
-	pgqsQueryStringEntry *entry;
-
-	hash_seq_init(&hash_seq, pgqs_query_examples_hash);
-	entry = hash_seq_search(&hash_seq);
-
-	if (entry != NULL)
-	{
-		hash_search_with_hash_value(pgqs_query_examples_hash, &entry->key,
-									entry->key.queryid, HASH_REMOVE, NULL);
-		hash_seq_term(&hash_seq);
 	}
 }
 
@@ -2587,6 +2537,7 @@ pgqs_uint32_hashfn(const void *key, Size keysize)
 static void
 pgqsInsertOverheadHash(ModifyTable *node, pgqsWalkerContext *context)
 {
+#if PG_VERSION_NUM >= 140000
 	ListCell	*l;
 	RangeTblEntry *rte;
 	Instrumentation *instrumentation = context->planstate->instrument;
@@ -2618,6 +2569,18 @@ pgqsInsertOverheadHash(ModifyTable *node, pgqsWalkerContext *context)
 			key.attnum = targetattnum;
 			key.queryid = context->queryId;
 
+			while (hash_get_num_entries(pgqs_update_hash) + 1 >= pgqs_max)
+			{
+				ereport(WARNING,
+						(errcode(ERRCODE_OUT_OF_MEMORY),
+						 errmsg("update hash table is full so current updates are skipped"),
+						 errhint("reset the stats or increase value of pgqs_max and restart")));
+
+				PGQS_LWL_RELEASE(pgqs->querylock);
+
+				return;
+			}
+
 			entry = (pgqsUpdateHashEntry *) hash_search(pgqs_update_hash,
 														&key,
 														HASH_ENTER, &found);
@@ -2634,4 +2597,7 @@ pgqsInsertOverheadHash(ModifyTable *node, pgqsWalkerContext *context)
 		}
 	}
 	PGQS_LWL_RELEASE(pgqs->querylock);
+#endif
+
+	return;
 }

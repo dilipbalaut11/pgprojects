@@ -163,7 +163,7 @@ char *query =
 "\n            array_agg(DISTINCT((qual).attnum) ORDER BY ((qual).attnum)) AS attnumlist,"
 "\n            array_agg(qualnodeid) AS qualidlist,"
 "\n            array_agg(DISTINCT(queryid)) AS queryidlist"
-"\n          FROM pgqs"
+"\n          FROM pgqs WHERE queryid IS NOT NULL"
 "\n          GROUP BY (qual).relid, amname, parent"
 "\n        )"
 "\nSELECT * FROM filtered where amname='btree' OR amname='brin' ORDER BY relid, amname DESC, cardinality(attnumlist);";
@@ -202,18 +202,29 @@ static IndexCombination * index_advisor_exhaustive(IndexCombContext *context);
 
 /* planner hook */
 PlannedStmt *
-pgqs_planner(Query *parse, const char *query_string,
-			 int cursorOptions, ParamListInfo boundParams)
+pgqs_planner(Query *parse,
+#if PG_VERSION_NUM >= 130000
+		 const char *query_string,
+#endif
+		 int cursorOptions, ParamListInfo boundParams)
 {
 	PlannedStmt *result;
 
 	/* Invoke the planner, possibly via a previous hook user */
 	if (prev_planner_hook)
-		result = prev_planner_hook(parse, query_string, cursorOptions,
-								   boundParams);
+		result = prev_planner_hook(parse,
+#if PG_VERSION_NUM >= 130000
+					   query_string,
+#endif
+					   cursorOptions,
+					   boundParams);
 	else
-		result = standard_planner(parse, query_string, cursorOptions,
-								  boundParams);
+		result = standard_planner(parse,
+#if PG_VERSION_NUM >= 130000
+					  query_string,
+#endif
+					  cursorOptions,
+					  boundParams);
 
 	/* If enabled, delay by taking and releasing the specified lock */
 	if (pgqs_cost_track_enable)
@@ -722,8 +733,10 @@ index_advisor_get_query(int64 queryid, int *freq)
 	entry = hash_search_with_hash_value(pgqs_query_examples_hash, &queryKey,
 										queryid, HASH_FIND, &found);
 	if (!found)
+	{
+		LWLockRelease(pgqs->querylock);
 		return NULL;
-
+	}
 	if (entry->isExplain)
 	{
 		query = palloc0(entry->qrylen);

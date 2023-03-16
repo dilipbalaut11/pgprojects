@@ -36,7 +36,7 @@ LANGUAGE C;*/
 
 
 
-CREATE FUNCTION index_advisor_get_advise(bool)
+CREATE FUNCTION index_advisor_get_advise()
 RETURNS SETOF text
 AS 'MODULE_PATHNAME'
 LANGUAGE C;

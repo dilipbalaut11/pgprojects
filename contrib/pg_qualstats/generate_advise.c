@@ -76,17 +76,16 @@ typedef struct QueryInfo
 
 /*
  * Index advisor context, store various intermediate information while
- * evaluating value of candidate indexes and finding out the best combination.
+ * comparing candidate indexes and finding out the best candidates.
  */
 typedef struct IndexAdvisorContext
 {
 	int		nqueries;			/* total number of queries */
 	int		ncandidates;		/* total numbed of index candidates */
 	int		maxcand;
-	double		  **benefitmat;	/* index to query benefit matrix (n x m)*/
-	IndexCandidate *candidates;	/* array IndexCandidate for all candidates */
-	QueryInfo	   *queryinfos;	/* array of QueryInfo for all queries */
-	Bitmapset	   *memberattr;	
+	double		  **benefitmat;	/* candidate-query benefit matrix (ncand x mqueries)*/
+	IndexCandidate *candidates;	/* array of candidates */
+	QueryInfo	   *queryinfos;	/* array of QueryInfo */
 	MemoryContext	queryctx;	/* reference to per query context */
 } IndexCombContext;
 
@@ -169,21 +168,19 @@ char *query =
 "\nSELECT * FROM filtered where amname='btree' OR amname='brin' ORDER BY relid, amname DESC, cardinality(attnumlist);";
 
 /* static function declarations */
-static IndexAdvises *index_advisor_generate_advise(MemoryContext per_query_ctx,
-												   bool exhaustive);
+static IndexAdvises *index_advisor_generate_advise(MemoryContext per_query_ctx);
 static char **index_advisor_advise_one_rel(char **prevarray,
 											 IndexCandidate *candidates,
 											 int ncandidates, int *nindexes,
-											 MemoryContext per_query_ctx,
-											 bool iterative);
+											 MemoryContext per_query_ctx);
 static QueryInfo *index_advisor_get_queries(IndexCandidate *candidates,
 											int ncandidates, int *nqueries);
 static bool pg_qulstat_is_queryid_exists(int64 *queryids, int nqueryids,
 										 int64 queryid, int *idx);
 static char *index_advisor_get_query(int64 queryid, int *freq);
-static IndexCandidate *index_advisor_get_index_combination(IndexCandidate *candidates,
-								   						   int *ncandidates);
-static IndexCandidate *index_advisor_add_candidate_if_not_exists(
+static IndexCandidate *index_advisor_get_final_candidates(IndexCandidate *candidates,
+								   						  int *ncandidates);
+static IndexCandidate *index_advisor_add_candidate(
 										IndexCandidate *candidates,
 										IndexCandidate *cand,
 										int *ncandidates, int *nmaxcand);
@@ -198,7 +195,6 @@ static void index_advisor_compute_index_benefit(IndexCombContext *context,
 												int nqueries, int *queryidxs);
 static double index_advisor_get_index_overhead(IndexCandidate *cand, Oid idxid);
 static int index_advisor_get_best_candidate(IndexCombContext *context);
-static IndexCombination * index_advisor_exhaustive(IndexCombContext *context);
 
 /* planner hook */
 PlannedStmt *
@@ -282,12 +278,43 @@ print_benefit_matrix(IndexCombContext *context)
 }
 #endif
 
+/*
+ * Index advisor entry function, this will returns the index advises in form
+ * of create index queries.
+ */
+Datum
+index_advisor_get_advise(PG_FUNCTION_ARGS)
+{
+	char	  **index_array;
+	IndexAdvises   *advise;	
+	ReturnSetInfo  *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	FuncCallContext *funcctx;
+
+	if (SRF_IS_FIRSTCALL())
+	{
+		MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+
+		funcctx = SRF_FIRSTCALL_INIT();
+
+		/* generate index advises and save it for subsequent calls */
+		funcctx->user_fctx = index_advisor_generate_advise(per_query_ctx);
+	}
+	funcctx = SRF_PERCALL_SETUP();
+	advise = (IndexAdvises *) funcctx->user_fctx;
+
+	index_array = advise->index_array;
+	if (advise->next < advise->count)
+		SRF_RETURN_NEXT(funcctx, CStringGetTextDatum(index_array[advise->next++]));
+
+	SRF_RETURN_DONE(funcctx);
+}
+
 /* 
  * Main index advisor function,  this will generate the advise based on the
  * predicate and workload stats collected so far.
  */
 static IndexAdvises *
-index_advisor_generate_advise(MemoryContext per_query_ctx, bool exhaustive)
+index_advisor_generate_advise(MemoryContext per_query_ctx)
 {
 	int			ret;
 	int			i;
@@ -365,8 +392,7 @@ index_advisor_generate_advise(MemoryContext per_query_ctx, bool exhaustive)
 			index_array = index_advisor_advise_one_rel(index_array,
 													   &candidates[idxcand],
 													   nrelcand, &nindexes,
-													   per_query_ctx,
-													   !exhaustive);
+													   per_query_ctx);
 			nrelcand = 0;
 			idxcand = i;
 		}
@@ -378,8 +404,7 @@ index_advisor_generate_advise(MemoryContext per_query_ctx, bool exhaustive)
 	index_array = index_advisor_advise_one_rel(index_array,
 											   &candidates[idxcand],
 											   nrelcand, &nindexes,
-											   per_query_ctx,
-											   !exhaustive);
+											   per_query_ctx);
 
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
 	advise = (IndexAdvises *) palloc(sizeof(IndexAdvises));
@@ -392,39 +417,6 @@ index_advisor_generate_advise(MemoryContext per_query_ctx, bool exhaustive)
 	advise->index_array = index_array;
 
 	return advise;
-}
-
-/*
- * Index advisor entry function, this will returns the index advises in form
- * of create index queries.
- */
-Datum
-index_advisor_get_advise(PG_FUNCTION_ARGS)
-{
-	char	  **index_array;
-	IndexAdvises   *advise;	
-	ReturnSetInfo  *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-	FuncCallContext *funcctx;
-
-	if (SRF_IS_FIRSTCALL())
-	{
-		bool exhaustive = PG_GETARG_BOOL(0);
-		MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
-
-		funcctx = SRF_FIRSTCALL_INIT();
-
-		/* generate index advises and save it for subsequent calls */
-		funcctx->user_fctx = index_advisor_generate_advise(per_query_ctx,
-														   exhaustive);
-	}
-	funcctx = SRF_PERCALL_SETUP();
-	advise = (IndexAdvises *) funcctx->user_fctx;
-
-	index_array = advise->index_array;
-	if (advise->next < advise->count)
-		SRF_RETURN_NEXT(funcctx, CStringGetTextDatum(index_array[advise->next++]));
-
-	SRF_RETURN_DONE(funcctx);
 }
 
 /*
@@ -465,7 +457,7 @@ index_advisor_iterative(IndexCombContext *context)
 	 * assume that this index is now selected.  So update the base cost of each
 	 * query which got benefitted with this index.
 	 *
-	 * Step5: Go to step2 and repeat the process to select the next best
+	 * Step5: Go to Step2 and repeat the process to select the next best
 	 * candidate.  This time instead of replanning all the queries, only replan
 	 * the queries which got benefitted by the previous best candidate. And
 	 * also note that in this round the previously selected candidate are out
@@ -516,8 +508,8 @@ index_advisor_iterative(IndexCombContext *context)
 		nqueries = 0;
 
 		/* 
-		 * Next best candidate is seleted so update the query base cost as if this
-		 * index exists before going for next iteration.
+		 * Next best candidate is seleted so update the query base cost for all
+		 * benefitted queries before going for next iteration.
 		 */
 		for (i = 0; i < context->nqueries; i++)
 		{
@@ -538,6 +530,7 @@ index_advisor_iterative(IndexCombContext *context)
 		candidates[bestcand].isselected = true;
 	}
 
+	/* drop all hypo indexes */
 	hypo_index_reset();
 
 	return comb;
@@ -552,7 +545,7 @@ index_advisor_iterative(IndexCombContext *context)
 static char **
 index_advisor_advise_one_rel(char **prevarray, IndexCandidate *candidates,
 							   int ncandidates, int *nindexes,
-							   MemoryContext per_query_ctx, bool iterative)
+							   MemoryContext per_query_ctx)
 {
 	char	  **index_array = NULL;
 	QueryInfo  *queryinfos;
@@ -575,20 +568,22 @@ index_advisor_advise_one_rel(char **prevarray, IndexCandidate *candidates,
 	queryinfos = index_advisor_get_queries(candidates, ncandidates, &nqueries);
 
 	/*
-	 * Process the candidate and from those genrate all possible distinct one
-	 * and two length index candidates.
+	 * Process all candidates and from those generate all distinct one and two
+	 * column index candidates.
+	 *
+	 * XXX for future we can consider more than 2 column indexes.
 	 */
-	finalcand = index_advisor_get_index_combination(candidates, &ncandidates);
+	finalcand = index_advisor_get_final_candidates(candidates, &ncandidates);
 
 	/*
 	 * Process all the candidates and get the total update count we are
-	 * performing on key attributes for those candidate indexes.
+	 * performing on key attributes for each candidate.
 	 */
 	index_advisor_get_updates(finalcand, ncandidates);
 
 	/*
 	 * Generate index creation statement for each candidate.  We need to output
-	 * the index statements so store in per query context.
+	 * the index statements so store them in per query context.
 	 */
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
 	if (!index_advisor_generate_index_queries(finalcand, ncandidates))
@@ -605,18 +600,14 @@ index_advisor_advise_one_rel(char **prevarray, IndexCandidate *candidates,
 	context.queryinfos = queryinfos;
 	context.nqueries = nqueries;
 	context.maxcand = ncandidates;
-	context.memberattr = NULL;
 	context.queryctx = per_query_ctx;
 
 	/*
-	 * Process index candidate with iterative approach and find out the list
+	 * Process index candidates with iterative approach and find out the list
 	 * of indexes which can produce least cost for the given set of workload
 	 * queries.
 	 */
-	if (iterative)
-		comb = index_advisor_iterative(&context);
-	else
-		comb = index_advisor_exhaustive(&context);
+	comb = index_advisor_iterative(&context);
 
 	if (comb == NULL || comb->nindices == 0)
 		return prevarray;
@@ -688,7 +679,7 @@ index_advisor_get_queries(IndexCandidate *candidates, int ncandidates,
 	for (i = 0; i < nids; i++)
 	{
 		queryinfos[i].query = index_advisor_get_query(queryids[i],
-													 &queryinfos[i].frequency);
+													  &queryinfos[i].frequency);
 #ifdef DEBUG_INDEX_ADVISOR
 		elog(NOTICE, "query %d: %s-freq:%d", i, queryinfos[i].query, queryinfos[i].frequency);
 #endif
@@ -763,7 +754,7 @@ index_advisor_get_query(int64 queryid, int *freq)
  * index candidate array.
  */
 static IndexCandidate *
-index_advisor_get_index_combination(IndexCandidate *candidates,
+index_advisor_get_final_candidates(IndexCandidate *candidates,
 								   int *ncandidates)
 {
 	IndexCandidate *finalcand;
@@ -787,10 +778,10 @@ index_advisor_get_index_combination(IndexCandidate *candidates,
 			cand.attnum = (int *) palloc0(sizeof(int));
 			cand.attnum[0] = candidates[i].attnum[j];
 
-			finalcand = index_advisor_add_candidate_if_not_exists(finalcand,
-																 &cand,
-																 &nfinalcand,
-																 &nmaxcand);
+			finalcand = index_advisor_add_candidate(finalcand,
+													&cand,
+													&nfinalcand,
+													&nmaxcand);
 
 			/* generate two column indexes. */
 			for (k = 0; k < candidates[i].nattrs; k++)
@@ -810,8 +801,9 @@ index_advisor_get_index_combination(IndexCandidate *candidates,
 				 * we can consider this as duplicate (no need to check strict
 				 * column order)
 				 */
-				finalcand = index_advisor_add_candidate_if_not_exists(finalcand,
-												&cand, &nfinalcand, &nmaxcand);
+				finalcand = index_advisor_add_candidate(finalcand, &cand,
+														&nfinalcand,
+														&nmaxcand);
 			}
 		}
 	}
@@ -822,13 +814,11 @@ index_advisor_get_index_combination(IndexCandidate *candidates,
 }
 
 /*
- * Add 'cand' index candidate to the input 'candidates' array if its not
- * already present in the array and return the update array.
+ * Add a new candidate to final candidate array if it is not already present
  */
 static IndexCandidate *
-index_advisor_add_candidate_if_not_exists(IndexCandidate *candidates,
-										 IndexCandidate *cand,
-										 int *ncandidates, int *nmaxcand)
+index_advisor_add_candidate(IndexCandidate *candidates, IndexCandidate *cand,
+							int *ncandidates, int *nmaxcand)
 {
 	IndexCandidate *finalcand = candidates;
 	int		i;
@@ -1123,7 +1113,7 @@ index_advisor_get_index_overhead(IndexCandidate *cand, BlockNumber relpages)
 
 	overhead = update_io_cost + update_cpu_cost;
 
-	/* XXX overhead of index based on number of size and number of columns. */
+	/* XXX overhead of index based on index size and the number of columns. */
 	overhead += T;
 	overhead += (cand->nattrs * 1000);
 
@@ -1179,7 +1169,7 @@ index_advisor_get_best_candidate(IndexCombContext *context)
 	return bestcandidx;
 }
 
-#if 1 //exhaustive
+#if 0 //exhaustive
 static void
 index_advisor_bms_add_candattr(IndexCombContext *context, IndexCandidate *cand)
 {

@@ -184,6 +184,10 @@ static IndexCandidate *index_advisor_add_candidate(
 										IndexCandidate *candidates,
 										IndexCandidate *cand,
 										int *ncandidates, int *nmaxcand);
+static bool index_advisor_is_index_exists(Relation rel, IndexCandidate *cand);
+static void index_advisor_mark_existing_candidates(IndexCandidate *candidates,
+												   int ncandidates);
+
 static void index_advisor_get_updates(IndexCandidate *candidates,
 									  int ncandidates);
 
@@ -574,6 +578,7 @@ index_advisor_advise_one_rel(char **prevarray, IndexCandidate *candidates,
 	 * XXX for future we can consider more than 2 column indexes.
 	 */
 	finalcand = index_advisor_get_final_candidates(candidates, &ncandidates);
+	index_advisor_mark_existing_candidates(finalcand, ncandidates);
 
 	/*
 	 * Process all the candidates and get the total update count we are
@@ -857,6 +862,73 @@ index_advisor_add_candidate(IndexCandidate *candidates, IndexCandidate *cand,
 	}
 
 	return finalcand;
+}
+
+static bool
+index_advisor_is_index_exists(Relation rel, IndexCandidate *cand)
+{
+	ListCell   *lc;
+
+	foreach(lc, rel->rd_indexlist)
+	{
+		Oid			idxid = lfirst_oid(lc);
+		Relation	idxrel = index_open(idxid, AccessShareLock);
+		int			i;
+
+		if (cand->nattrs != idxrel->rd_att->natts)
+		{
+			index_close(idxrel, AccessShareLock);
+			continue;
+		}
+
+		for (i = 0; i < idxrel->rd_att->natts; i++)
+		{
+			int attnum = cand->attnum[i] - 1;
+
+			/*
+			 * XXX is there better way to do it? i.e. instead of comparing
+			 * name can we comapare numbers? but how because idxrel keep attnum
+			 * w.r.t. index relation whereas candidate keep attnum w.r.t.
+			 * actual relation.
+			 */
+			if (strcmp(NameStr(idxrel->rd_att->attrs[i].attname),
+					   NameStr(rel->rd_att->attrs[attnum].attname)) == 0)
+			{
+				index_close(idxrel, AccessShareLock);
+				return true;
+			}
+		}
+
+		index_close(idxrel, AccessShareLock);
+	}
+
+	return false;
+}
+
+/*
+ * check individiual index usefulness, if not reducing the cost by some margin
+ * then mark invalid.
+ */
+static void
+index_advisor_mark_existing_candidates(IndexCandidate *candidates,
+									   int ncandidates)
+{
+	Relation	relation;
+	int			i;
+
+	relation = RelationIdGetRelation(candidates[0].relid);
+	if (relation == NULL)
+		return;
+
+	for (i = 0; i < ncandidates; i++)
+	{
+		IndexCandidate *cand = &candidates[i];
+
+		if (index_advisor_is_index_exists(relation, cand))
+			cand->isvalid = false;
+	}
+
+	RelationClose(relation);
 }
 
 /*

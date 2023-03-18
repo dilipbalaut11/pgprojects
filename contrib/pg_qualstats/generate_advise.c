@@ -173,6 +173,7 @@ static char **index_advisor_advise_one_rel(char **prevarray,
 											 IndexCandidate *candidates,
 											 int ncandidates, int *nindexes,
 											 MemoryContext per_query_ctx);
+static IndexCombination *index_advisor_iterative(IndexCombContext *context);
 static QueryInfo *index_advisor_get_queries(IndexCandidate *candidates,
 											int ncandidates, int *nqueries);
 static bool pg_qulstat_is_queryid_exists(int64 *queryids, int nqueryids,
@@ -185,8 +186,8 @@ static IndexCandidate *index_advisor_add_candidate(
 										IndexCandidate *cand,
 										int *ncandidates, int *nmaxcand);
 static bool index_advisor_is_index_exists(Relation rel, IndexCandidate *cand);
-static void index_advisor_mark_existing_candidates(IndexCandidate *candidates,
-												   int ncandidates);
+static void index_advisor_remove_existing_candidates(IndexCandidate *candidates,
+													 int ncandidates);
 
 static void index_advisor_get_updates(IndexCandidate *candidates,
 									  int ncandidates);
@@ -234,14 +235,6 @@ pgqs_planner(Query *parse,
 
 	return result;
 }
-
-/* Location of permanent stats file (valid when database is shut down) */
-#define PGQS_DUMP_FILE	"pg_qualstats.stat"
-/* Magic number identifying the stats file format */
-static const uint32 PGQS_FILE_HEADER = 0x20220408;
-
-/* PostgreSQL major version number, changes in which invalidate all entries */
-static const uint32 PGQS_PG_MAJOR_VERSION = PG_VERSION_NUM / 100;
 
 #ifdef DEBUG_INDEX_ADVISOR
 
@@ -337,8 +330,8 @@ index_advisor_generate_advise(MemoryContext per_query_ctx)
 		elog(ERROR, "pg_qualstat: SPI_connect returned %d", ret);
 
 	/*
-	 * Execute query to get list of all quals grouped by relation id and
-	 * index amname.
+	 * Execute query to get list of all index candidate by calling
+	 * pg_qualstat() function.
 	 */
 	ret = SPI_execute(query, true, 0);
 	if (ret != SPI_OK_SELECT)
@@ -404,7 +397,7 @@ index_advisor_generate_advise(MemoryContext per_query_ctx)
 		nrelcand++;
 	}
 
-	/* process the last relation */
+	/* process candidates of the last relation */
 	index_array = index_advisor_advise_one_rel(index_array,
 											   &candidates[idxcand],
 											   nrelcand, &nindexes,
@@ -421,6 +414,100 @@ index_advisor_generate_advise(MemoryContext per_query_ctx)
 	advise->index_array = index_array;
 
 	return advise;
+}
+
+/*
+ * Index advisor function for one relation, this will process all the
+ * input index candidates.  Generate all possible single coulmn and two columns
+ * indexes and check their value and finally return the list of indexes which
+ * can get the best value.
+ */
+static char **
+index_advisor_advise_one_rel(char **prevarray, IndexCandidate *candidates,
+							   int ncandidates, int *nindexes,
+							   MemoryContext per_query_ctx)
+{
+	char	  **index_array = NULL;
+	QueryInfo  *queryinfos;
+	int			nqueries;
+	int			i;
+	int			prev_indexes = *nindexes;
+	IndexCandidate *finalcand;
+	IndexCombination   *comb = NULL;
+	IndexCombContext		context;
+	MemoryContext oldcontext;
+
+#ifdef DEBUG_INDEX_ADVISOR
+	elog(NOTICE, "candidate Relation %d", candidates[0].relid);
+#endif
+
+	/*
+	 * Process all candidate and get the list of all the unique queryids and
+	 * also the actual queries.
+	 */
+	queryinfos = index_advisor_get_queries(candidates, ncandidates, &nqueries);
+
+	/*
+	 * Process all candidates and from those generate all distinct one and two
+	 * column index candidates.
+	 *
+	 * XXX for future we can consider more than 2 column indexes.
+	 */
+	finalcand = index_advisor_get_final_candidates(candidates, &ncandidates);
+	index_advisor_remove_existing_candidates(finalcand, ncandidates);
+
+	/*
+	 * Process all the candidates and get the total update count we are
+	 * performing on key attributes for each candidate.
+	 */
+	index_advisor_get_updates(finalcand, ncandidates);
+
+	/*
+	 * Generate index creation statement for each candidate.  We need to output
+	 * the index statements so store them in per query context.
+	 */
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+	if (!index_advisor_generate_index_queries(finalcand, ncandidates))
+		return prevarray;
+
+	MemoryContextSwitchTo(oldcontext);
+#ifdef DEBUG_INDEX_ADVISOR
+	print_candidates(finalcand, ncandidates);
+#endif
+
+	/* prepare context for index advisor processing */
+	context.candidates = finalcand;
+	context.ncandidates = ncandidates;
+	context.queryinfos = queryinfos;
+	context.nqueries = nqueries;
+	context.maxcand = ncandidates;
+	context.queryctx = per_query_ctx;
+
+	/*
+	 * Process index candidates with iterative approach and find out the list
+	 * of indexes which can produce least cost for the given set of workload
+	 * queries.
+	 */
+	comb = index_advisor_iterative(&context);
+
+	if (comb == NULL || comb->nindices == 0)
+		return prevarray;
+
+	prev_indexes = *nindexes;
+	(*nindexes) += comb->nindices;
+
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+	if (prev_indexes == 0)
+		index_array = (char **) palloc(comb->nindices * sizeof(char *));
+	else
+		index_array = (char ** ) repalloc(prevarray, (*nindexes) * sizeof(char *));
+	MemoryContextSwitchTo(oldcontext);
+
+	/* construct and return array. */
+	for (i = 0; i < comb->nindices; i++)
+		index_array[prev_indexes + i] = finalcand[comb->indices[i]].indexstmt;
+
+	return index_array;
 }
 
 /*
@@ -538,100 +625,6 @@ index_advisor_iterative(IndexCombContext *context)
 	hypo_index_reset();
 
 	return comb;
-}
-
-/*
- * Index advisor function for one relation, this will process all the
- * input index candidates.  Generate all possible single coulmn and two columns
- * indexes and check their value and finally return the list of indexes which
- * can get the best value.
- */
-static char **
-index_advisor_advise_one_rel(char **prevarray, IndexCandidate *candidates,
-							   int ncandidates, int *nindexes,
-							   MemoryContext per_query_ctx)
-{
-	char	  **index_array = NULL;
-	QueryInfo  *queryinfos;
-	int			nqueries;
-	int			i;
-	int			prev_indexes = *nindexes;
-	IndexCandidate *finalcand;
-	IndexCombination   *comb = NULL;
-	IndexCombContext		context;
-	MemoryContext oldcontext;
-
-#ifdef DEBUG_INDEX_ADVISOR
-	elog(NOTICE, "candidate Relation %d", candidates[0].relid);
-#endif
-
-	/*
-	 * Process all candidate and get the list of all the unique queryids and
-	 * also the actual queries.
-	 */
-	queryinfos = index_advisor_get_queries(candidates, ncandidates, &nqueries);
-
-	/*
-	 * Process all candidates and from those generate all distinct one and two
-	 * column index candidates.
-	 *
-	 * XXX for future we can consider more than 2 column indexes.
-	 */
-	finalcand = index_advisor_get_final_candidates(candidates, &ncandidates);
-	index_advisor_mark_existing_candidates(finalcand, ncandidates);
-
-	/*
-	 * Process all the candidates and get the total update count we are
-	 * performing on key attributes for each candidate.
-	 */
-	index_advisor_get_updates(finalcand, ncandidates);
-
-	/*
-	 * Generate index creation statement for each candidate.  We need to output
-	 * the index statements so store them in per query context.
-	 */
-	oldcontext = MemoryContextSwitchTo(per_query_ctx);
-	if (!index_advisor_generate_index_queries(finalcand, ncandidates))
-		return prevarray;
-
-	MemoryContextSwitchTo(oldcontext);
-#ifdef DEBUG_INDEX_ADVISOR
-	print_candidates(finalcand, ncandidates);
-#endif
-
-	/* prepare context for index advisor processing */
-	context.candidates = finalcand;
-	context.ncandidates = ncandidates;
-	context.queryinfos = queryinfos;
-	context.nqueries = nqueries;
-	context.maxcand = ncandidates;
-	context.queryctx = per_query_ctx;
-
-	/*
-	 * Process index candidates with iterative approach and find out the list
-	 * of indexes which can produce least cost for the given set of workload
-	 * queries.
-	 */
-	comb = index_advisor_iterative(&context);
-
-	if (comb == NULL || comb->nindices == 0)
-		return prevarray;
-
-	prev_indexes = *nindexes;
-	(*nindexes) += comb->nindices;
-
-	oldcontext = MemoryContextSwitchTo(per_query_ctx);
-	if (prev_indexes == 0)
-		index_array = (char **) palloc(comb->nindices * sizeof(char *));
-	else
-		index_array = (char ** ) repalloc(prevarray, (*nindexes) * sizeof(char *));
-	MemoryContextSwitchTo(oldcontext);
-
-	/* construct and return array. */
-	for (i = 0; i < comb->nindices; i++)
-		index_array[prev_indexes + i] = finalcand[comb->indices[i]].indexstmt;
-
-	return index_array;
 }
 
 /*
@@ -864,54 +857,68 @@ index_advisor_add_candidate(IndexCandidate *candidates, IndexCandidate *cand,
 	return finalcand;
 }
 
+/*
+ * Check whether there is any existing index on the relation with same
+ * attributes as input candidate.
+ */
 static bool
 index_advisor_is_index_exists(Relation rel, IndexCandidate *cand)
 {
 	ListCell   *lc;
+	List	   *index_oids = RelationGetIndexList(rel);
 
-	foreach(lc, rel->rd_indexlist)
+	/*
+	 * Iterate through each index of the relation and determine whether the
+	 * input candidate matches any existing index.
+	 */
+	foreach(lc, index_oids)
 	{
 		Oid			idxid = lfirst_oid(lc);
-		Relation	idxrel = index_open(idxid, AccessShareLock);
+		Relation	irel = index_open(idxid, AccessShareLock);
+		int			nattr;
 		int			i;
 
-		if (cand->nattrs != idxrel->rd_att->natts)
+		nattr = IndexRelationGetNumberOfAttributes(irel);
+
+		/*
+		 * If the number of attributes or the access method of the index is not
+		 * the same as those of the candidate then there is no point in
+		 * matching the attribute numbers.
+		 */
+		if (cand->nattrs != nattr || cand->amoid != irel->rd_rel->relam)
 		{
-			index_close(idxrel, AccessShareLock);
+			index_close(irel, AccessShareLock);
 			continue;
 		}
 
-		for (i = 0; i < idxrel->rd_att->natts; i++)
+		/*
+		 * Now compare each attribute number and if all attribute matches then
+		 * return true.
+		 */
+		for (i = 0; i < nattr; i++)
 		{
-			int attnum = cand->attnum[i] - 1;
-
-			/*
-			 * XXX is there better way to do it? i.e. instead of comparing
-			 * name can we comapare numbers? but how because idxrel keep attnum
-			 * w.r.t. index relation whereas candidate keep attnum w.r.t.
-			 * actual relation.
-			 */
-			if (strcmp(NameStr(idxrel->rd_att->attrs[i].attname),
-					   NameStr(rel->rd_att->attrs[attnum].attname)) == 0)
-			{
-				index_close(idxrel, AccessShareLock);
-				return true;
-			}
+			if (cand->attnum[i] != irel->rd_index->indkey.values[i])
+				break;
 		}
 
-		index_close(idxrel, AccessShareLock);
+		index_close(irel, AccessShareLock);
+
+		if (i == nattr)
+			return true;
 	}
 
 	return false;
 }
 
 /*
- * check individiual index usefulness, if not reducing the cost by some margin
- * then mark invalid.
+ * Process each candidate and if we found a match with any of the existing
+ * index of the relation then mark that candidate invalid.  And if the
+ * candidate is marked invalid then it will be excluded from further processing
+ * of the index advisor alorithm.
  */
 static void
-index_advisor_mark_existing_candidates(IndexCandidate *candidates,
-									   int ncandidates)
+index_advisor_remove_existing_candidates(IndexCandidate *candidates,
+										 int ncandidates)
 {
 	Relation	relation;
 	int			i;
@@ -1017,11 +1024,11 @@ index_advisor_generate_index_queries(IndexCandidate *candidates, int ncandidates
 {
 	int		i;
 	int		j;
-	Relation	relation;
+	Relation	rel;
 	StringInfoData buf;
 
-	relation = RelationIdGetRelation(candidates[0].relid);
-	if (relation == NULL)
+	rel = RelationIdGetRelation(candidates[0].relid);
+	if (rel == NULL)
 		return false;
 
 	initStringInfo(&buf);
@@ -1031,14 +1038,17 @@ index_advisor_generate_index_queries(IndexCandidate *candidates, int ncandidates
 		IndexCandidate *cand = &candidates[i];
 
 		appendStringInfo(&buf, "CREATE INDEX ON %s USING %s (",
-						 relation->rd_rel->relname.data,
+						 NameStr(rel->rd_rel->relname),
 						 cand->amname);
 
 		for (j = 0; j < cand->nattrs; j++)
 		{
+			int attnum = cand->attnum[j] - 1;
+
 			if (j > 0)
 				appendStringInfo(&buf, ",");
-			appendStringInfo(&buf, "%s", relation->rd_att->attrs[cand->attnum[j] - 1].attname.data);
+			appendStringInfo(&buf, "%s",
+							 NameStr(rel->rd_att->attrs[attnum].attname));
 		}
 
 		appendStringInfo(&buf, ");");
@@ -1046,7 +1056,7 @@ index_advisor_generate_index_queries(IndexCandidate *candidates, int ncandidates
 		strcpy(cand->indexstmt, buf.data);
 		resetStringInfo(&buf);
 	}
-	RelationClose(relation);
+	RelationClose(rel);
 	return true;
 }
 
@@ -1099,8 +1109,8 @@ index_advisor_plan_query(const char *query)
 }
 
 /*
- * Plan given set of input queries with each valid and non-selected indexes and
- * fill the index-query benefit matrix.
+ * Plan given set of input queries with each valid and non-selected candidate
+ * and fill the index-query benefit matrix.
  */
 static void
 index_advisor_compute_index_benefit(IndexCombContext *context,
@@ -1123,14 +1133,15 @@ index_advisor_compute_index_benefit(IndexCombContext *context,
 
 		/* 
 		 * If candiate is already identified as it has no value or it is
-		 * seletced in the final combination then in the recheck its benefits.
+		 * seletced in the final combination then skip it.
 		 */
 		if (!cand->isvalid || cand->isselected)
 			continue;
 
+		/* create hypothetical index for the candidate before replanning */
 		idxid = hypo_create_index(cand->indexstmt, &relpages);
 
-		/* If candidate overhead is not yet computed then do it now */
+		/* If candidate's overhead is not yet computed then do it now */
 		if (cand->overhead == 0)
 			cand->overhead = index_advisor_get_index_overhead(cand, relpages);
 
@@ -1158,12 +1169,19 @@ index_advisor_compute_index_benefit(IndexCombContext *context,
 				benefit[index][i] = 0;
 		}
 
+		/* 
+		 * We have updated the benefit matrix so now remove the hypothetical
+		 * index.
+		 */
 		hypo_index_remove(idxid);
 	}
 
 	pgqs_cost_track_enable = false;
 }
 
+/*
+ * Compute the overhead of the index for the input candidate.
+ */
 static double
 index_advisor_get_index_overhead(IndexCandidate *cand, BlockNumber relpages)
 {

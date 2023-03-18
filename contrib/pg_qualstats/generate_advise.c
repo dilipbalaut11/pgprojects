@@ -181,10 +181,9 @@ static bool pg_qulstat_is_queryid_exists(int64 *queryids, int nqueryids,
 static char *index_advisor_get_query(int64 queryid, int *freq);
 static IndexCandidate *index_advisor_get_final_candidates(IndexCandidate *candidates,
 								   						  int *ncandidates);
-static IndexCandidate *index_advisor_add_candidate(
-										IndexCandidate *candidates,
-										IndexCandidate *cand,
-										int *ncandidates, int *nmaxcand);
+static bool index_advisor_is_candidate_exists(IndexCandidate *candidates,
+											  IndexCandidate *cand,
+											  int ncandidates);
 static bool index_advisor_is_index_exists(Relation rel, IndexCandidate *cand);
 static void index_advisor_remove_existing_candidates(IndexCandidate *candidates,
 													 int ncandidates);
@@ -424,8 +423,8 @@ index_advisor_generate_advise(MemoryContext per_query_ctx)
  */
 static char **
 index_advisor_advise_one_rel(char **prevarray, IndexCandidate *candidates,
-							   int ncandidates, int *nindexes,
-							   MemoryContext per_query_ctx)
+							 int ncandidates, int *nindexes,
+							 MemoryContext per_query_ctx)
 {
 	char	  **index_array = NULL;
 	QueryInfo  *queryinfos;
@@ -763,6 +762,10 @@ index_advisor_get_final_candidates(IndexCandidate *candidates,
 	int				j;
 	int				k = 0;
 
+	/*
+	 * Allocate a initial size for the final candidate array, we will
+	 * expand this if we need to add more elements.
+	 */
 	finalcand = palloc(sizeof(IndexCandidate) * nmaxcand);
 
 	/* genrate all one and tow length index combinations. */
@@ -776,10 +779,21 @@ index_advisor_get_final_candidates(IndexCandidate *candidates,
 			cand.attnum = (int *) palloc0(sizeof(int));
 			cand.attnum[0] = candidates[i].attnum[j];
 
-			finalcand = index_advisor_add_candidate(finalcand,
-													&cand,
-													&nfinalcand,
-													&nmaxcand);
+			if (!index_advisor_is_candidate_exists(finalcand, &cand, nfinalcand))
+			{
+				/*
+				 * If the number of elements are already equal to the max size
+				 * then double the size and repalloc.
+				 */
+				if (nfinalcand == nmaxcand)
+				{
+					nmaxcand *= 2;
+					finalcand = repalloc(finalcand,
+										 sizeof(IndexCandidate) * (nmaxcand));
+				}
+				memcpy(&finalcand[nfinalcand], &cand, sizeof(IndexCandidate));
+				nfinalcand++;
+			}
 
 			/* generate two column indexes. */
 			for (k = 0; k < candidates[i].nattrs; k++)
@@ -799,9 +813,17 @@ index_advisor_get_final_candidates(IndexCandidate *candidates,
 				 * we can consider this as duplicate (no need to check strict
 				 * column order)
 				 */
-				finalcand = index_advisor_add_candidate(finalcand, &cand,
-														&nfinalcand,
-														&nmaxcand);
+				if (!index_advisor_is_candidate_exists(finalcand, &cand, nfinalcand))
+				{
+					if (nfinalcand == nmaxcand)
+					{
+						nmaxcand *= 2;
+						finalcand = repalloc(finalcand,
+											 sizeof(IndexCandidate) * (nmaxcand));
+					}
+					memcpy(&finalcand[nfinalcand], &cand, sizeof(IndexCandidate));
+					nfinalcand++;
+				}
 			}
 		}
 	}
@@ -812,24 +834,21 @@ index_advisor_get_final_candidates(IndexCandidate *candidates,
 }
 
 /*
- * Add a new candidate to final candidate array if it is not already present
+ * Check whether the inpute candidate already present in the candidate array.
  */
-static IndexCandidate *
-index_advisor_add_candidate(IndexCandidate *candidates, IndexCandidate *cand,
-							int *ncandidates, int *nmaxcand)
+static bool
+index_advisor_is_candidate_exists(IndexCandidate *candidates,
+								  IndexCandidate *cand,
+								  int ncandidates)
 {
-	IndexCandidate *finalcand = candidates;
 	int		i;
 	int		j;
-	bool	found = false;
 
-	for (i = 0; i < *ncandidates; i++)
+	for (i = 0; i < ncandidates; i++)
 	{
 		IndexCandidate *oldcand = &candidates[i];
 
-		if (oldcand->nattrs != cand->nattrs)
-			continue;
-		if (oldcand->amoid != cand->amoid)
+		if (oldcand->nattrs != cand->nattrs || oldcand->amoid != cand->amoid)
 			continue;
 
 		for (j = 0; j < oldcand->nattrs; j++)
@@ -839,22 +858,10 @@ index_advisor_add_candidate(IndexCandidate *candidates, IndexCandidate *cand,
 		}
 
 		if (j == oldcand->nattrs)
-			found = true;
+			return true;
 	}
 
-	if (!found)
-	{
-		if (*ncandidates == *nmaxcand)
-		{
-			(*nmaxcand) *= 2;
-			finalcand = repalloc(finalcand,
-								 sizeof(IndexCandidate) * (*nmaxcand));
-		}
-		memcpy(&finalcand[*ncandidates], cand, sizeof(IndexCandidate));
-		(*ncandidates)++;
-	}
-
-	return finalcand;
+	return false;
 }
 
 /*

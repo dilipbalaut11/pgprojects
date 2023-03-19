@@ -15,7 +15,7 @@
 #include "include/hypopg.h"
 #include "include/hypopg_index.h"
 #include "include/pg_qualstats.h"
-#include "include/generate_advise.h"
+#include "include/indexadvisor.h"
 
 /*---- Function declarations ----*/
 extern PGDLLEXPORT Datum index_advisor_get_advise(PG_FUNCTION_ARGS);

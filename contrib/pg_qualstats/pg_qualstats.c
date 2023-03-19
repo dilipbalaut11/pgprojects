@@ -283,7 +283,7 @@ _PG_init(void)
 #endif
 
 	prev_planner_hook = planner_hook;
-	planner_hook = pgqs_planner;
+	planner_hook = advisor_planner;
 	prev_ExecutorStart = ExecutorStart_hook;
 	ExecutorStart_hook = pgqs_ExecutorStart;
 	prev_ExecutorRun = ExecutorRun_hook;
@@ -525,7 +525,7 @@ pgqs_ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
 	/* Setup instrumentation */
 	if (pgqs_enabled  && strlen(queryDesc->sourceText) < pgqs_query_size
-		&& !pgqs_cost_track_enable)
+		&& !advisor_track_plan_cost)
 	{
 		/*
 		 * For rate sampling, randomly choose top-level statement. Either all

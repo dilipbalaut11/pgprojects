@@ -1371,7 +1371,15 @@ hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel)
 
 		entry->pages = (BlockNumber) (entry->tuples * line_size * bloat_factor / usable_page_size);
 #if PG_VERSION_NUM >= 90300
-		entry->tree_height = -1;	/* TODO */
+		/*
+		 * Here we are estimating tree height in same way as it is done by the
+		 * Optimizer.
+		 */
+		if (entry->pages > 1)	/* avoid computing log(0) */
+			entry->tree_height = (int) (log(entry->pages) / log(100.0));
+		else
+			entry->tree_height = -1;
+
 #endif
 	}
 #if PG_VERSION_NUM >= 90500

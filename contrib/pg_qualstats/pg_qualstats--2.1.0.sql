@@ -36,7 +36,7 @@ LANGUAGE C;*/
 
 
 
-CREATE FUNCTION index_advisor_get_advise()
+CREATE FUNCTION index_advisor_get_advise(min_filter integer DEFAULT 1000, min_selectivity integer DEFAULT 30)
 RETURNS SETOF text
 AS 'MODULE_PATHNAME'
 LANGUAGE C;

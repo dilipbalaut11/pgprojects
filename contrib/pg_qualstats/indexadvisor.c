@@ -4,7 +4,6 @@
  *		Recommend potentially useful indexes based on the stats collected so
  *		far
  *
- *
  * Copyright (c) 2023, EnterpriseDB
  *
  * IDENTIFICATION
@@ -38,7 +37,7 @@ bool advisor_track_plan_cost = false;
 static float advisor_plan_cost = 0.0;
 planner_hook_type prev_planner_hook = NULL;
 
-/* Index advisor index candidate information. */
+/* Index candidate */
 typedef struct AdvisorCandidate
 {
 	Oid		relid;			/* relation id */
@@ -58,7 +57,7 @@ typedef struct AdvisorCandidate
 	bool	isselected;		/* is candidate already selected in final list */
 } AdvisorCandidate;
 
-/* query information */
+/* workload query information */
 typedef struct AdvisorQueryInfo
 {
 	double	cost;			/* query based cost */
@@ -67,7 +66,7 @@ typedef struct AdvisorQueryInfo
 } AdvisorQueryInfo;
 
 /*
- * Index advisor context, store various intermediate information while
+ * Index advisor context, store various intermediate informations while
  * comparing candidate indexes and finding out the best candidates.
  */
 typedef struct IndexAdvisorContext
@@ -160,14 +159,19 @@ char *query =
 "\n            array_agg(DISTINCT((qual).attnum) ORDER BY ((qual).attnum)) AS attnumlist,"
 "\n            array_agg(qualnodeid) AS qualidlist,"
 "\n            array_agg(DISTINCT(queryid)) AS queryidlist"
-"\n          FROM pgqs WHERE queryid IS NOT NULL"
+"\n          FROM pgqs"
+"\n          WHERE queryid IS NOT NULL AND"
+"\n          avg_filter >= $1 AND"
+"\n			 avg_selectivity >= $2"
 "\n          GROUP BY (qual).relid, amname, parent"
 "\n        )"
 "\nSELECT * FROM filtered where amname='btree' OR amname='brin' ORDER BY relid, amname DESC, cardinality(attnumlist);";
 
 /* static function declarations */
 static IndexAdvisorIndexes *advisor_generate_advise(
-												MemoryContext per_query_ctx);
+												MemoryContext per_query_ctx,
+												int min_filter,
+												int min_selectivity);
 static char **advisor_process_rel(char **prevarray,
 										AdvisorCandidate *candidates,
 										int ncandidates, int *nindexes,
@@ -211,6 +215,8 @@ static void print_benefit_matrix(IndexAdvisorContext *context);
 Datum
 index_advisor_get_advise(PG_FUNCTION_ARGS)
 {
+	int			min_filter = PG_GETARG_INT32(0);
+	int			min_selectivity = PG_GETARG_INT32(1);
 	char	  **index_array;
 	IndexAdvisorIndexes   *advise;
 	ReturnSetInfo  *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
@@ -223,7 +229,9 @@ index_advisor_get_advise(PG_FUNCTION_ARGS)
 		funcctx = SRF_FIRSTCALL_INIT();
 
 		/* generate index advises and save it for subsequent calls */
-		funcctx->user_fctx = advisor_generate_advise(per_query_ctx);
+		funcctx->user_fctx = advisor_generate_advise(per_query_ctx,
+													 min_filter,
+													 min_selectivity);
 	}
 	funcctx = SRF_PERCALL_SETUP();
 	advise = (IndexAdvisorIndexes *) funcctx->user_fctx;
@@ -240,7 +248,8 @@ index_advisor_get_advise(PG_FUNCTION_ARGS)
  * send them to the core index advisor machinary for the further processing.
  */
 static IndexAdvisorIndexes *
-advisor_generate_advise(MemoryContext per_query_ctx)
+advisor_generate_advise(MemoryContext per_query_ctx, int min_filter,
+						int min_selectivity)
 {
 	int			ret;
 	int			i;
@@ -254,16 +263,22 @@ advisor_generate_advise(MemoryContext per_query_ctx)
 	MemoryContext	oldcontext;
 	AdvisorCandidate *candidates;
 	IndexAdvisorIndexes  *idxadvise;
+	Oid paramTypes[2] = { INT4OID, INT4OID };
+	Datum paramValues[1];
 
 	if ((ret = SPI_connect()) < 0)
 		elog(ERROR, "pg_qualstat: SPI_connect returned %d", ret);
+
+	paramValues[0] = Int32GetDatum(min_filter);
+	paramValues[1] = Int32GetDatum(min_selectivity);
 
 	/*
 	 * Execute query to get list of all index candidate by calling
 	 * pg_qualstat() function and grouping the related qual together to
 	 * generated multi-colum index candidates.
 	 */
-	ret = SPI_execute(query, true, 0);
+	ret = SPI_execute_with_args(query, 2, paramTypes, paramValues, NULL,
+								true, 0);
 	if (ret != SPI_OK_SELECT)
 	{
 		SPI_finish();

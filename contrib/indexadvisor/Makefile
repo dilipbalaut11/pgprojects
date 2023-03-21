@@ -1,4 +1,4 @@
-EXTENSION    = pg_qualstats
+EXTENSION    = indexadvisor
 EXTVERSION   = $(shell grep default_version $(EXTENSION).control | sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
 TESTS        = $(wildcard test/sql/*.sql)
 REGRESS      = $(patsubst test/sql/%.sql,%,$(TESTS))
@@ -6,7 +6,7 @@ REGRESS_OPTS = --inputdir=test
 #MODULES      = $(patsubst %.c,%,$(wildcard *.c))
 PG_CONFIG    ?= pg_config
 
-MODULE_big = pg_qualstats
+MODULE_big = indexadvisor
 OBJS = pg_qualstats.o \
        indexadvisor.o \
        hypopg.o \

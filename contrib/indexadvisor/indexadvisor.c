@@ -27,16 +27,20 @@
 extern PGDLLEXPORT Datum index_advisor_get_advise(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(index_advisor_get_advise);
 
+/* define this to enable the developer level debugging informations */
 #define DEBUG_INDEX_ADVISOR
 
 /*
- * If 'advisor_track_plan_cost' is set then the planner hook will track the
- * cost of queries being planned and store plan cost in 'advisor_plan_cost'.
- * This is also useful to let qualstats know that when this is set we don't
- * need to collect the stats because the queries are being planned by the
- * index advisor.
+ * If 'advisor_disable_stats' is set to indicate the pg_qualstats's executor
+ * hook to not to collect the stattistics for those queries because those
+ * are just executed by index advisor in order to evaluate the indexes.
  */
-bool advisor_track_plan_cost = false;
+bool advisor_disable_stats = false;
+
+/* 
+ * Advisor's planner hook will store the cost of the last planned query in
+ * 'advisor_plan_cost' variable.
+ */
 static float advisor_plan_cost = 0.0;
 planner_hook_type prev_planner_hook = NULL;
 
@@ -83,7 +87,7 @@ typedef struct IndexAdvisorContext
 
 	/*
 	 * two dimentional matrix of size (ncandidate X nqueries) where each slot
-	 * represent the cost benefit a particular query got due to a particular
+	 * represent the cost reduction a particular query got due to a particular
 	 * candidate index.
 	 */
 	double		**benefitmat;
@@ -1025,7 +1029,7 @@ advisor_set_basecost(QueryInfo *queryinfos, int nqueries)
 	int		i;
 
 	/* enable cost tracking before planning queries */
-	advisor_track_plan_cost = true;
+	advisor_disable_stats = true;
 
 	/* 
 	 * plan each query and get its cost
@@ -1037,7 +1041,7 @@ advisor_set_basecost(QueryInfo *queryinfos, int nqueries)
 	}
 
 	/* disable cost tracking */
-	advisor_track_plan_cost = false;
+	advisor_disable_stats = false;
 }
 
 /* Plan a given query */
@@ -1064,8 +1068,9 @@ advisor_plan_query(const char *query)
 }
 
 /*
- * Plan given set of input queries with each valid and non-selected candidate
- * and fill the index query benefit matrix.
+ * Fill in the index-query benefit matrix by replanning all queries in the
+ * presence of a hypothetical index with respect to each individual index
+ * candidate.
  */
 static void
 advisor_compute_index_benefit(IndexAdvisorContext *context,
@@ -1077,13 +1082,16 @@ advisor_compute_index_benefit(IndexAdvisorContext *context,
 	QueryInfo	  *queryinfos = context->queryinfos;
 	double		 **benefit = context->benefitmat;
 
-	/* enable plan cost tracking before start planning with hypo indexes */
-	advisor_track_plan_cost = true;
+	/*
+	 * Make sure qualstats does not collect statistics for queries executed
+	 * by the advisor.
+	 */
+	advisor_disable_stats = true;
 
 	/*
-	 * Loop through each candidate and replan all the queries indexed by
-	 * the 'queryidxs' in presense of each candidate index and record the
-	 * plan cost reduction in benefit matrix.
+	 * Loop through each candidate and Replan all the queries indexed by the
+	 * 'queryidxs' in the presence of each individual candidate index and
+	 * record the plan cost reduction for each query in the benefit matrix.
 	 */
 	for (i = 0; i < ncandidates; i++)
 	{
@@ -1093,45 +1101,47 @@ advisor_compute_index_benefit(IndexAdvisorContext *context,
 		int			j;
 
 		/*
-		 * If the candidate is marked invalid or it is already selected in the
-		 * final list then skip it.
+		 * Skip the candidate if it has been marked invalid or are already on
+		 * the final list.
 		 */
 		if (!cand->isvalid || cand->isselected)
 			continue;
 
-		/* create hypothetical index for the candidate before replanning */
+		/* create a hypothetical index for the candidate before replanning */
 		idxid = hypo_create_index(cand->indexstmt, &relpages);
 
 		/* If candidate's overhead is not yet computed then do it now */
 		if (cand->overhead == 0)
 			cand->overhead = advisor_get_index_overhead(cand, relpages);
 
-		/* Replan each query and update benefit matrix */
+		/* replan each query and update benefit matrix */
 		for (j = 0; j < nqueries; j++)
 		{
-			int		index = (queryidxs != NULL) ? queryidxs[j] : j;
+			int		qidx = (queryidxs != NULL) ? queryidxs[j] : j;
 
-			advisor_plan_query(queryinfos[index].query);
+			advisor_plan_query(queryinfos[qidx].query);
 
 			/*
-			 * If the index reduces the cost at least by 5% and cost with index
-			 * including index overhead is lesser than cost without index, then
-			 * consider this index useful.  Otherwise, set benefit as 0.
+			 * If the index reduces the cost at least by 5% and the cost with
+			 * the index including the overhead imposed by the index is lesser
+			 * than the cost without the index then consider this index useful
+			 * and update the benefit matrix slot with the plan cost reduction.
+			 * Otherwise, set the benefit to 0.
 			 */
-			if ((advisor_plan_cost < queryinfos[index].cost * 0.95) &&
-				(advisor_plan_cost + cand->overhead < queryinfos[index].cost))
+			if ((advisor_plan_cost < queryinfos[qidx].cost * 0.95) &&
+				(advisor_plan_cost + cand->overhead < queryinfos[qidx].cost))
 			{
-				benefit[index][i] = queryinfos[index].cost - advisor_plan_cost;
+				benefit[qidx][i] = queryinfos[qidx].cost - advisor_plan_cost;
 			}
 			else
-				benefit[index][i] = 0;
+				benefit[qidx][i] = 0;
 		}
 
 		/* now we can remove the hypothetical index */
 		hypo_index_remove(idxid);
 	}
 
-	advisor_track_plan_cost = false;
+	advisor_disable_stats = false;
 }
 
 /*
@@ -1166,8 +1176,8 @@ advisor_get_index_overhead(CandidateInfo *cand, BlockNumber relpages)
 }
 
 /*
- * Compute total benefit of each candidate and return the index of the
- * candidate which is generating maximum total benefit.
+ * Compute benefit of each candidate and return the index of the candidate
+ * which is generating maximum total benefit.
  */
 static int
 advisor_get_best_candidate(IndexAdvisorContext *context)
@@ -1190,8 +1200,8 @@ advisor_get_best_candidate(IndexAdvisorContext *context)
 		int	j;
 
 		/*
-		 * If the candidate is marked invalid or it is already selected in the
-		 * final list then skip it.
+		 * Skip the candidate if it has been marked invalid or are already on
+		 * the final list.
 		 */
 		if (!candidates[i].isvalid || candidates[i].isselected)
 			continue;
@@ -1201,16 +1211,6 @@ advisor_get_best_candidate(IndexAdvisorContext *context)
 		/* total_benefit = Sum(benefit(Qi) * frequency(Qi)) */
 		for (j = 0; j < context->nqueries; j++)
 			benefit += (benefitmat[j][i] * queryinfos[j].frequency);
-
-		/*
-		 * If this candidate is having 0 benefit then mark it invalid so that
-		 * this will be skipped from the further processing.
-		 */
-		if (benefit == 0)
-		{
-			candidates[i].isvalid = false;
-			continue;
-		}
 
 		if (benefit > max_benefit)
 		{
@@ -1248,11 +1248,8 @@ advisor_planner(Query *parse,
 					  cursorOptions,
 					  boundParams);
 
-	/* If enabled, delay by taking and releasing the specified lock */
-	if (advisor_track_plan_cost)
-	{
-		advisor_plan_cost = result->planTree->total_cost;
-	}
+	/* remember the plan cost */
+	advisor_plan_cost = result->planTree->total_cost;
 
 	return result;
 }
@@ -1294,445 +1291,4 @@ print_benefit_matrix(IndexAdvisorContext *context)
 	elog(NOTICE, "%s", row.data);
 	pfree(row.data);
 }
-#endif
-
-#if 0 //exhaustive
-static void
-advisor_bms_add_candattr(IndexAdvisorContext *context, CandidateInfo *cand)
-{
-	int		i;
-
-	for (i = 0; i < cand->nattrs; i++)
-	{
-		context->memberattr = bms_add_member(context->memberattr,
-											 cand->attnum[i]);
-	}
-}
-
-static void
-advisor_bms_remove_candattr(IndexAdvisorContext *context,
-								 CandidateInfo *cand)
-{
-	int		i;
-
-	for (i = 0; i < cand->nattrs; i++)	
-	{
-		context->memberattr = bms_del_member(context->memberattr,
-											 cand->attnum[i]);
-	}
-}
-
-static bool
-advisor_is_cand_overlaps(Bitmapset *bms, CandidateInfo *cand)
-{
-	int		i;
-
-	if (bms == NULL)
-		return false;
-
-	for (i = 0; i < cand->nattrs; i++)
-	{
-		if (bms_is_member(cand->attnum[i], bms))
-			return true;
-	}
-	return false;
-}
-
-/*
- * compare and retutn cheaper path and free non selected path
- *
- */
-static IndexCombination *
-advisor_compare_path(IndexCombination *path1,
-						  IndexCombination *path2)
-{
-	double	cost1 = path1->cost + path1->overhead;
-	double	cost2 = path2->cost + path2->overhead;
-
-	if (cost1 <= cost2)
-	{
-		pfree(path2);
-		return path1;
-	}
-
-	pfree(path1);
-	return path2;
-}
-
-/*
- * Plan all give queries to compute the total cost.
- */
-static double
-advisor_get_cost(QueryInfo *queryinfos, int nqueries, int *queryidxs)
-{
-	int		i;
-	double	cost = 0.0;
-
-	advisor_track_plan_cost = true;
-
-	/* 
-	 * replan each query and compute the total weighted cost by multiplying
-	 * each query cost with its frequency.
-	 */
-	for (i = 0; i < nqueries; i++)
-	{
-		int		index = (queryidxs != NULL) ? queryidxs[i] : i;
-
-		advisor_plan_query(queryinfos[index].query);
-		cost += (advisor_plan_cost * queryinfos[index].frequency);
-	}
-
-	advisor_track_plan_cost = false;
-
-	return cost;
-}
-
-/*
- * Perform a exhaustive search with different index combinations.
- */
-static IndexCombination *
-advisor_compare_comb(IndexAdvisorContext *context, int cur_cand,
-						  int selected_cand)
-{
-	Oid						idxid;
-	BlockNumber				pages;
-	double					overhead;
-	int						max_cand = context->maxcand;
-	IndexCombination   *path1;
-	IndexCombination   *path2;
-	CandidateInfo		   *cand = context->candidates;
-
-	if (cur_cand == max_cand || selected_cand == max_cand)
-	{
-		path1 = palloc0(sizeof(IndexCombination) +
-						context->ncandidates * sizeof(int));
-
-		path1->cost = advisor_get_cost(context->queryinfos,
-											context->nqueries, NULL);
-		path1->nindices = 0;
-
-		return path1;
-	}
-
-	/* compute total cost excluding this index */
-	path1 = advisor_compare_comb(context, cur_cand + 1, selected_cand);
-
-	/*
-	 * If any of the attribute of this candidate is overlapping with any
-	 * existing candidate in this combindation then don't add this candidate
-	 * in the combination.
-	 */
-	if (!cand[cur_cand].isvalid ||
-		advisor_is_cand_overlaps(context->memberattr, &cand[cur_cand]))
-		return path1;
-
-	advisor_bms_add_candattr(context, &cand[cur_cand]);
-
-	/* compare cost with and without this index */
-	idxid = hypo_create_index(cand[cur_cand].indexstmt, &pages);
-
-	/* compute total cost including this index */
-	path2 = advisor_compare_comb(context, cur_cand + 1, selected_cand + 1);
-	path2->indices[path2->nindices++] = cur_cand;
-
-	overhead = advisor_get_index_overhead(&cand[cur_cand], pages);
-	path2->overhead += overhead;
-
-	hypo_index_remove(idxid);
-	advisor_bms_remove_candattr(context, &cand[cur_cand]);
-
-	return advisor_compare_path(path1, path2);
-}
-
-/*
- * try missing candidate in selected path with greedy approach
- */
-static IndexCombination *
-advisor_complete_comb(IndexAdvisorContext *context,
-						   IndexCombination *path)
-{
-	int		i;
-	int 	ncand = context->ncandidates;	
-	CandidateInfo		   *cand = context->candidates;
-	IndexCombination   *finalpath = path;
-
-	for (i = 0; i < path->nindices; i++)
-	{
-		hypo_create_index(cand[path->indices[i]].indexstmt, NULL);
-	}
-
-	for (i = 0; i < ncand; i++)
-	{
-		Oid			idxid;
-		int			j;
-
-		if (!cand->isvalid)
-			continue;
-
-		for (j = 0; j < finalpath->nindices; j++)
-		{
-			if (finalpath->indices[j] == i)
-				break;
-		}
-		/* 
-		 * if candidate not found in path then try to add in the path and
-		 * compare cost
-		 */
-		if (j == finalpath->nindices)
-		{
-			IndexCombination *newpath;
-			int		size;
-			double	overhead;
-			BlockNumber		relpages;
-			
-			size = sizeof(IndexCombination) + ncand * sizeof(int);
-
-			newpath = (IndexCombination *) palloc0(size);
-			memcpy(newpath, finalpath, size);
-			newpath->nindices += 1;
-			idxid = hypo_create_index(cand[i].indexstmt, &relpages);
-			overhead = advisor_get_index_overhead(&cand[i], relpages);
-			newpath->overhead += overhead;
-			newpath->cost = advisor_get_cost(context->queryinfos,
-												  context->nqueries, NULL);
-#ifdef DEBUG_INDEX_ADVISOR
-			if (newpath->cost > finalpath->cost)
-			{
-				elog(NOTICE, "cost increased in greedy");
-			}
-#endif
-			finalpath = advisor_compare_path(finalpath, newpath);
-			/* drop this index if this index is not selected. */
-			if (finalpath != newpath)
-				hypo_index_remove(idxid);
-#ifdef DEBUG_INDEX_ADVISOR
-			else
-				elog(NOTICE, "path selected in greedy");
-#endif				
-		}
-	}
-
-	/* reset all hypo indexes. */
-	hypo_index_reset();
-
-	return finalpath;
-}
-
-/*
- * check individiual index usefulness, if not reducing the cost by some margin
- * then mark invalid.
- */
-static void
-advisor_mark_useless_candidate(IndexAdvisorContext *context)
-{
-	int		i;
-
-	for (i = 0; i < context->ncandidates; i++)
-	{
-		CandidateInfo *cand = &context->candidates[i];
-		double	cost1;
-		double	cost2;
-		Oid		idxid;
-
-		cost1 = advisor_get_cost(context->queryinfos, context->nqueries, NULL);
-		idxid = hypo_create_index(cand->indexstmt, NULL);
-		cost2 = advisor_get_cost(context->queryinfos, context->nqueries, NULL);
-		hypo_index_remove(idxid);
-
-		if (cost2 < cost1 - 100)
-			cand->isvalid = true;
-		else
-			cand->isvalid = false;
-	}
-}
-
-static IndexCombination *
-advisor_exhaustive(IndexAdvisorContext *context)
-{
-	IndexCombination   *path;
-
-	advisor_mark_useless_candidate(context);
-	path = advisor_compare_comb(context, 0, 0);
-
-	/* 
-	 * If path doesn't include all the candidates then try to add missing
-	 * candidates with greedy approach.
-	 * TODO TRY iterative for remaining candidates.
-	 */
-	if (path->nindices < context->ncandidates)
-		advisor_complete_comb(context, path);
-
-	return path;
-}
-
-#endif //exhaustive
-
-#if 0 /* we do not need to survive restart*/
-static void pgqs_shmem_shutdown(int code, Datum arg);
-
-static void
-pgqs_read_dumpfile(void)
-{
-	bool		found;
-	HASHCTL		info;
-	FILE	   *file = NULL;
-	FILE	   *qfile = NULL;
-	uint32		header;
-	int32		num;
-	int32		pgver;
-	int32		i;
-	int			buffer_size;
-	char	   *buffer = NULL;
-
-	//TODO: Acquire lock
-	/*
-	 * If we're in the postmaster (or a standalone backend...), set up a shmem
-	 * exit hook to dump the statistics to disk.
-	 */
-	//if (!IsUnderPostmaster)
-		on_shmem_exit(pgqs_shmem_shutdown, (Datum) 0);
-
-	/*
-	 * Attempt to load old statistics from the dump file.
-	 */
-	file = AllocateFile(PGQS_DUMP_FILE, PG_BINARY_R);
-	if (file == NULL)
-	{
-		if (errno != ENOENT)
-			goto read_error;
-		/* No existing persisted stats file, so we're done */
-		return;
-	}
-
-	if (fread(&header, sizeof(uint32), 1, file) != 1 ||
-		fread(&pgver, sizeof(uint32), 1, file) != 1 ||
-		fread(&num, sizeof(int32), 1, file) != 1)
-		goto read_error;
-
-//	if (header != PQSS_FILE_HEADER ||
-//		pgver != PGQS_PG_MAJOR_VERSION)
-//		goto data_error;
-
-	for (i = 0; i < num; i++)
-	{
-		pgqsEntry	temp;
-		pgqsEntry  *entry;
-		Size		query_offset;
-
-		if (fread(&temp, sizeof(pgqsEntry), 1, file) != 1)
-			goto read_error;
-
-		entry = (pgqsEntry *) hash_search(pgqs_hash,
-										  &temp.key,
-										  HASH_ENTER, &found);
-		if (!found)
-			memcpy(entry, &temp, sizeof(pgqsEntry));
-	}
-	FreeFile(file);
-
-	unlink(PGQS_DUMP_FILE);
-
-	return;
-
-read_error:
-	ereport(LOG,
-			(errcode_for_file_access(),
-			 errmsg("could not read file \"%s\": %m",
-					PGQS_DUMP_FILE)));
-	goto fail;
-data_error:
-	ereport(LOG,
-			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-			 errmsg("ignoring invalid data in file \"%s\"",
-					PGQS_DUMP_FILE)));
-	goto fail;
-fail:
-	if (file)
-		FreeFile(file);
-
-	/* If possible, throw away the bogus file; ignore any error */
-	unlink(PGQS_DUMP_FILE);
-}
-
-/*
- * shmem_shutdown hook: Dump statistics into file.
- *
- * Note: we don't bother with acquiring lock, because there should be no
- * other processes running when this is called.
- */
-static void
-pgqs_shmem_shutdown(int code, Datum arg)
-{
-	FILE	   *file;
-	char	   *qbuffer = NULL;
-	Size		qbuffer_size = 0;
-	HASH_SEQ_STATUS hash_seq;
-	int32		num_entries;
-	pgqsEntry  *entry;
-	int i=1;
-
-	while(i);
-	/* Don't try to dump during a crash. */
-	if (code)
-		return;
-
-	/* Safety check ... shouldn't get here unless shmem is set up. */
-	if (!pgqs || !pgqs_hash)
-		return;
-
-	/* Don't dump if told not to. */
-//	if (!pgqs_save)
-//		return;
-
-	file = AllocateFile(PGQS_DUMP_FILE ".tmp", PG_BINARY_W);
-	if (file == NULL)
-		goto error;
-
-	if (fwrite(&PGQS_FILE_HEADER, sizeof(uint32), 1, file) != 1)
-		goto error;
-	if (fwrite(&PGQS_PG_MAJOR_VERSION, sizeof(uint32), 1, file) != 1)
-		goto error;
-	num_entries = hash_get_num_entries(pgqs_hash);
-	if (fwrite(&num_entries, sizeof(int32), 1, file) != 1)
-		goto error;
-
-	/*
-	 * When serializing to disk, we store query texts immediately after their
-	 * entry data.  Any orphaned query texts are thereby excluded.
-	 */
-	hash_seq_init(&hash_seq, pgqs_hash);
-	while ((entry = hash_seq_search(&hash_seq)) != NULL)
-	{
-		if (fwrite(entry, sizeof(pgqsEntry), 1, file) != 1)
-		{
-			/* note: we assume hash_seq_term won't change errno */
-			hash_seq_term(&hash_seq);
-			goto error;
-		}
-	}
-
-	if (FreeFile(file))
-	{
-		file = NULL;
-		goto error;
-	}
-
-	/*
-	 * Rename file into place, so we atomically replace any old one.
-	 */
-	(void) durable_rename(PGQS_DUMP_FILE ".tmp", PGQS_DUMP_FILE, LOG);
-
-	return;
-
-error:
-	ereport(LOG,
-			(errcode_for_file_access(),
-			 errmsg("could not write file \"%s\": %m",
-					PGQS_DUMP_FILE ".tmp")));
-	free(qbuffer);
-	if (file)
-		FreeFile(file);
-	unlink(PGQS_DUMP_FILE ".tmp");
-}
-
 #endif

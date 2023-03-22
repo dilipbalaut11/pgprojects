@@ -524,8 +524,8 @@ static void
 pgqs_ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
 	/* Setup instrumentation */
-	if (pgqs_enabled  && strlen(queryDesc->sourceText) < pgqs_query_size
-		&& !advisor_track_plan_cost)
+	if (pgqs_enabled  && strlen(queryDesc->sourceText) < pgqs_query_size &&
+		!advisor_disable_stats)
 	{
 		/*
 		 * For rate sampling, randomly choose top-level statement. Either all
@@ -645,7 +645,8 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 	pgqsQueryStringHashKey queryKey;
 	bool		found;
 
-	if ((pgqs || pgqs_backend) && pgqs_enabled && pgqs_is_query_sampled()
+	if ((pgqs || pgqs_backend) && pgqs_enabled && pgqs_is_query_sampled() &&
+		!advisor_disable_stats
 #if PG_VERSION_NUM >= 90600
 		&& (!IsParallelWorker())
 #endif

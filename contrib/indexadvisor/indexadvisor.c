@@ -24,8 +24,8 @@
 #include "include/indexadvisor.h"
 
 /*---- Function declarations ----*/
-extern PGDLLEXPORT Datum index_advisor_get_advise(PG_FUNCTION_ARGS);
-PG_FUNCTION_INFO_V1(index_advisor_get_advise);
+extern PGDLLEXPORT Datum advisor_index_recommendations(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(advisor_index_recommendations);
 
 /* define this to enable the developer level debugging informations */
 #define DEBUG_INDEX_ADVISOR
@@ -117,7 +117,7 @@ char *query =
 "\n              THEN 0"
 "\n              ELSE round(sum(nbfiltered::numeric) / sum(execution_count) * 100)"
 "\n            END AS avg_selectivity"
-"\n          FROM pg_qualstats() q"
+"\n          FROM advisor_qualstats() q"
 "\n          JOIN pg_catalog.pg_database d ON q.dbid = d.oid"
 "\n          JOIN pg_catalog.pg_operator op ON op.oid = q.opno"
 "\n          JOIN pg_catalog.pg_amop amop ON amop.amopopr = op.oid"
@@ -139,7 +139,7 @@ char *query =
 "\n              THEN 0"
 "\n              ELSE round(sum(nbfiltered::numeric) / sum(execution_count) * 100)"
 "\n            END AS avg_selectivity"
-"\n          FROM pg_qualstats() q"
+"\n          FROM advisor_qualstats() q"
 "\n          JOIN pg_catalog.pg_database d ON q.dbid = d.oid"
 "\n          JOIN pg_catalog.pg_operator op ON op.oid = q.opno"
 "\n          JOIN pg_catalog.pg_amop amop ON amop.amopopr = op.oid"
@@ -212,7 +212,7 @@ static void print_benefit_matrix(IndexAdvisorContext *context);
  * of ddl statements for create index.
  */
 Datum
-index_advisor_get_advise(PG_FUNCTION_ARGS)
+advisor_index_recommendations(PG_FUNCTION_ARGS)
 {
 	int			min_filter = PG_GETARG_INT32(0);
 	int			min_selectivity = PG_GETARG_INT32(1);

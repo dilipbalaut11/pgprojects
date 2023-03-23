@@ -89,7 +89,7 @@ PG_MODULE_MAGIC;
 #define PGQS_NAME_COLUMNS 7		/* number of column added when using
 								 * pg_qualstats_column SRF */
 #define PGQS_USAGE_DEALLOC_PERCENT	5	/* free this % of entries at once */
-#define PGQS_MAX_DEFAULT	1000	/* default pgqs_max value */
+#define PGQS_MAX_DEFAULT	100000	/* default pgqs_max value */
 #define PGQS_MAX_LOCAL_ENTRIES	(pgqs_max * 0.2)	/* do not track more of
 													 * 20% of possible entries
 													 * in shared mem */
@@ -185,7 +185,7 @@ static int	pgqs_max = PGQS_MAX_DEFAULT;			/* max # statements to track */
 static bool pgqs_track_pgcatalog;	/* track queries on pg_catalog */
 static bool pgqs_resolve_oids;	/* resolve oids */
 static bool pgqs_enabled;
-static bool pgqs_track_constants;
+static bool pgqs_track_constants = true;
 static double pgqs_sample_rate;
 static int	pgqs_min_err_ratio;
 static int	pgqs_min_err_num;
@@ -297,7 +297,7 @@ _PG_init(void)
 	prev_explain_get_index_name_hook = explain_get_index_name_hook;
 	explain_get_index_name_hook = hypo_explain_get_index_name_hook;
 
-	DefineCustomBoolVariable("pg_qualstats.enabled",
+	DefineCustomBoolVariable("advisor.enabled",
 							 "Enable / Disable pg_qualstats",
 							 NULL,
 							 &pgqs_enabled,
@@ -308,18 +308,7 @@ _PG_init(void)
 							 NULL,
 							 NULL);
 
-	DefineCustomBoolVariable("pg_qualstats.track_constants",
-							 "Enable / Disable pg_qualstats constants tracking",
-							 NULL,
-							 &pgqs_track_constants,
-							 true,
-							 PGC_USERSET,
-							 0,
-							 NULL,
-							 NULL,
-							 NULL);
-
-	DefineCustomIntVariable("pg_qualstats.max",
+	DefineCustomIntVariable("advisor.max_entries",
 							"Sets the maximum number of statements tracked by pg_qualstats.",
 							NULL,
 							&pgqs_max,
@@ -355,7 +344,7 @@ _PG_init(void)
 							 NULL,
 							 NULL);
 
-	DefineCustomRealVariable("pg_qualstats.sample_rate",
+	DefineCustomRealVariable("advisor.sample_rate",
 							 "Sampling rate. 1 means every query, 0.2 means 1 in five queries",
 							 NULL,
 							 &pgqs_sample_rate,
@@ -368,7 +357,7 @@ _PG_init(void)
 							 NULL,
 							 NULL);
 
-	DefineCustomIntVariable("pg_qualstats.min_err_estimate_ratio",
+	DefineCustomIntVariable("advisor.min_err_estimate_ratio",
 							"Error estimation ratio threshold to save quals",
 							NULL,
 							&pgqs_min_err_ratio,
@@ -381,7 +370,7 @@ _PG_init(void)
 							NULL,
 							NULL);
 
-	DefineCustomIntVariable("pg_qualstats.min_err_estimate_num",
+	DefineCustomIntVariable("advisor.min_err_estimate_num",
 							"Error estimation num threshold to save quals",
 							NULL,
 							&pgqs_min_err_num,
@@ -2379,6 +2368,8 @@ pgqs_memsize(void)
 		size = add_size(size, hash_estimate_size(pgqs_max,
 												 sizeof(pgqsQueryStringEntry) + pgqs_query_size * sizeof(char)));
 	}
+	size = add_size(size, hash_estimate_size(pgqs_max,
+											 sizeof(pgqsUpdateHashEntry)));	
 #if PG_VERSION_NUM >= 90600
 	size = add_size(size, MAXALIGN(pgqs_sampled_array_size()));
 #endif

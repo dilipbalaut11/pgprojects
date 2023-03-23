@@ -665,18 +665,17 @@ advisor_get_query(int64 queryid, int *freq)
 	pgqsQueryStringEntry   *entry;
 	pgqsQueryStringHashKey	queryKey;
 	char   *query = NULL;
-	bool	found;
 
 	queryKey.queryid = queryid;
 
 	LWLockAcquire(pgqs->querylock, LW_SHARED);
-	entry = hash_search_with_hash_value(pgqs_query_examples_hash, &queryKey,
-										queryid, HASH_FIND, &found);
-	if (!found)
+	entry = (pgqsQueryStringEntry *) dshash_find(pgqs_query_dshash, &queryKey, false);                                                                     
+	if (entry == NULL)
 	{
 		LWLockRelease(pgqs->querylock);
 		return NULL;
 	}
+
 	if (entry->isExplain)
 	{
 		query = palloc0(entry->qrylen);
@@ -692,6 +691,7 @@ advisor_get_query(int64 queryid, int *freq)
 	}
 
 	*freq = entry->frequency;
+	dshash_release_lock(pgqs_query_dshash, entry);
 
 	LWLockRelease(pgqs->querylock);
 
@@ -904,7 +904,7 @@ advisor_remove_existing_candidates(CandidateInfo *candidates,
 static void
 advisor_get_updates(CandidateInfo *candidates, int ncandidates)
 {
-	HASH_SEQ_STATUS 		hash_seq;
+	dshash_seq_status	hash_seq;
 	int64	   *qrueryid_done;
 	int64		nupdates = 0;
 	int			nupdatefreq = 0;
@@ -921,9 +921,9 @@ advisor_get_updates(CandidateInfo *candidates, int ncandidates)
 		pgqsUpdateHashEntry	   *entry;
 		CandidateInfo		   *cand = &candidates[i];
 
-		hash_seq_init(&hash_seq, pgqs_update_hash);
+		dshash_seq_init(&hash_seq, pgqs_update_dshash, false);
 
-		while ((entry = hash_seq_search(&hash_seq)) != NULL)
+		while ((entry = dshash_seq_next(&hash_seq)) != NULL)
 		{
 			int			i;
 
@@ -959,6 +959,8 @@ advisor_get_updates(CandidateInfo *candidates, int ncandidates)
 			nupdates += entry->updated_rows;
 			nupdatefreq += entry->frequency;
 		}
+
+		dshash_seq_term(&hash_seq);
 
 		if (nupdates > 0)
 		{

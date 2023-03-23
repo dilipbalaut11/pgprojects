@@ -19,6 +19,7 @@
 #endif
 #include "catalog/catalog.h"
 #include "commands/explain.h"
+#include "lib/dshash.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/plancat.h"
 #include "utils/memutils.h"
@@ -47,6 +48,12 @@ typedef struct pgqsSharedState
 	LWLockId	querylock;		/* protects query hashtable
 								 * search/modification */
 #endif
+	/* Hash table holding last start times of subscriptions' apply workers. */
+	int			tranche_id;
+	dsa_handle	dsa;
+	dshash_table_handle pgqs_dsh;
+	dshash_table_handle pgqs_querydsh;
+	dshash_table_handle pgqs_updatedsh;
 #if PG_VERSION_NUM >= 90600
 	LWLock	   *sampledlock;	/* protects sampled array search/modification */
 	bool		sampled[FLEXIBLE_ARRAY_MEMBER]; /* should we sample this
@@ -145,9 +152,10 @@ typedef struct pgqsUpdateHashEntry
 } pgqsUpdateHashEntry;
 
 /* Global Hash */
-extern HTAB *pgqs_hash;
-extern HTAB *pgqs_query_examples_hash;
 extern pgqsSharedState *pgqs;
-extern HTAB *pgqs_update_hash;
+extern dsa_area *pgqs_dsa;
+extern dshash_table *pgqs_dshash;
+extern dshash_table *pgqs_query_dshash;
+extern dshash_table *pgqs_update_dshash;
 
 #endif

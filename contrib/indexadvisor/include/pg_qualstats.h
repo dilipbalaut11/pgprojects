@@ -54,6 +54,12 @@ typedef struct pgqsSharedState
 	dshash_table_handle pgqs_dsh;
 	dshash_table_handle pgqs_querydsh;
 	dshash_table_handle pgqs_updatedsh;
+	dsa_pointer			qryentryarr;
+	dsa_pointer			qualentryarr;
+	dsa_pointer			updateentryarr;
+	int					qryentindex;
+	int					qualentindex;
+	int					updateentindex;
 #if PG_VERSION_NUM >= 90600
 	LWLock	   *sampledlock;	/* protects sampled array search/modification */
 	bool		sampled[FLEXIBLE_ARRAY_MEMBER]; /* should we sample this
@@ -111,6 +117,33 @@ typedef struct pgqsEntry
 	int64		occurences;		/* # of qual execution, 1 per query */
 } pgqsEntry;
 
+typedef struct pgqsQualEntry
+{
+	pgqsHashKey key;
+	Oid			lrelid;			/* LHS relation OID or NULL if not var */
+	AttrNumber	lattnum;		/* LHS attribute Number or NULL if not var */
+	Oid			opoid;			/* Operator OID */
+	Oid			rrelid;			/* RHS relation OID or NULL if not var */
+	AttrNumber	rattnum;		/* RHS attribute Number or NULL if not var */
+	char		constvalue[PGQS_CONSTANT_SIZE]; /* Textual representation of
+												 * the right hand constant, if
+												 * any */
+	uint32		qualid;			/* Hash of the parent AND expression if any, 0
+								 * otherwise. */
+	uint32		qualnodeid;		/* Hash of the node itself */
+
+	int64		count;			/* # of operator execution */
+	int64		nbfiltered;		/* # of lines discarded by the operator */
+	int			position;		/* content position in query text */
+	double		usage;			/* # of qual execution, used for deallocation */
+	double		min_err_estim[2];	/* min estimation error ratio and num */
+	double		max_err_estim[2];	/* max estimation error ratio and num */
+	double		mean_err_estim[2];	/* mean estimation error ratio and num */
+	double		sum_err_estim[2];	/* sum of variances in estimation error
+									 * ratio and num */
+	int64		occurences;		/* # of qual execution, 1 per query */
+} pgqsQualEntry;
+
 typedef struct pgqsEntryWithNames
 {
 	pgqsEntry	entry;
@@ -125,6 +158,12 @@ typedef struct pgqsQueryStringHashKey
 typedef struct pgqsQueryStringEntry
 {
 	pgqsQueryStringHashKey key;
+	int					   index;
+} pgqsQueryStringEntry;
+
+typedef struct pgqsQueryEntry
+{
+	pgqs_queryid queryid;
 	int			frequency;
 	bool		isExplain;		
 	int			qrylen;
@@ -134,7 +173,7 @@ typedef struct pgqsQueryStringEntry
 	 * query_size, which is track_activity_query_size
 	 */
 	char		querytext[1];
-} pgqsQueryStringEntry;
+} pgqsQueryEntry;
 
 typedef struct pgqsUpdateHashKey
 {
@@ -151,11 +190,32 @@ typedef struct pgqsUpdateHashEntry
 	int64				updated_rows;	/* total commulative updated rows */
 } pgqsUpdateHashEntry;
 
-/* Global Hash */
+typedef struct pgqsUpdateEntry
+{
+	pgqsUpdateHashKey	key;
+	int		 			frequency;		/* frequency of execution */
+	int64				updated_rows;	/* total commulative updated rows */
+} pgqsUpdateEntry;
+
+/* Globals */
 extern pgqsSharedState *pgqs;
 extern dsa_area *pgqs_dsa;
 extern dshash_table *pgqs_dshash;
 extern dshash_table *pgqs_query_dshash;
 extern dshash_table *pgqs_update_dshash;
+extern pgqsQueryEntry *queryentryarray;
+extern pgqsQualEntry *qualentryarray;
+extern pgqsUpdateEntry *updentryarray;
+
+static inline pgqsQueryEntry *
+query_array_get_entry(int index)
+{
+	char *array = (char *) queryentryarray;
+	int	  offset;
+
+	offset = (sizeof(pgqsQueryEntry) + 1024) * index;
+
+	return (pgqsQueryEntry *) (array + offset);
+}
 
 #endif

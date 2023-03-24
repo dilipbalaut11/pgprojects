@@ -662,20 +662,22 @@ advisor_is_queryid_exists(int64 *queryids, int nqueryids, int64 queryid,
 static char *
 advisor_get_query(int64 queryid, int *freq)
 {
-	pgqsQueryStringEntry   *entry;
+	pgqsQueryStringEntry   *hashentry;
 	pgqsQueryStringHashKey	queryKey;
+	pgqsQueryEntry	   *entry;
 	char   *query = NULL;
 
 	queryKey.queryid = queryid;
 
 	LWLockAcquire(pgqs->querylock, LW_SHARED);
-	entry = (pgqsQueryStringEntry *) dshash_find(pgqs_query_dshash, &queryKey, false);                                                                     
-	if (entry == NULL)
+	hashentry = (pgqsQueryStringEntry *) dshash_find(pgqs_query_dshash, &queryKey, false);
+	if (hashentry == NULL)
 	{
 		LWLockRelease(pgqs->querylock);
 		return NULL;
 	}
 
+	entry = query_array_get_entry(hashentry->index);
 	if (entry->isExplain)
 	{
 		query = palloc0(entry->qrylen);
@@ -691,7 +693,7 @@ advisor_get_query(int64 queryid, int *freq)
 	}
 
 	*freq = entry->frequency;
-	dshash_release_lock(pgqs_query_dshash, entry);
+	dshash_release_lock(pgqs_query_dshash, hashentry);
 
 	LWLockRelease(pgqs->querylock);
 

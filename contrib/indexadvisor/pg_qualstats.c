@@ -182,7 +182,6 @@ static uint32 pgqs_uint32_hashfn(const void *key, Size keysize);
 #endif
 
 static bool pgqs_backend = false;
-static int	pgqs_query_size;
 static int	pgqs_max = PGQS_MAX_DEFAULT;			/* max # statements to track */
 static bool pgqs_track_pgcatalog;	/* track queries on pg_catalog */
 static bool pgqs_resolve_oids;	/* resolve oids */
@@ -193,12 +192,15 @@ static int	pgqs_min_err_ratio;
 static int	pgqs_min_err_num;
 static int	query_is_sampled;	/* Is the current query sampled, per backend */
 static int	nesting_level = 0;	/* Current nesting depth of ExecutorRun calls */
+static int	qualmaxent = PGQS_MAX_DEFAULT;
+static int	qrymaxent = 2;
+static int	updatemaxent = PGQS_MAX_DEFAULT;
 static bool pgqs_assign_sample_rate_check_hook(double *newval, void **extra, GucSource source);
 #if PG_VERSION_NUM > 90600
 static void pgqs_set_query_sampled(bool sample);
 #endif
 static bool pgqs_is_query_sampled(void);
-
+int	pgqs_query_size;
 /*
  * Transient state of the query tree walker - for the meaning of the counters,
  * see pgqsEntry comments.
@@ -537,14 +539,58 @@ pgqs_fillnames(pgqsEntryWithNames *entry)
 #undef GET_ATTNAME
 }
 
+static dsa_pointer
+pgqs_expand_array(dsa_pointer olddsaptr, int oldsize, int newsize)
+{
+	dsa_pointer newdsaptr;
+	char	   *oldaddr;
+	char	   *newaddr;
+
+	oldaddr = dsa_get_address(pgqs_dsa, olddsaptr);
+
+	newdsaptr = dsa_allocate_extended(pgqs_dsa,
+									  newsize,
+									  DSA_ALLOC_HUGE | DSA_ALLOC_ZERO);
+	newaddr = dsa_get_address(pgqs_dsa, newdsaptr);
+
+	memcpy(newaddr, oldaddr, oldsize);
+
+	dsa_free(pgqs_dsa, olddsaptr);
+
+	return newdsaptr;
+}
+
 static void
 pgqs_attach_dshmem()
 {
 	MemoryContext oldcontext;
 
-	/* Quick exit if we already did this. */
+	/*
+	 * Quick exit if we already did this, but before that just check if any
+	 * of the shared memory array got expandated if so then fetch the new
+	 * memory address from new dsa pointer.
+	 */
 	if (pgqs->pgqs_dsh != DSHASH_HANDLE_INVALID && pgqs_dshash != NULL)
+	{
+		if (qualmaxent != pgqs->qualmaxent)
+		{
+			qualentryarray = dsa_get_address(pgqs_dsa, pgqs->qualentryarr);
+			qualmaxent = pgqs->qualmaxent;
+		}
+		if (qrymaxent != pgqs->qrymaxent)
+		{
+			queryentryarray = dsa_get_address(pgqs_dsa, pgqs->qryentryarr);
+			qrymaxent = pgqs->qrymaxent;
+
+		}
+		if (updatemaxent != pgqs->updatemaxent)
+		{
+			updentryarray = dsa_get_address(pgqs_dsa, pgqs->updateentryarr);
+			updatemaxent = pgqs->updatemaxent;
+		}
+
 		return;
+	}
 
 	/* Be sure any local memory allocated by DSA routines is persistent. */
 	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
@@ -573,9 +619,21 @@ pgqs_attach_dshmem()
 		pgqs->pgqs_updatedsh = dshash_get_hash_table_handle(pgqs_update_dshash);
 
 		queryentsz = (sizeof(pgqsQueryEntry) + pgqs_query_size);
-		pgqs->qryentryarr = dsa_allocate(pgqs_dsa, queryentsz * 5);
-		pgqs->qualentryarr = dsa_allocate(pgqs_dsa, sizeof(pgqsQualEntry) * PGQS_MAX_DEFAULT);
-		pgqs->updateentryarr = dsa_allocate(pgqs_dsa, sizeof(pgqsUpdateEntry) * PGQS_MAX_DEFAULT);
+
+		pgqs->qualmaxent = qualmaxent;
+		pgqs->qrymaxent = qrymaxent;
+		pgqs->updatemaxent = updatemaxent;
+
+		pgqs->qualentryarr = dsa_allocate_extended(pgqs_dsa,
+												   sizeof(pgqsQualEntry) * pgqs->qualmaxent,
+												   DSA_ALLOC_HUGE | DSA_ALLOC_ZERO);
+
+		pgqs->qryentryarr = dsa_allocate_extended(pgqs_dsa,
+												  queryentsz * pgqs->qrymaxent,
+												  DSA_ALLOC_HUGE | DSA_ALLOC_ZERO);
+		pgqs->updateentryarr = dsa_allocate_extended(pgqs_dsa,
+													 sizeof(pgqsUpdateEntry) * pgqs->updatemaxent,
+													 DSA_ALLOC_HUGE | DSA_ALLOC_ZERO);
 
 		queryentryarray = dsa_get_address(pgqs_dsa, pgqs->qryentryarr);
 		qualentryarray = dsa_get_address(pgqs_dsa, pgqs->qualentryarr);
@@ -789,13 +847,25 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 		{
 			bool		excl_found;
 
-			/* Need exclusive lock to add a new hashtable entry - promote */
+			/* need exclusive lock to add a new hashtable entry - promote */
 			PGQS_LWL_RELEASE(pgqs->querylock);
 			PGQS_LWL_ACQUIRE(pgqs->querylock, LW_EXCLUSIVE);
 
-			queryEntry = (pgqsQueryStringEntry *) dshash_find_or_insert(pgqs_query_dshash,
-																		&queryKey,
-																		&excl_found);																	
+			if (pgqs->qryentindex == pgqs->qrymaxent)
+			{
+				pgqs->qrymaxent += PGQS_MAX_DEFAULT;
+
+				pgqs->qryentryarr = pgqs_expand_array(pgqs->qryentryarr,
+											QUERY_ENT_SZ * pgqs->qryentindex,
+											QUERY_ENT_SZ * pgqs->qrymaxent);
+
+				queryentryarray = dsa_get_address(pgqs_dsa, pgqs->qryentryarr);
+			}
+
+			queryEntry = (pgqsQueryStringEntry *) dshash_find_or_insert(
+															pgqs_query_dshash,
+															&queryKey,
+															&excl_found);
 
 			/* Make sure it wasn't added by another backend */
 			if (!excl_found)

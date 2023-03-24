@@ -54,12 +54,15 @@ typedef struct pgqsSharedState
 	dshash_table_handle pgqs_dsh;
 	dshash_table_handle pgqs_querydsh;
 	dshash_table_handle pgqs_updatedsh;
-	dsa_pointer			qryentryarr;
-	dsa_pointer			qualentryarr;
-	dsa_pointer			updateentryarr;
-	int					qryentindex;
-	int					qualentindex;
-	int					updateentindex;
+	dsa_pointer	qualentryarr;
+	dsa_pointer	qryentryarr;
+	dsa_pointer	updateentryarr;
+	int			qualentindex;
+	int			qryentindex;
+	int			updateentindex;
+	int			qualmaxent;
+	int			qrymaxent;
+	int			updatemaxent;
 #if PG_VERSION_NUM >= 90600
 	LWLock	   *sampledlock;	/* protects sampled array search/modification */
 	bool		sampled[FLEXIBLE_ARRAY_MEMBER]; /* should we sample this
@@ -206,16 +209,14 @@ extern dshash_table *pgqs_update_dshash;
 extern pgqsQueryEntry *queryentryarray;
 extern pgqsQualEntry *qualentryarray;
 extern pgqsUpdateEntry *updentryarray;
+extern int pgqs_query_size;
+
+#define QUERY_ENT_SZ 	sizeof(pgqsQueryEntry) + pgqs_query_size
 
 static inline pgqsQueryEntry *
 query_array_get_entry(int index)
 {
-	char *array = (char *) queryentryarray;
-	int	  offset;
-
-	offset = (sizeof(pgqsQueryEntry) + 1024) * index;
-
-	return (pgqsQueryEntry *) (array + offset);
+	return (pgqsQueryEntry *) (((char *) queryentryarray) + (QUERY_ENT_SZ * index));
 }
 
 #endif

@@ -131,7 +131,6 @@ extern PGDLLEXPORT Datum pg_qualstats_names(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_names_2_0(PG_FUNCTION_ARGS);
 static Datum pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
 								 bool include_names);
-extern PGDLLEXPORT Datum pg_qualstats_example_query(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_example_queries(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_generate_advise(PG_FUNCTION_ARGS);
 
@@ -140,7 +139,6 @@ PG_FUNCTION_INFO_V1(pg_qualstats);
 PG_FUNCTION_INFO_V1(pg_qualstats_2_0);
 PG_FUNCTION_INFO_V1(pg_qualstats_names);
 PG_FUNCTION_INFO_V1(pg_qualstats_names_2_0);
-PG_FUNCTION_INFO_V1(pg_qualstats_example_query);
 PG_FUNCTION_INFO_V1(pg_qualstats_example_queries);
 
 #if PG_VERSION_NUM >= 150000
@@ -192,9 +190,6 @@ static int	pgqs_min_err_ratio;
 static int	pgqs_min_err_num;
 static int	query_is_sampled;	/* Is the current query sampled, per backend */
 static int	nesting_level = 0;	/* Current nesting depth of ExecutorRun calls */
-static int	qualmaxent = PGQS_MAX_DEFAULT;
-static int	qrymaxent = 2;
-static int	updatemaxent = PGQS_MAX_DEFAULT;
 static bool pgqs_assign_sample_rate_check_hook(double *newval, void **extra, GucSource source);
 #if PG_VERSION_NUM > 90600
 static void pgqs_set_query_sampled(bool sample);
@@ -283,9 +278,9 @@ dshash_table *pgqs_dshash = NULL;
 dshash_table *pgqs_query_dshash = NULL;
 dshash_table *pgqs_update_dshash = NULL;
 pgqsSharedState *pgqs = NULL;
-pgqsQueryEntry *queryentryarray = NULL;
-pgqsQualEntry *qualentryarray = NULL;
-pgqsUpdateEntry *updentryarray = NULL;
+pgqsHashDataInfo pgqsqualdata;
+pgqsHashDataInfo pgqsquerydata;
+pgqsHashDataInfo pgqsupdatedata;
 
 /* Local Hash */
 static HTAB *pgqs_localhash = NULL;
@@ -539,25 +534,78 @@ pgqs_fillnames(pgqsEntryWithNames *entry)
 #undef GET_ATTNAME
 }
 
-static dsa_pointer
-pgqs_expand_array(dsa_pointer olddsaptr, int oldsize, int newsize)
+static inline void
+pgqs_hash_data_init(pgqsHashDataInfo *pgqsdata)
 {
-	dsa_pointer newdsaptr;
-	char	   *oldaddr;
-	char	   *newaddr;
+	pgqsdata->header->index = 0;
+	pgqsdata->header->maxentries = 0;
+	pgqsdata->header->firstsegment = InvalidDsaPointer;
+	pgqsdata->header->activesegment = InvalidDsaPointer;
 
-	oldaddr = dsa_get_address(pgqs_dsa, olddsaptr);
+	pgqsdata->activeseg = NULL;
+}
 
-	newdsaptr = dsa_allocate_extended(pgqs_dsa,
-									  newsize,
-									  DSA_ALLOC_HUGE | DSA_ALLOC_ZERO);
-	newaddr = dsa_get_address(pgqs_dsa, newdsaptr);
+static inline void *
+pgqs_get_segment_entry(pgqsHashSegment *seg, int idx, int entsz)
+{
+	return (void *) ((char *) seg->data + (idx * entsz));
+}
 
-	memcpy(newaddr, oldaddr, oldsize);
+void *
+pgqs_data_get_entry(pgqsHashDataInfo *pgqsdata, int index, int entrysz)
+{
+	int		segsz = PGQS_SEG_SZ(PGQS_QRY_ENTSZ);
+	int		segno = index / segsz;
+	int		segidx = index % segsz;
+	int		activesegno = pgqsdata->header->index / segsz;
 
-	dsa_free(pgqs_dsa, olddsaptr);
+	Assert(segno == activesegno);
 
-	return newdsaptr;
+	if (pgqsdata->activeseg == NULL)
+		pgqsdata->activeseg = dsa_get_address(pgqs_dsa,
+											  pgqsdata->header->activesegment);
+
+	return (void *) pgqs_get_segment_entry(pgqsdata->activeseg,
+										   segidx, entrysz);
+}
+
+static void *
+pgqs_data_get_new_entry(pgqsHashDataInfo *pgqsdata, int entrysz, int *index)
+{
+	int		segidx = pgqsdata->header->index % PGQS_SEG_SZ(PGQS_QRY_ENTSZ);
+
+	/* allocate a new segment if reqired */
+	if (pgqsdata->header->maxentries <= pgqsdata->header->index)
+	{
+		pgqsHashSegment	*activeseg = pgqsdata->activeseg;
+		dsa_pointer segment = dsa_allocate(pgqs_dsa, PGQS_SEG_SZ(entrysz));
+
+		pgqsdata->header->maxentries += PGQS_SEG_SZ(entrysz);
+
+		/*
+		 * if the firstsegment is not yet allocated then set this segment as the
+		 * firstsegment.
+		 */
+		if (!DsaPointerIsValid(pgqsdata->header->firstsegment))
+		{
+			pgqsdata->header->firstsegment = segment;
+			pgqsdata->header->activesegment = segment;
+			pgqsdata->activeseg = dsa_get_address(pgqs_dsa, segment);
+		}
+		else
+		{
+			if (activeseg == NULL)
+				activeseg = dsa_get_address(pgqs_dsa,
+											pgqsdata->header->activesegment);
+			pgqsdata->activeseg = dsa_get_address(pgqs_dsa, segment);
+			activeseg->nextsegment = segment;
+		}
+	}
+
+	*index = pgqsdata->header->index;
+	pgqsdata->header->index++;
+
+	return (void *) (pgqsdata->activeseg->data + segidx * entrysz);
 }
 
 static void
@@ -571,26 +619,7 @@ pgqs_attach_dshmem()
 	 * memory address from new dsa pointer.
 	 */
 	if (pgqs->pgqs_dsh != DSHASH_HANDLE_INVALID && pgqs_dshash != NULL)
-	{
-		if (qualmaxent != pgqs->qualmaxent)
-		{
-			qualentryarray = dsa_get_address(pgqs_dsa, pgqs->qualentryarr);
-			qualmaxent = pgqs->qualmaxent;
-		}
-		if (qrymaxent != pgqs->qrymaxent)
-		{
-			queryentryarray = dsa_get_address(pgqs_dsa, pgqs->qryentryarr);
-			qrymaxent = pgqs->qrymaxent;
-
-		}
-		if (updatemaxent != pgqs->updatemaxent)
-		{
-			updentryarray = dsa_get_address(pgqs_dsa, pgqs->updateentryarr);
-			updatemaxent = pgqs->updatemaxent;
-		}
-
 		return;
-	}
 
 	/* Be sure any local memory allocated by DSA routines is persistent. */
 	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
@@ -604,8 +633,6 @@ pgqs_attach_dshmem()
 
 	if (pgqs->pgqs_dsh == DSHASH_HANDLE_INVALID)
 	{
-		int		queryentsz;
-
 		pgqs_dsa = dsa_create(pgqs->tranche_id);
 		dsa_pin(pgqs_dsa);
 		dsa_pin_mapping(pgqs_dsa);
@@ -618,30 +645,17 @@ pgqs_attach_dshmem()
 		pgqs->pgqs_querydsh = dshash_get_hash_table_handle(pgqs_query_dshash);
 		pgqs->pgqs_updatedsh = dshash_get_hash_table_handle(pgqs_update_dshash);
 
-		queryentsz = (sizeof(pgqsQueryEntry) + pgqs_query_size);
+		pgqs->qualdata = dsa_allocate(pgqs_dsa, sizeof(pgqsHashDataHeader));
+		pgqs->querydata = dsa_allocate(pgqs_dsa, sizeof(pgqsHashDataHeader));
+		pgqs->updatedata = dsa_allocate(pgqs_dsa, sizeof(pgqsHashDataHeader));
 
-		pgqs->qualmaxent = qualmaxent;
-		pgqs->qrymaxent = qrymaxent;
-		pgqs->updatemaxent = updatemaxent;
+		pgqsqualdata.header = dsa_get_address(pgqs_dsa, pgqs->qualdata);
+		pgqsquerydata.header = dsa_get_address(pgqs_dsa, pgqs->querydata);
+		pgqsupdatedata.header = dsa_get_address(pgqs_dsa, pgqs->updatedata);
 
-		pgqs->qualentryarr = dsa_allocate_extended(pgqs_dsa,
-												   sizeof(pgqsQualEntry) * pgqs->qualmaxent,
-												   DSA_ALLOC_HUGE | DSA_ALLOC_ZERO);
-
-		pgqs->qryentryarr = dsa_allocate_extended(pgqs_dsa,
-												  queryentsz * pgqs->qrymaxent,
-												  DSA_ALLOC_HUGE | DSA_ALLOC_ZERO);
-		pgqs->updateentryarr = dsa_allocate_extended(pgqs_dsa,
-													 sizeof(pgqsUpdateEntry) * pgqs->updatemaxent,
-													 DSA_ALLOC_HUGE | DSA_ALLOC_ZERO);
-
-		queryentryarray = dsa_get_address(pgqs_dsa, pgqs->qryentryarr);
-		qualentryarray = dsa_get_address(pgqs_dsa, pgqs->qualentryarr);
-		updentryarray = dsa_get_address(pgqs_dsa, pgqs->updateentryarr);
-
-		pgqs->qryentindex = 0;
-		pgqs->qualentindex = 0;
-		pgqs->updateentindex = 0;
+		pgqs_hash_data_init(&pgqsqualdata);
+		pgqs_hash_data_init(&pgqsquerydata);
+		pgqs_hash_data_init(&pgqsupdatedata);
 	}
 	else
 	{
@@ -655,9 +669,9 @@ pgqs_attach_dshmem()
 		pgqs_update_dshash = dshash_attach(pgqs_dsa, &dsh_update_params,
 										   pgqs->pgqs_updatedsh, 0);
 
-		queryentryarray = dsa_get_address(pgqs_dsa, pgqs->qryentryarr);
-		qualentryarray = dsa_get_address(pgqs_dsa, pgqs->qualentryarr);
-		updentryarray = dsa_get_address(pgqs_dsa, pgqs->updateentryarr);
+		pgqsqualdata.header = dsa_get_address(pgqs_dsa, pgqs->qualdata);
+		pgqsquerydata.header = dsa_get_address(pgqs_dsa, pgqs->querydata);
+		pgqsupdatedata.header = dsa_get_address(pgqs_dsa, pgqs->updatedata);
 	}
 	PGQS_LWL_RELEASE(pgqs->lock);
 
@@ -851,17 +865,6 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 			PGQS_LWL_RELEASE(pgqs->querylock);
 			PGQS_LWL_ACQUIRE(pgqs->querylock, LW_EXCLUSIVE);
 
-			if (pgqs->qryentindex == pgqs->qrymaxent)
-			{
-				pgqs->qrymaxent += PGQS_MAX_DEFAULT;
-
-				pgqs->qryentryarr = pgqs_expand_array(pgqs->qryentryarr,
-											QUERY_ENT_SZ * pgqs->qryentindex,
-											QUERY_ENT_SZ * pgqs->qrymaxent);
-
-				queryentryarray = dsa_get_address(pgqs_dsa, pgqs->qryentryarr);
-			}
-
 			queryEntry = (pgqsQueryStringEntry *) dshash_find_or_insert(
 															pgqs_query_dshash,
 															&queryKey,
@@ -870,8 +873,11 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 			/* Make sure it wasn't added by another backend */
 			if (!excl_found)
 			{
-				queryEntry->index = pgqs->qryentindex++;
-				entry = query_array_get_entry(queryEntry->index);
+				int		entidx;
+
+				entry = pgqs_data_get_new_entry(&pgqsquerydata,
+												PGQS_QRY_ENTSZ,
+												&entidx);
 				if (queryDesc->estate->es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY)
 					entry->isExplain = true;
 				else
@@ -881,16 +887,19 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 				strcpy(entry->querytext, context->querytext);
 				entry->frequency = 1;
 				entry->queryid = queryKey.queryid;
+				queryEntry->index = entidx;
 			}
 			else
 			{
-				entry = query_array_get_entry(queryEntry->index);
+				entry = pgqs_data_get_entry(&pgqsquerydata, queryEntry->index,
+											PGQS_QRY_ENTSZ);
 				entry->frequency++;
 			}
 		}
 		else
 		{
-			entry = query_array_get_entry(queryEntry->index);
+			entry = pgqs_data_get_entry(&pgqsquerydata, queryEntry->index,
+										PGQS_QRY_ENTSZ);
 			entry->frequency++;
 		}
 
@@ -2178,43 +2187,6 @@ pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
 }
 
 Datum
-pg_qualstats_example_query(PG_FUNCTION_ARGS)
-{
-#if PG_VERSION_NUM >= 110000
-	pgqs_queryid queryid = PG_GETARG_INT64(0);
-#else
-	pgqs_queryid queryid = PG_GETARG_UINT32(0);
-#endif
-	pgqsQueryStringEntry *entry;
-	text *querytext;
-	pgqsQueryStringHashKey queryKey;
-
-	if ((!pgqs && !pgqs_backend) || !pgqs_dshash)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("pg_qualstats must be loaded via shared_preload_libraries")));
-
-	/* don't search the hash table if track_constants isn't enabled */
-	if (!pgqs_track_constants)
-		PG_RETURN_NULL();
-
-	queryKey.queryid = queryid;
-
-	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
-	entry = (pgqsQueryStringEntry *) dshash_find(pgqs_query_dshash,
-												 &queryKey, false);
-	PGQS_LWL_RELEASE(pgqs->querylock);
-
-	if (entry == NULL)
-		PG_RETURN_NULL();
-
-	querytext = cstring_to_text((const char *)&queryentryarray[entry->index].querytext);
-	dshash_release_lock(pgqs_query_dshash, entry);
-
-	PG_RETURN_TEXT_P(querytext);
-}
-
-Datum
 pg_qualstats_example_queries(PG_FUNCTION_ARGS)
 {
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
@@ -2222,7 +2194,11 @@ pg_qualstats_example_queries(PG_FUNCTION_ARGS)
 	Tuplestorestate *tupstore;
 	MemoryContext per_query_ctx;
 	MemoryContext oldcontext;
-	int			  i;
+	int			i;
+	int			nentries = 0;
+	dsa_pointer	segment;
+	pgqsHashSegment	*seg;
+
 
 	if ((!pgqs && !pgqs_backend) || !pgqs_query_dshash)
 		ereport(ERROR,
@@ -2259,23 +2235,36 @@ pg_qualstats_example_queries(PG_FUNCTION_ARGS)
 
 	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
 
-	for (i = 0; i < pgqs->qryentindex; i++)
+	segment = pgqsquerydata.header->firstsegment;
+	seg = dsa_get_address(pgqs_dsa, segment);
+
+	while(nentries < pgqsquerydata.header->index && DsaPointerIsValid(segment))
 	{
-		Datum		values[3];
-		bool		nulls[3];
-		int64		queryid;
-		pgqsQueryEntry *entry = query_array_get_entry(i);
+		seg = dsa_get_address(pgqs_dsa, segment);
+		for (i = 0; i < PGQS_SEG_ENTRIES; i++)
+		{
+			Datum		values[3];
+			bool		nulls[3];
+			int64		queryid;
+			pgqsQueryEntry *entry = pgqs_get_segment_entry(seg, i,
+														   PGQS_QRY_ENTSZ);
 
-		queryid = entry->queryid;
+			queryid = entry->queryid;
 
-		memset(values, 0, sizeof(values));
-		memset(nulls, 0, sizeof(nulls));
+			memset(values, 0, sizeof(values));
+			memset(nulls, 0, sizeof(nulls));
 
-		values[0] = Int64GetDatumFast(queryid);
-		values[1] = CStringGetTextDatum(entry->querytext);
-		values[2] = Int32GetDatum(entry->frequency);
+			values[0] = Int64GetDatumFast(queryid);
+			values[1] = CStringGetTextDatum(entry->querytext);
+			values[2] = Int32GetDatum(entry->frequency);
 
-		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+			tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+
+			if (nentries == pgqsquerydata.header->index)
+				break;
+			nentries++;
+		}
+		segment = seg->nextsegment;
 	}
 
 	PGQS_LWL_RELEASE(pgqs->querylock);

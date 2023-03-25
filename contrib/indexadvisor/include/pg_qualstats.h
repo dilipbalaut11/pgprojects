@@ -54,9 +54,9 @@ typedef struct pgqsSharedState
 	dshash_table_handle pgqs_dsh;
 	dshash_table_handle pgqs_querydsh;
 	dshash_table_handle pgqs_updatedsh;
-	dsa_pointer	qualentryarr;
-	dsa_pointer	qryentryarr;
-	dsa_pointer	updateentryarr;
+	dsa_pointer	qualdata;
+	dsa_pointer	querydata;
+	dsa_pointer	updatedata;
 	int			qualentindex;
 	int			qryentindex;
 	int			updateentindex;
@@ -69,6 +69,37 @@ typedef struct pgqsSharedState
 												 * query? */
 #endif
 } pgqsSharedState;
+
+/* 
+ * Actual data segment, this contains the data and also the dsa_pointer to the
+ * next segment or an InvalidDsaPointer if this is a last segment.
+ */
+typedef struct pgqsHashSegment
+{
+	dsa_pointer	nextsegment;
+	char		data[FLEXIBLE_ARRAY_MEMBER];
+} pgqsHashSegment;
+
+#define PGQSHASHSEGHDRSZ offsetof(pgqsHashSegment, data)
+
+/*
+ * In older version sequence serach was not implemented for dshash so in hash
+ * we just store the key and an index to the actual entry but the actual
+ * entries are stored outside of the hash in form of segments of data.
+ */
+typedef struct pgqsHashDataHeader
+{
+	int			index;			/* index where to insert next entry */
+	int			maxentries;		/* max allocated entries */
+	dsa_pointer firstsegment;	/* dsa pointer to the first pgqsHashSegment */
+	dsa_pointer activesegment;	/* dsa pointer to the first pgqsHashSegment */
+} pgqsHashDataHeader;
+
+typedef struct pgqsHashDataInfo
+{
+	pgqsHashDataHeader	*header;
+	pgqsHashSegment		*activeseg;
+} pgqsHashDataInfo;
 
 typedef struct pgqsHashKey
 {
@@ -206,17 +237,15 @@ extern dsa_area *pgqs_dsa;
 extern dshash_table *pgqs_dshash;
 extern dshash_table *pgqs_query_dshash;
 extern dshash_table *pgqs_update_dshash;
-extern pgqsQueryEntry *queryentryarray;
-extern pgqsQualEntry *qualentryarray;
-extern pgqsUpdateEntry *updentryarray;
+extern pgqsHashDataInfo pgqsqualdata;
+extern pgqsHashDataInfo pgqsquerydata;
+extern pgqsHashDataInfo pgqsupdatedata;
 extern int pgqs_query_size;
 
-#define QUERY_ENT_SZ 	sizeof(pgqsQueryEntry) + pgqs_query_size
+#define	PGQS_SEG_ENTRIES	10000
+#define PGQS_SEG_SZ(entsz)	(PGQSHASHSEGHDRSZ + PGQS_SEG_ENTRIES * (entsz))
+#define	PGQS_QRY_ENTSZ		sizeof(pgqsQueryEntry) + pgqs_query_size
 
-static inline pgqsQueryEntry *
-query_array_get_entry(int index)
-{
-	return (pgqsQueryEntry *) (((char *) queryentryarray) + (QUERY_ENT_SZ * index));
-}
-
+extern void *pgqs_data_get_entry(pgqsHashDataInfo *pgqsdata, int index,
+								 int entrysz);
 #endif

@@ -670,14 +670,16 @@ advisor_get_query(int64 queryid, int *freq)
 	queryKey.queryid = queryid;
 
 	LWLockAcquire(pgqs->querylock, LW_SHARED);
-	hashentry = (pgqsQueryStringEntry *) dshash_find(pgqs_query_dshash, &queryKey, false);
+	hashentry = (pgqsQueryStringEntry *) dshash_find(pgqs_query_dshash,
+													 &queryKey, false);
 	if (hashentry == NULL)
 	{
 		LWLockRelease(pgqs->querylock);
 		return NULL;
 	}
 
-	entry = query_array_get_entry(hashentry->index);
+	entry = pgqs_data_get_entry(&pgqsquerydata, hashentry->index,
+								PGQS_QRY_ENTSZ);
 	if (entry->isExplain)
 	{
 		query = palloc0(entry->qrylen);

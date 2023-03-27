@@ -601,11 +601,15 @@ pgqs_data_get_new_entry(pgqsHashDataInfo *pgqsdata, int entrysz, int *index)
 			activeseg->nextsegment = segment;
 		}
 	}
+	else if (pgqsdata->activeseg == NULL)
+		pgqsdata->activeseg = dsa_get_address(pgqs_dsa,
+											  pgqsdata->header->activesegment);
 
 	*index = pgqsdata->header->index;
 	pgqsdata->header->index++;
 
-	return (void *) (pgqsdata->activeseg->data + segidx * entrysz);
+	return (void *) pgqs_get_segment_entry(pgqsdata->activeseg,
+										   segidx, entrysz);
 }
 
 static void

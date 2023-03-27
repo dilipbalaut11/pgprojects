@@ -129,16 +129,11 @@ extern PGDLLEXPORT Datum pg_qualstats(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_2_0(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_names(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_names_2_0(PG_FUNCTION_ARGS);
-static Datum pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
-								 bool include_names);
 extern PGDLLEXPORT Datum pg_qualstats_example_queries(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_generate_advise(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(pg_qualstats_reset);
 PG_FUNCTION_INFO_V1(pg_qualstats);
-PG_FUNCTION_INFO_V1(pg_qualstats_2_0);
-PG_FUNCTION_INFO_V1(pg_qualstats_names);
-PG_FUNCTION_INFO_V1(pg_qualstats_names_2_0);
 PG_FUNCTION_INFO_V1(pg_qualstats_example_queries);
 
 #if PG_VERSION_NUM >= 150000
@@ -954,23 +949,31 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 			hash_seq_init(&local_hash_seq, pgqs_localhash);
 			while ((localentry = hash_seq_search(&local_hash_seq)) != NULL)
 			{
-				pgqsEntry *newEntry =
-						(pgqsEntry *) dshash_find_or_insert(pgqs_dshash,
+				pgqsEntry		 *entry;
+				pgqsQualDSHEntry *newEntry =
+						(pgqsQualDSHEntry *) dshash_find_or_insert(pgqs_dshash,
 															&localentry->key,
 															&found);
 				if (!found)
 				{
+					entry = (pgqsEntry *) pgqs_data_get_new_entry(&pgqsqualdata,
+														sizeof(pgqsEntry),
+														&newEntry->index);
+
 					/* raw copy the local entry */
-					pgqs_entry_copy_raw(newEntry, localentry);
+					memcpy(entry, localentry, sizeof(pgqsEntry));
 				}
 				else
 				{
+					entry = (pgqsEntry *) pgqs_data_get_entry(&pgqsqualdata, newEntry->index,
+															  sizeof(pgqsEntry));
 					/* only update counters value */
-					newEntry->count += localentry->count;
-					newEntry->nbfiltered += localentry->nbfiltered;
-					newEntry->usage += localentry->usage;
+					entry->count += localentry->count;
+					entry->nbfiltered += localentry->nbfiltered;
+					entry->usage += localentry->usage;
+
 					/* compute estimation error min, max, mean and variance */
-					pgqs_entry_err_estim(newEntry, localentry->mean_err_estim,
+					pgqs_entry_err_estim(entry, localentry->mean_err_estim,
 										 localentry->occurences);
 				}
 				dshash_release_lock(pgqs_dshash, newEntry);
@@ -1920,10 +1923,7 @@ pg_qualstats_reset(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
-/* Number of output arguments (columns) for various API versions */
-#define PG_QUALSTATS_COLS_V1_0	18
-#define PG_QUALSTATS_COLS_V2_0	26
-#define PG_QUALSTATS_COLS		26	/* maximum of above */
+#define PG_QUALSTATS_COLS		26
 
 /*
  * Retrieve statement statistics.
@@ -1937,32 +1937,7 @@ pg_qualstats_reset(PG_FUNCTION_ARGS)
  * versions.
  */
 Datum
-pg_qualstats_2_0(PG_FUNCTION_ARGS)
-{
-	return pg_qualstats_common(fcinfo, PGQS_V2_0, false);
-}
-
-Datum
-pg_qualstats_names_2_0(PG_FUNCTION_ARGS)
-{
-	return pg_qualstats_common(fcinfo, PGQS_V2_0, true);
-}
-
-Datum
 pg_qualstats(PG_FUNCTION_ARGS)
-{
-	return pg_qualstats_common(fcinfo, PGQS_V1_0, false);
-}
-
-Datum
-pg_qualstats_names(PG_FUNCTION_ARGS)
-{
-	return pg_qualstats_common(fcinfo, PGQS_V1_0, true);
-}
-
-Datum
-pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
-					bool include_names)
 {
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	int			nb_columns;
@@ -1970,12 +1945,14 @@ pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
 	Tuplestorestate *tupstore;
 	MemoryContext per_query_ctx;
 	MemoryContext oldcontext;
-	dshash_seq_status hstat;
 	Oid			userid = GetUserId();
 	bool		is_allowed_role = false;
-	pgqsEntry  *entry;
 	Datum	   *values;
 	bool	   *nulls;
+	int			i;
+	int			nentries = 0;
+	dsa_pointer	segment;
+	pgqsHashSegment	*seg;
 
 #if PG_VERSION_NUM >= 140000
 	/* Superusers or members of pg_read_all_stats members are allowed */
@@ -2010,21 +1987,8 @@ pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
 		elog(ERROR, "return type must be a row type");
 
 	/* Check we have the expected number of output arguments. */
-	switch (tupdesc->natts)
-	{
-		case PG_QUALSTATS_COLS_V1_0:
-		case PG_QUALSTATS_COLS_V1_0 + PGQS_NAME_COLUMNS:
-			if (api_version != PGQS_V1_0)
-				elog(ERROR, "incorrect number of output arguments");
-			break;
-		case PG_QUALSTATS_COLS_V2_0:
-		case PG_QUALSTATS_COLS_V2_0 + PGQS_NAME_COLUMNS:
-			if (api_version != PGQS_V2_0)
-				elog(ERROR, "incorrect number of output arguments");
-			break;
-		default:
-			elog(ERROR, "incorrect number of output arguments");
-	}
+	if (tupdesc->natts != PG_QUALSTATS_COLS)
+		elog(ERROR, "incorrect number of output arguments");
 
 	tupstore = tuplestore_begin_heap(true, false, work_mem);
 	rsinfo->returnMode = SFRM_Materialize;
@@ -2032,156 +1996,146 @@ pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
 	rsinfo->setDesc = tupdesc;
 
 	PGQS_LWL_ACQUIRE(pgqs->lock, LW_SHARED);
-	dshash_seq_init(&hstat, pgqs_dshash, false);
 
-	if (api_version == PGQS_V1_0)
-		nb_columns = PG_QUALSTATS_COLS_V1_0;
-	else
-		nb_columns = PG_QUALSTATS_COLS_V2_0;
-
-	if (include_names)
-		nb_columns += PGQS_NAME_COLUMNS;
+	nb_columns = PG_QUALSTATS_COLS;
 
 	Assert(nb_columns == tupdesc->natts);
 
 	values = palloc0(sizeof(Datum) * nb_columns);
 	nulls = palloc0(sizeof(bool) * nb_columns);
-	while ((entry = dshash_seq_next(&hstat)) != NULL)
+
+
+
+	segment = pgqsqualdata.header->firstsegment;
+	seg = dsa_get_address(pgqs_dsa, segment);
+
+	while(nentries < pgqsqualdata.header->index && DsaPointerIsValid(segment))
 	{
-		int			i = 0;
-
-		memset(values, 0, sizeof(Datum) * nb_columns);
-		memset(nulls, 0, sizeof(bool) * nb_columns);
-		values[i++] = ObjectIdGetDatum(entry->key.userid);
-		values[i++] = ObjectIdGetDatum(entry->key.dbid);
-
-		if (entry->lattnum != InvalidAttrNumber)
+		seg = dsa_get_address(pgqs_dsa, segment);
+		for (i = 0; i < PGQS_SEG_ENTRIES; i++)
 		{
-			values[i++] = ObjectIdGetDatum(entry->lrelid);
-			values[i++] = Int16GetDatum(entry->lattnum);
-		}
-		else
-		{
-			nulls[i++] = true;
-			nulls[i++] = true;
-		}
-		values[i++] = Int32GetDatum(entry->opoid);
-		if (entry->rattnum != InvalidAttrNumber)
-		{
-			values[i++] = ObjectIdGetDatum(entry->rrelid);
-			values[i++] = Int16GetDatum(entry->rattnum);
-		}
-		else
-		{
-			nulls[i++] = true;
-			nulls[i++] = true;
-		}
-		if (entry->qualid == 0)
-			nulls[i++] = true;
-		else
-			values[i++] = Int64GetDatum(entry->qualid);
+			int		j = 0;
+			int		k;
+			pgqsEntry *entry = pgqs_get_segment_entry(seg, i,
+													  sizeof(pgqsEntry));
 
-		if (entry->key.uniquequalid == 0)
-			nulls[i++] = true;
-		else
-			values[i++] = Int64GetDatum(entry->key.uniquequalid);
+			/***/
 
-		values[i++] = Int64GetDatum(entry->qualnodeid);
-		values[i++] = Int64GetDatum(entry->key.uniquequalnodeid);
-		values[i++] = Int64GetDatum(entry->occurences);
-		values[i++] = Int64GetDatum(entry->count);
-		values[i++] = Int64GetDatum(entry->nbfiltered);
 
-		if (api_version >= PGQS_V2_0)
-		{
-			int		j;
+			memset(values, 0, sizeof(Datum) * nb_columns);
+			memset(nulls, 0, sizeof(bool) * nb_columns);
+			values[j++] = ObjectIdGetDatum(entry->key.userid);
+			values[j++] = ObjectIdGetDatum(entry->key.dbid);
 
-			for (j = 0; j < 2; j++)
+			if (entry->lattnum != InvalidAttrNumber)
+			{
+				values[j++] = ObjectIdGetDatum(entry->lrelid);
+				values[j++] = Int16GetDatum(entry->lattnum);
+			}
+			else
+			{
+				nulls[j++] = true;
+				nulls[j++] = true;
+			}
+			values[j++] = Int32GetDatum(entry->opoid);
+			if (entry->rattnum != InvalidAttrNumber)
+			{
+				values[j++] = ObjectIdGetDatum(entry->rrelid);
+				values[j++] = Int16GetDatum(entry->rattnum);
+			}
+			else
+			{
+				nulls[j++] = true;
+				nulls[j++] = true;
+			}
+			if (entry->qualid == 0)
+				nulls[j++] = true;
+			else
+				values[j++] = Int64GetDatum(entry->qualid);
+
+			if (entry->key.uniquequalid == 0)
+				nulls[j++] = true;
+			else
+				values[j++] = Int64GetDatum(entry->key.uniquequalid);
+
+			values[j++] = Int64GetDatum(entry->qualnodeid);
+			values[j++] = Int64GetDatum(entry->key.uniquequalnodeid);
+			values[j++] = Int64GetDatum(entry->occurences);
+			values[j++] = Int64GetDatum(entry->count);
+			values[j++] = Int64GetDatum(entry->nbfiltered);
+
+			for (k = 0; k < 2; k++)
 			{
 				double	stddev_estim;
 
 				if (j == PGQS_RATIO)	/* min/max ratio are double precision */
 				{
-					values[i++] = Float8GetDatum(entry->min_err_estim[j]);
-					values[i++] = Float8GetDatum(entry->max_err_estim[j]);
+					values[j++] = Float8GetDatum(entry->min_err_estim[k]);
+					values[j++] = Float8GetDatum(entry->max_err_estim[k]);
 				}
 				else				/* min/max num are bigint */
 				{
-					values[i++] = Int64GetDatum(entry->min_err_estim[j]);
-					values[i++] = Int64GetDatum(entry->max_err_estim[j]);
+					values[j++] = Int64GetDatum(entry->min_err_estim[k]);
+					values[j++] = Int64GetDatum(entry->max_err_estim[k]);
 				}
-				values[i++] = Float8GetDatum(entry->mean_err_estim[j]);
+				values[j++] = Float8GetDatum(entry->mean_err_estim[k]);
 
 				if (entry->occurences > 1)
-					stddev_estim = sqrt(entry->sum_err_estim[j] / entry->occurences);
+					stddev_estim = sqrt(entry->sum_err_estim[k] / entry->occurences);
 				else
 					stddev_estim = 0.0;
 
-				values[i++] = Float8GetDatumFast(stddev_estim);
+				values[j++] = Float8GetDatumFast(stddev_estim);
 			}
-		}
 
-		if (entry->position == -1)
-			nulls[i++] = true;
-		else
-			values[i++] = Int32GetDatum(entry->position);
+			if (entry->position == -1)
+				nulls[j++] = true;
+			else
+				values[j++] = Int32GetDatum(entry->position);
 
-		if (entry->key.queryid == 0)
-			nulls[i++] = true;
-		else
-			values[i++] = Int64GetDatum(entry->key.queryid);
+			if (entry->key.queryid == 0)
+				nulls[j++] = true;
+			else
+				values[j++] = Int64GetDatum(entry->key.queryid);
 
-		if (entry->constvalue[0] != '\0')
-		{
-			if (is_allowed_role || entry->key.userid == userid)
+			if (entry->constvalue[0] != '\0')
 			{
-				values[i++] = CStringGetTextDatum((char *) pg_do_encoding_conversion(
-							(unsigned char *) entry->constvalue,
-							strlen(entry->constvalue),
-							PG_UTF8,
-							GetDatabaseEncoding()));
+				if (is_allowed_role || entry->key.userid == userid)
+				{
+					values[j++] = CStringGetTextDatum((char *) pg_do_encoding_conversion(
+								(unsigned char *) entry->constvalue,
+								strlen(entry->constvalue),
+								PG_UTF8,
+								GetDatabaseEncoding()));
+				}
+				else
+				{
+					/*
+					* Don't show constant text, but hint as to the reason for not
+					* doing so
+					*/
+					values[j++] = CStringGetTextDatum("<insufficient privilege>");
+				}
 			}
 			else
-			{
-				/*
-				 * Don't show constant text, but hint as to the reason for not
-				 * doing so
-				 */
-				values[i++] = CStringGetTextDatum("<insufficient privilege>");
-			}
-		}
-		else
-			nulls[i++] = true;
+				nulls[j++] = true;
 
-		if (entry->key.evaltype)
-			values[i++] = CharGetDatum(entry->key.evaltype);
-		else
-			nulls[i++] = true;
-
-		if (include_names)
-		{
-			if (pgqs_resolve_oids)
-			{
-				pgqsNames	names = ((pgqsEntryWithNames *) entry)->names;
-
-				values[i++] = CStringGetTextDatum(NameStr(names.rolname));
-				values[i++] = CStringGetTextDatum(NameStr(names.datname));
-				values[i++] = CStringGetTextDatum(NameStr(names.lrelname));
-				values[i++] = CStringGetTextDatum(NameStr(names.lattname));
-				values[i++] = CStringGetTextDatum(NameStr(names.opname));
-				values[i++] = CStringGetTextDatum(NameStr(names.rrelname));
-				values[i++] = CStringGetTextDatum(NameStr(names.rattname));
-			}
+			if (entry->key.evaltype)
+				values[j++] = CharGetDatum(entry->key.evaltype);
 			else
-			{
-				for (; i < nb_columns; i++)
-					nulls[i] = true;
-			}
+				nulls[j++] = true;
+
+			Assert(j == nb_columns);
+			tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+
+			/***/
+
+			if (nentries == pgqsqualdata.header->index)
+				break;
+			nentries++;
 		}
-		Assert(i == nb_columns);
-		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+		segment = seg->nextsegment;
 	}
-	dshash_seq_term(&hstat);
 
 	PGQS_LWL_RELEASE(pgqs->lock);
 	tuplestore_donestoring(tupstore);

@@ -151,32 +151,11 @@ typedef struct pgqsEntry
 	int64		occurences;		/* # of qual execution, 1 per query */
 } pgqsEntry;
 
-typedef struct pgqsQualEntry
+typedef struct pgqsQualDSHEntry
 {
 	pgqsHashKey key;
-	Oid			lrelid;			/* LHS relation OID or NULL if not var */
-	AttrNumber	lattnum;		/* LHS attribute Number or NULL if not var */
-	Oid			opoid;			/* Operator OID */
-	Oid			rrelid;			/* RHS relation OID or NULL if not var */
-	AttrNumber	rattnum;		/* RHS attribute Number or NULL if not var */
-	char		constvalue[PGQS_CONSTANT_SIZE]; /* Textual representation of
-												 * the right hand constant, if
-												 * any */
-	uint32		qualid;			/* Hash of the parent AND expression if any, 0
-								 * otherwise. */
-	uint32		qualnodeid;		/* Hash of the node itself */
-
-	int64		count;			/* # of operator execution */
-	int64		nbfiltered;		/* # of lines discarded by the operator */
-	int			position;		/* content position in query text */
-	double		usage;			/* # of qual execution, used for deallocation */
-	double		min_err_estim[2];	/* min estimation error ratio and num */
-	double		max_err_estim[2];	/* max estimation error ratio and num */
-	double		mean_err_estim[2];	/* mean estimation error ratio and num */
-	double		sum_err_estim[2];	/* sum of variances in estimation error
-									 * ratio and num */
-	int64		occurences;		/* # of qual execution, 1 per query */
-} pgqsQualEntry;
+	int			index;
+} pgqsQualDSHEntry;
 
 typedef struct pgqsEntryWithNames
 {

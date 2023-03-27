@@ -908,6 +908,7 @@ advisor_remove_existing_candidates(CandidateInfo *candidates,
 static void
 advisor_get_updates(CandidateInfo *candidates, int ncandidates)
 {
+#if PG_VERSION_NUM > 140000	
 	dshash_seq_status	hash_seq;
 	int64	   *qrueryid_done;
 	int64		nupdates = 0;
@@ -978,6 +979,8 @@ advisor_get_updates(CandidateInfo *candidates, int ncandidates)
 	}
 
 	LWLockRelease(pgqs->querylock);
+#endif
+	return;	
 }
 
 /*

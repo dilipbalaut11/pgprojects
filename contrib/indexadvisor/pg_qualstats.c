@@ -111,6 +111,11 @@ PG_MODULE_MAGIC;
 #define ParallelLeaderBackendId ParallelMasterBackendId
 #endif
 
+#if PG_VRESION_NUM < 160000
+#define DSHASH_HANDLE_INVALID DSM_HANDLE_INVALID
+#define DSA_HANDLE_INVALID DSM_HANDLE_INVALID
+#endif
+
 /*
  * Extension version number, for supporting older extension versions' objects
  */

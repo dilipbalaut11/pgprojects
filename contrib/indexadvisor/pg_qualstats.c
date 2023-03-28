@@ -111,7 +111,7 @@ PG_MODULE_MAGIC;
 #define ParallelLeaderBackendId ParallelMasterBackendId
 #endif
 
-#if PG_VRESION_NUM < 160000
+#if PG_VRESION_NUM <= 150000
 #define DSHASH_HANDLE_INVALID DSM_HANDLE_INVALID
 #define DSA_HANDLE_INVALID DSM_HANDLE_INVALID
 #endif
@@ -501,25 +501,45 @@ pgqs_get_segment_entry(pgqsHashSegment *seg, int idx, int entsz)
 void *
 pgqs_data_get_entry(pgqsHashDataInfo *pgqsdata, int index, int entrysz)
 {
-	int		segsz = PGQS_SEG_SZ(PGQS_QRY_ENTSZ);
-	int		segno = index / segsz;
-	int		segidx = index % segsz;
-	int		activesegno = pgqsdata->header->index / segsz;
+	int		segno = index / PGQS_SEG_ENTRIES;
+	int		segidx = index % PGQS_SEG_ENTRIES;
+	int		activesegno = pgqsdata->header->index / PGQS_SEG_ENTRIES;
+	int		i;
+	pgqsHashSegment	*seg;
 
-	Assert(segno == activesegno);
+	/*
+	 * if the index we are looking for is in the active segment then directly
+	 * fetch from the active segment otherwise loop through the segments and
+	 * fetch entry from targeted segment.  In common cases we should always
+	 * be looking into the active segments so we should not worry about
+	 * optimizing the other case.
+	 */
+	if (segno == activesegno)
+	{
+		if (pgqsdata->activeseg == NULL)
+			pgqsdata->activeseg = dsa_get_address(pgqs_dsa,
+												  pgqsdata->header->activesegment);
+		seg = pgqsdata->activeseg;
+	}
+	else
+	{
+		/*
+		 * XXX instead of looping through complete array we can keep a local
+		 * array of pointers for each segment.  But generally there should be
+		 * very few segments so there is no point in adding that complexity.
+		 */
+		seg = dsa_get_address(pgqs_dsa, pgqsdata->header->firstsegment);
+		for (i = 0; i < segno; i++)
+			seg = dsa_get_address(pgqs_dsa, seg->nextsegment);
+	}
 
-	if (pgqsdata->activeseg == NULL)
-		pgqsdata->activeseg = dsa_get_address(pgqs_dsa,
-											  pgqsdata->header->activesegment);
-
-	return (void *) pgqs_get_segment_entry(pgqsdata->activeseg,
-										   segidx, entrysz);
+	return (void *) pgqs_get_segment_entry(seg, segidx, entrysz);
 }
 
 static void *
 pgqs_data_get_new_entry(pgqsHashDataInfo *pgqsdata, int entrysz, int *index)
 {
-	int		segidx = pgqsdata->header->index % PGQS_SEG_SZ(PGQS_QRY_ENTSZ);
+	int		segidx = pgqsdata->header->index % PGQS_SEG_ENTRIES;
 
 	/* allocate a new segment if reqired */
 	if (pgqsdata->header->maxentries <= pgqsdata->header->index)
@@ -527,7 +547,7 @@ pgqs_data_get_new_entry(pgqsHashDataInfo *pgqsdata, int entrysz, int *index)
 		pgqsHashSegment	*activeseg = pgqsdata->activeseg;
 		dsa_pointer segment = dsa_allocate(pgqs_dsa, PGQS_SEG_SZ(entrysz));
 
-		pgqsdata->header->maxentries += PGQS_SEG_SZ(entrysz);
+		pgqsdata->header->maxentries += PGQS_SEG_ENTRIES;
 
 		/*
 		 * if the firstsegment is not yet allocated then set this segment as the

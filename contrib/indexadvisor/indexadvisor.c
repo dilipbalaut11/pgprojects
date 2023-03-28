@@ -585,7 +585,7 @@ advisor_iterative(IndexAdvisorContext *context)
  */
 static QueryInfo *
 advisor_get_queries(CandidateInfo *candidates, int ncandidates,
-						  int *nqueries)
+					int *nqueries)
 {
 	int			i;
 	int			j;
@@ -628,7 +628,7 @@ advisor_get_queries(CandidateInfo *candidates, int ncandidates,
 	for (i = 0; i < nids; i++)
 	{
 		queryinfos[i].query = advisor_get_query(queryids[i],
-													  &queryinfos[i].frequency);
+												&queryinfos[i].frequency);
 #ifdef DEBUG_INDEX_ADVISOR
 		elog(NOTICE, "query %d: %s-freq:%d", i, queryinfos[i].query, queryinfos[i].frequency);
 #endif

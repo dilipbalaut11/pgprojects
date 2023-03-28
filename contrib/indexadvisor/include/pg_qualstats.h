@@ -214,7 +214,7 @@ extern pgqsHashDataInfo pgqsquerydata;
 extern pgqsHashDataInfo pgqsupdatedata;
 extern int pgqs_query_size;
 
-#define	PGQS_SEG_ENTRIES	10000
+#define	PGQS_SEG_ENTRIES	2
 #define PGQS_SEG_SZ(entsz)	(PGQSHASHSEGHDRSZ + PGQS_SEG_ENTRIES * (entsz))
 #define	PGQS_QRY_ENTSZ		sizeof(pgqsQueryEntry) + pgqs_query_size
 

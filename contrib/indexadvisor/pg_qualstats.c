@@ -182,7 +182,6 @@ static uint32 pgqs_uint32_hashfn(const void *key, Size keysize);
 static bool pgqs_backend = false;
 static int	pgqs_max = PGQS_MAX_DEFAULT;			/* max # statements to track */
 static bool pgqs_track_pgcatalog;	/* track queries on pg_catalog */
-static bool pgqs_resolve_oids;	/* resolve oids */
 static bool pgqs_enabled;
 static bool pgqs_track_constants = true;
 static double pgqs_sample_rate;
@@ -265,7 +264,6 @@ static inline void pgqs_entry_init(pgqsEntry *entry);
 static inline void pgqs_entry_copy_raw(pgqsEntry *dest, pgqsEntry *src);
 static void pgqs_entry_err_estim(pgqsEntry *e, double *err_estim, int64 occurences);
 static void pgqs_localentry_dealloc(int nvictims);
-static void pgqs_fillnames(pgqsEntryWithNames *entry);
 
 static Size pgqs_memsize(void);
 #if PG_VERSION_NUM >= 90600
@@ -351,17 +349,6 @@ _PG_init(void)
 							NULL,
 							NULL);
 
-	if (!pgqs_backend)
-		DefineCustomBoolVariable("pg_qualstats.resolve_oids",
-								 "Store names alongside the oid. Eats MUCH more space!",
-								 NULL,
-								 &pgqs_resolve_oids,
-								 false,
-								 PGC_POSTMASTER,
-								 0,
-								 NULL,
-								 NULL,
-								 NULL);
 
 	DefineCustomBoolVariable("pg_qualstats.track_pg_catalog",
 							 "Track quals on system catalogs too.",
@@ -492,46 +479,6 @@ pgqs_is_query_sampled(void)
 #else
 	return query_is_sampled;
 #endif
-}
-
-/*
- * Do catalog search to replace oids with corresponding objects name
- */
-void
-pgqs_fillnames(pgqsEntryWithNames *entry)
-{
-#if PG_VERSION_NUM >= 110000
-#define GET_ATTNAME(r, a)	get_attname(r, a, false)
-#else
-#define GET_ATTNAME(r, a)	get_attname(r, a)
-#endif
-
-#if PG_VERSION_NUM >= 90500
-	namestrcpy(&(entry->names.rolname), GetUserNameFromId(entry->entry.key.userid, true));
-#else
-	namestrcpy(&(entry->names.rolname), GetUserNameFromId(entry->entry.key.userid));
-#endif
-	namestrcpy(&(entry->names.datname), get_database_name(entry->entry.key.dbid));
-
-	if (entry->entry.lrelid != InvalidOid)
-	{
-		namestrcpy(&(entry->names.lrelname),
-				   get_rel_name(entry->entry.lrelid));
-		namestrcpy(&(entry->names.lattname),
-				   GET_ATTNAME(entry->entry.lrelid, entry->entry.lattnum));
-	}
-
-	if (entry->entry.opoid != InvalidOid)
-		namestrcpy(&(entry->names.opname), get_opname(entry->entry.opoid));
-
-	if (entry->entry.rrelid != InvalidOid)
-	{
-		namestrcpy(&(entry->names.rrelname),
-				   get_rel_name(entry->entry.rrelid));
-		namestrcpy(&(entry->names.rattname),
-				   GET_ATTNAME(entry->entry.rrelid, entry->entry.rattnum));
-	}
-#undef GET_ATTNAME
 }
 
 static inline void
@@ -917,10 +864,7 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 			memset(&info, 0, sizeof(info));
 			info.keysize = sizeof(pgqsHashKey);
 
-			if (pgqs_resolve_oids)
-				info.entrysize = sizeof(pgqsEntryWithNames);
-			else
-				info.entrysize = sizeof(pgqsEntry);
+			info.entrysize = sizeof(pgqsEntry);
 
 			info.hash = pgqs_hash_fn;
 
@@ -1005,7 +949,6 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 static inline void
 pgqs_entry_init(pgqsEntry *entry)
 {
-	/* Note that pgqsNames if needed will be explicitly filled after this */
 	memset(&(entry->lrelid), 0, sizeof(pgqsEntry) - sizeof(pgqsHashKey));
 }
 
@@ -1013,7 +956,6 @@ pgqs_entry_init(pgqsEntry *entry)
 static inline void
 pgqs_entry_copy_raw(pgqsEntry *dest, pgqsEntry *src)
 {
-	/* Note that pgqsNames if needed will be explicitly filled after this */
 	memcpy(&(dest->lrelid),
 		   &(src->lrelid),
 		   (sizeof(pgqsEntry) - sizeof(pgqsHashKey)));
@@ -1437,9 +1379,6 @@ pgqs_process_booltest(BooleanTest *expr, pgqsWalkerContext *context)
 		}
 		else
 			memset(entry->constvalue, 0, sizeof(char) * PGQS_CONSTANT_SIZE);
-
-		if (pgqs_resolve_oids)
-			pgqs_fillnames((pgqsEntryWithNames *) entry);
 	}
 
 	entry->nbfiltered += context->nbfiltered;
@@ -1773,9 +1712,6 @@ pgqs_process_opexpr(OpExpr *expr, pgqsWalkerContext *context)
 
 				memcpy(entry->constvalue, utf8const, len);
 				entry->constvalue[len] = '\0';
-
-				if (pgqs_resolve_oids)
-					pgqs_fillnames((pgqsEntryWithNames *) entry);
 			}
 
 			entry->nbfiltered += context->nbfiltered;
@@ -2192,10 +2128,6 @@ pg_qualstats_example_queries(PG_FUNCTION_ARGS)
 
 	MemoryContextSwitchTo(oldcontext);
 
-	/* don't need to scan the hash table if track_constants isn't enabled */
-	if (!pgqs_track_constants)
-		return (Datum) 0;
-
 	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
 
 	segment = pgqsquerydata.header->firstsegment;
@@ -2421,20 +2353,11 @@ pgqs_memsize(void)
 
 	size = MAXALIGN(sizeof(pgqsSharedState));
 	size = add_size(size, pgqs_dsa_init_size());
-	if (pgqs_resolve_oids)
-		size = add_size(size, hash_estimate_size(pgqs_max, sizeof(pgqsEntryWithNames)));
-	else
-		size = add_size(size, hash_estimate_size(pgqs_max, sizeof(pgqsEntry)));
+	size = add_size(size, hash_estimate_size(pgqs_max, sizeof(pgqsEntry)));
 
-	if (pgqs_track_constants)
-	{
-		/*
-		 * In that case, we also need an additional struct for storing
-		 * non-normalized queries.
-		 */
-		size = add_size(size, hash_estimate_size(pgqs_max,
-												 sizeof(pgqsQueryStringEntry) + pgqs_query_size * sizeof(char)));
-	}
+	size = add_size(size, hash_estimate_size(pgqs_max,
+											 sizeof(pgqsQueryStringEntry) +
+											 pgqs_query_size * sizeof(char)));
 	size = add_size(size, hash_estimate_size(pgqs_max,
 											 sizeof(pgqsUpdateHashEntry)));	
 #if PG_VERSION_NUM >= 90600

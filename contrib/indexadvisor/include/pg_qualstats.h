@@ -57,12 +57,6 @@ typedef struct pgqsSharedState
 	dsa_pointer	qualdata;
 	dsa_pointer	querydata;
 	dsa_pointer	updatedata;
-	int			qualentindex;
-	int			qryentindex;
-	int			updateentindex;
-	int			qualmaxent;
-	int			qrymaxent;
-	int			updatemaxent;
 #if PG_VERSION_NUM >= 90600
 	LWLock	   *sampledlock;	/* protects sampled array search/modification */
 	bool		sampled[FLEXIBLE_ARRAY_MEMBER]; /* should we sample this
@@ -83,9 +77,11 @@ typedef struct pgqsHashSegment
 #define PGQSHASHSEGHDRSZ offsetof(pgqsHashSegment, data)
 
 /*
- * In older version sequence serach was not implemented for dshash so in hash
- * we just store the key and an index to the actual entry but the actual
- * entries are stored outside of the hash in form of segments of data.
+ * header of the externally stored hash data.  Actually data are stored in
+ * multiple segements (pgqsHashSegment) so in this we keep the information
+ * about the global index of the entry, max entries allocated and also the
+ * dsa pointers of the first and active segment.  Based on the index and
+ * the segment size we can get the segment number and index within the segment.
  */
 typedef struct pgqsHashDataHeader
 {
@@ -95,6 +91,9 @@ typedef struct pgqsHashDataHeader
 	dsa_pointer activesegment;	/* dsa pointer to the first pgqsHashSegment */
 } pgqsHashDataHeader;
 
+/*
+ * Per backend pointers to the external data header and current active segment
+ */
 typedef struct pgqsHashDataInfo
 {
 	pgqsHashDataHeader	*header;
@@ -112,17 +111,6 @@ typedef struct pgqsHashKey
 								 * executed after a scan, or 'i' for an
 								 * indexqual */
 } pgqsHashKey;
-
-typedef struct pgqsNames
-{
-	NameData	rolname;
-	NameData	datname;
-	NameData	lrelname;
-	NameData	lattname;
-	NameData	opname;
-	NameData	rrelname;
-	NameData	rattname;
-} pgqsNames;
 
 typedef struct pgqsEntry
 {
@@ -151,17 +139,22 @@ typedef struct pgqsEntry
 	int64		occurences;		/* # of qual execution, 1 per query */
 } pgqsEntry;
 
+/*
+ * In older version (before v14) sequence serach was not implemented for the
+ * dshash so in order to achieve that, we store the actual data in external
+ * memory which we can directly traverse and in dshash we just have the key and
+ * an index to the external entries.
+ *
+ * XXX in future when version older than v14 are not supported then we can
+ * remove this logic and directly use the seq search of dshash but as of now
+ * it would create a lot of duplication if we try to maintain two version of
+ * code so use the same implemetation for all the versions.
+ */
 typedef struct pgqsQualDSHEntry
 {
 	pgqsHashKey key;
 	int			index;
 } pgqsQualDSHEntry;
-
-typedef struct pgqsEntryWithNames
-{
-	pgqsEntry	entry;
-	pgqsNames	names;
-} pgqsEntryWithNames;
 
 typedef struct pgqsQueryStringHashKey
 {

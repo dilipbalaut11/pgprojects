@@ -669,12 +669,12 @@ qa_get_query(int64 queryid, int *freq)
 
 	queryKey.queryid = queryid;
 
-	LWLockAcquire(pgqs->querylock, LW_SHARED);
+	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
 	entry = hash_search_with_hash_value(pgqs_query_examples_hash, &queryKey,
 										queryid, HASH_FIND, &found);
 	if (!found)
 	{
-		LWLockRelease(pgqs->querylock);
+		PGQS_LWL_RELEASE(pgqs->querylock);
 		return NULL;
 	}
 	if (entry->isExplain)
@@ -693,7 +693,7 @@ qa_get_query(int64 queryid, int *freq)
 
 	*freq = entry->frequency;
 
-	LWLockRelease(pgqs->querylock);
+	PGQS_LWL_RELEASE(pgqs->querylock);
 
 	return query;
 }
@@ -913,7 +913,7 @@ qa_get_updates(CandidateInfo *candidates, int ncandidates)
 
 	qrueryid_done = palloc(sizeof(int64) * maxqueryids);
 
-	LWLockAcquire(pgqs->querylock, LW_SHARED);
+	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
 
 	for (i = 0; i < ncandidates; i++)
 	{
@@ -970,7 +970,7 @@ qa_get_updates(CandidateInfo *candidates, int ncandidates)
 		nqueryiddone = 0;
 	}
 
-	LWLockRelease(pgqs->querylock);
+	PGQS_LWL_RELEASE(pgqs->querylock);
 }
 
 /*

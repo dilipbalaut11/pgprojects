@@ -99,14 +99,6 @@ PG_MODULE_MAGIC;
 #define PGQS_RATIO	0
 #define PGQS_NUM	1
 
-#define PGQS_LWL_ACQUIRE(lock, mode) if (!pgqs_backend) { \
-	LWLockAcquire(lock, mode); \
-	}
-
-#define PGQS_LWL_RELEASE(lock) if (!pgqs_backend) { \
-	LWLockRelease(lock); \
-	}
-
 #if PG_VERSION_NUM < 140000
 #define ParallelLeaderBackendId ParallelMasterBackendId
 #endif
@@ -131,7 +123,6 @@ extern PGDLLEXPORT Datum pg_qualstats_names(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_names_2_0(PG_FUNCTION_ARGS);
 static Datum pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
 								 bool include_names);
-extern PGDLLEXPORT Datum pg_qualstats_example_query(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_example_queries(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_generate_advise(PG_FUNCTION_ARGS);
 
@@ -140,7 +131,6 @@ PG_FUNCTION_INFO_V1(pg_qualstats);
 PG_FUNCTION_INFO_V1(pg_qualstats_2_0);
 PG_FUNCTION_INFO_V1(pg_qualstats_names);
 PG_FUNCTION_INFO_V1(pg_qualstats_names_2_0);
-PG_FUNCTION_INFO_V1(pg_qualstats_example_query);
 PG_FUNCTION_INFO_V1(pg_qualstats_example_queries);
 
 static void pgqs_backend_mode_startup(void);
@@ -179,7 +169,7 @@ static uint32 pgqs_update_hash_fn(const void *key, Size keysize);
 static uint32 pgqs_uint32_hashfn(const void *key, Size keysize);
 #endif
 
-static bool pgqs_backend = false;
+bool pgqs_backend = false;
 static int	pgqs_query_size;
 static int	pgqs_max = PGQS_MAX_DEFAULT;			/* max # statements to track */
 static bool pgqs_track_pgcatalog;	/* track queries on pg_catalog */
@@ -2097,40 +2087,6 @@ pg_qualstats_common(PG_FUNCTION_ARGS, pgqsVersion api_version,
 	MemoryContextSwitchTo(oldcontext);
 
 	return (Datum) 0;
-}
-
-Datum
-pg_qualstats_example_query(PG_FUNCTION_ARGS)
-{
-#if PG_VERSION_NUM >= 110000
-	pgqs_queryid queryid = PG_GETARG_INT64(0);
-#else
-	pgqs_queryid queryid = PG_GETARG_UINT32(0);
-#endif
-	pgqsQueryStringEntry *entry;
-	pgqsQueryStringHashKey queryKey;
-	bool		found;
-
-	if ((!pgqs && !pgqs_backend) || !pgqs_hash)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("pg_qualstats must be loaded via shared_preload_libraries")));
-
-	/* don't search the hash table if track_constants isn't enabled */
-	if (!pgqs_track_constants)
-		PG_RETURN_NULL();
-
-	queryKey.queryid = queryid;
-
-	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
-	entry = hash_search_with_hash_value(pgqs_query_examples_hash, &queryKey,
-										queryid, HASH_FIND, &found);
-	PGQS_LWL_RELEASE(pgqs->querylock);
-
-	if (found)
-		PG_RETURN_TEXT_P(cstring_to_text(entry->querytext));
-	else
-		PG_RETURN_NULL();
 }
 
 Datum

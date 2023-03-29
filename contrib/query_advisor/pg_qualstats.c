@@ -118,6 +118,7 @@ extern PGDLLEXPORT void		_PG_init(void);
 
 extern PGDLLEXPORT Datum pg_qualstats_reset(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats(PG_FUNCTION_ARGS);
+extern PGDLLEXPORT Datum pg_qualstats_status(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_2_0(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_names(PG_FUNCTION_ARGS);
 extern PGDLLEXPORT Datum pg_qualstats_names_2_0(PG_FUNCTION_ARGS);
@@ -128,6 +129,7 @@ extern PGDLLEXPORT Datum pg_qualstats_generate_advise(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(pg_qualstats_reset);
 PG_FUNCTION_INFO_V1(pg_qualstats);
+PG_FUNCTION_INFO_V1(pg_qualstats_status);
 PG_FUNCTION_INFO_V1(pg_qualstats_2_0);
 PG_FUNCTION_INFO_V1(pg_qualstats_names);
 PG_FUNCTION_INFO_V1(pg_qualstats_names_2_0);
@@ -2136,10 +2138,6 @@ pg_qualstats_example_queries(PG_FUNCTION_ARGS)
 
 	MemoryContextSwitchTo(oldcontext);
 
-	/* don't need to scan the hash table if track_constants isn't enabled */
-	if (!pgqs_track_constants)
-		return (Datum) 0;
-
 	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
 	hash_seq_init(&hash_seq, pgqs_query_examples_hash);
 
@@ -2158,6 +2156,70 @@ pg_qualstats_example_queries(PG_FUNCTION_ARGS)
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	}
+
+	PGQS_LWL_RELEASE(pgqs->querylock);
+
+	return (Datum) 0;
+}
+
+Datum
+pg_qualstats_status(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	Datum		values[2];
+	bool		nulls[2];
+
+	if ((!pgqs && !pgqs_backend) || !pgqs_query_examples_hash)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("pg_qualstats must be loaded via shared_preload_libraries")));
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not " \
+						"allowed in this context")));
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	memset(values, 0, sizeof(values));
+	memset(nulls, 0, sizeof(nulls));
+
+	MemoryContextSwitchTo(oldcontext);
+
+	PGQS_LWL_ACQUIRE(pgqs->lock, LW_SHARED);
+	values[0] = CStringGetTextDatum("query_advisor_qual_hash");
+	values[1] = Float4GetDatum((float4) hash_get_num_entries(pgqs_hash) * 100 / pgqs_max_qual);
+	tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+
+	PGQS_LWL_RELEASE(pgqs->lock);
+
+	PGQS_LWL_ACQUIRE(pgqs->querylock, LW_SHARED);
+	values[0] = CStringGetTextDatum("query_advisor_workload_hash");
+	values[1] = Float4GetDatum((float4) hash_get_num_entries(pgqs_query_examples_hash) * 100 / pgqs_max_qual);
+	tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+
+	values[0] = CStringGetTextDatum("query_advisor_update_hash");
+	values[1] = Float4GetDatum((float4) hash_get_num_entries(pgqs_update_hash) * 100 / pgqs_max_qual);
+	tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 
 	PGQS_LWL_RELEASE(pgqs->querylock);
 

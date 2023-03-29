@@ -128,6 +128,16 @@ AS 'MODULE_PATHNAME', 'pg_qualstats_2_0'
 LANGUAGE C STRICT VOLATILE;
 
 /*"""
+.. function query_advisor_workload_queries()
+
+  Returns all the workload queries with their associated queryid
+*/
+CREATE FUNCTION query_advisor_qualstats_memory_usage(OUT storage_name text, OUT usage_percentages float4)
+RETURNS SETOF record
+AS 'MODULE_PATHNAME', 'pg_qualstats_status'
+LANGUAGE C;
+
+/*"""
 .. function:: query_advisor_qualstats_names()
 
   This function is the same as query_advisor_qualstats, but with additional columns corresponding

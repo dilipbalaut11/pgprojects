@@ -90,7 +90,7 @@ PG_MODULE_MAGIC;
 								 * pg_qualstats_column SRF */
 #define PGQS_USAGE_DEALLOC_PERCENT	5	/* free this % of entries at once */
 #define PGQS_MAX_DEFAULT	100000	/* default pgqs_max value */
-#define PGQS_MAX_LOCAL_ENTRIES	(pgqs_max * 0.2)	/* do not track more of
+#define PGQS_MAX_LOCAL_ENTRIES	(pgqs_max_qual * 0.2)	/* do not track more of
 													 * 20% of possible entries
 													 * in shared mem */
 
@@ -171,9 +171,12 @@ static uint32 pgqs_uint32_hashfn(const void *key, Size keysize);
 
 bool pgqs_backend = false;
 static int	pgqs_query_size;
-static int	pgqs_max = PGQS_MAX_DEFAULT;			/* max # statements to track */
-static bool pgqs_track_pgcatalog;	/* track queries on pg_catalog */
-static bool pgqs_resolve_oids;	/* resolve oids */
+static int	pgqs_max_qual = PGQS_MAX_DEFAULT;		/* max # statements to track */
+static int	pgqs_max_workload = PGQS_MAX_DEFAULT;	/* max # statements to track */
+static int	pgqs_max_update = PGQS_MAX_DEFAULT;		/* max # statements to track */
+
+static bool pgqs_track_pgcatalog = false;	/* track queries on pg_catalog */
+static bool pgqs_resolve_oids = false;	/* resolve oids */
 static bool pgqs_enabled;
 static bool pgqs_track_constants = true;
 static double pgqs_sample_rate;
@@ -287,7 +290,7 @@ _PG_init(void)
 	prev_explain_get_index_name_hook = explain_get_index_name_hook;
 	explain_get_index_name_hook = hypo_explain_get_index_name_hook;
 
-	DefineCustomBoolVariable("advisor.enabled",
+	DefineCustomBoolVariable("query_advisor.enabled",
 							 "Enable / Disable pg_qualstats",
 							 NULL,
 							 &pgqs_enabled,
@@ -298,10 +301,10 @@ _PG_init(void)
 							 NULL,
 							 NULL);
 
-	DefineCustomIntVariable("advisor.max_entries",
-							"Sets the maximum number of statements tracked by pg_qualstats.",
+	DefineCustomIntVariable("query_advisor.max_qual_entries",
+							"Sets the maximum number of qual stats tracked by query_advisor.",
 							NULL,
-							&pgqs_max,
+							&pgqs_max_qual,
 							PGQS_MAX_DEFAULT,
 							100,
 							INT_MAX,
@@ -311,30 +314,34 @@ _PG_init(void)
 							NULL,
 							NULL);
 
-	if (!pgqs_backend)
-		DefineCustomBoolVariable("pg_qualstats.resolve_oids",
-								 "Store names alongside the oid. Eats MUCH more space!",
-								 NULL,
-								 &pgqs_resolve_oids,
-								 false,
-								 PGC_POSTMASTER,
-								 0,
-								 NULL,
-								 NULL,
-								 NULL);
+		DefineCustomIntVariable("query_advisor.max_workload_entries",
+							"Sets the maximum number of statements workload queries tracked by query_advisor.",
+							NULL,
+							&pgqs_max_workload,
+							PGQS_MAX_DEFAULT,
+							100,
+							INT_MAX,
+							pgqs_backend ? PGC_USERSET : PGC_POSTMASTER,
+							0,
+							NULL,
+							NULL,
+							NULL);
 
-	DefineCustomBoolVariable("pg_qualstats.track_pg_catalog",
-							 "Track quals on system catalogs too.",
-							 NULL,
-							 &pgqs_track_pgcatalog,
-							 false,
-							 PGC_USERSET,
-							 0,
-							 NULL,
-							 NULL,
-							 NULL);
+		DefineCustomIntVariable("query_advisor.max_update_entries",
+							"Sets the maximum number of update quals tracked by pg_qualstats.",
+							NULL,
+							&pgqs_max_update,
+							PGQS_MAX_DEFAULT,
+							100,
+							INT_MAX,
+							pgqs_backend ? PGC_USERSET : PGC_POSTMASTER,
+							0,
+							NULL,
+							NULL,
+							NULL);
 
-	DefineCustomRealVariable("advisor.sample_rate",
+
+	DefineCustomRealVariable("query_advisor.sample_rate",
 							 "Sampling rate. 1 means every query, 0.2 means 1 in five queries",
 							 NULL,
 							 &pgqs_sample_rate,
@@ -347,7 +354,7 @@ _PG_init(void)
 							 NULL,
 							 NULL);
 
-	DefineCustomIntVariable("advisor.min_err_estimate_ratio",
+	DefineCustomIntVariable("query_advisor.min_err_estimate_ratio",
 							"Error estimation ratio threshold to save quals",
 							NULL,
 							&pgqs_min_err_ratio,
@@ -360,7 +367,7 @@ _PG_init(void)
 							NULL,
 							NULL);
 
-	DefineCustomIntVariable("advisor.min_err_estimate_num",
+	DefineCustomIntVariable("query_advisor.min_err_estimate_num",
 							"Error estimation num threshold to save quals",
 							NULL,
 							&pgqs_min_err_num,
@@ -373,7 +380,7 @@ _PG_init(void)
 							NULL,
 							NULL);
 
-	EmitWarningsOnPlaceholders("pg_qualstats");
+	EmitWarningsOnPlaceholders("query_advisor");
 
 	parse_int(GetConfigOption("track_activity_query_size", false, false),
 			  &pgqs_query_size, 0, NULL);
@@ -680,12 +687,12 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 			PGQS_LWL_RELEASE(pgqs->querylock);
 			PGQS_LWL_ACQUIRE(pgqs->querylock, LW_EXCLUSIVE);
 
-			if (hash_get_num_entries(pgqs_query_examples_hash) >= pgqs_max)
+			if (hash_get_num_entries(pgqs_query_examples_hash) >= pgqs_max_workload)
 			{
 				ereport(WARNING,
 						(errcode(ERRCODE_OUT_OF_MEMORY),
 						 errmsg("workload hash table is full so current query is skipped"),
-						 errhint("reset the stats or increase value of pgqs_max and restart")));
+						 errhint("reset the stats or increase value of pgqs_max_workload and restart")));
 				PGQS_LWL_RELEASE(pgqs->querylock);
 
 				goto cleanup;
@@ -756,12 +763,12 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 			PGQS_LWL_ACQUIRE(pgqs->lock, LW_EXCLUSIVE);
 
 			if (hash_get_num_entries(pgqs_hash) +
-				hash_get_num_entries(pgqs_localhash) >= pgqs_max)
+				hash_get_num_entries(pgqs_localhash) >= pgqs_max_qual)
 			{
 				ereport(WARNING,
 						(errcode(ERRCODE_OUT_OF_MEMORY),
 						 errmsg("qual hash table is full so current quals are skipped"),
-						 errhint("reset the stats or increase value of pgqs_max and restart")));
+						 errhint("reset the stats or increase value of pgqs_max_qual and restart")));
 				PGQS_LWL_RELEASE(pgqs->lock);
 
 				goto cleanup;
@@ -1679,12 +1686,12 @@ pgqs_backend_mode_startup(void)
 	info.hash = pgqs_hash_fn;
 
 	pgqs_hash = hash_create("pg_qualstatements_hash",
-							 pgqs_max,
+							 pgqs_max_qual,
 							 &info,
 							 HASH_ELEM | HASH_FUNCTION | HASH_CONTEXT);
 
 	pgqs_query_examples_hash = hash_create("pg_qualqueryexamples_hash",
-											 pgqs_max,
+											 pgqs_max_workload,
 											 &queryinfo,
 
 /* On PG > 9.5, use the HASH_BLOBS optimization for uint32 keys. */
@@ -1695,7 +1702,7 @@ pgqs_backend_mode_startup(void)
 #endif
 
 	pgqs_update_hash = hash_create("pg_update_hash",
-									pgqs_max,
+									pgqs_max_update,
 									&updateinfo,
 									HASH_ELEM | HASH_FUNCTION | HASH_CONTEXT);
 }
@@ -1772,12 +1779,13 @@ pgqs_shmem_startup(void)
 	queryinfo.hash = pgqs_uint32_hashfn;
 #endif
 	pgqs_hash = ShmemInitHash("pg_qualstatements_hash",
-							  pgqs_max, pgqs_max,
+							  pgqs_max_qual, pgqs_max_qual,
 							  &info,
 							  HASH_ELEM | HASH_FUNCTION | HASH_FIXED_SIZE);
 
 	pgqs_query_examples_hash = ShmemInitHash("pg_qualqueryexamples_hash",
-											 pgqs_max, pgqs_max,
+											 pgqs_max_workload,
+											 pgqs_max_workload,
 											 &queryinfo,
 
 /* On PG > 9.5, use the HASH_BLOBS optimization for uint32 keys. */
@@ -1788,10 +1796,9 @@ pgqs_shmem_startup(void)
 #endif
 
 	pgqs_update_hash = ShmemInitHash("pg_update_hash",
-									 pgqs_max, pgqs_max,
+									 pgqs_max_update, pgqs_max_update,
 									 &updateinfo,
 									 HASH_ELEM | HASH_FUNCTION | HASH_FIXED_SIZE);
-	//pgqs_read_dumpfile();
 	LWLockRelease(AddinShmemInitLock);
 }
 
@@ -2311,9 +2318,9 @@ pgqs_memsize(void)
 
 	size = MAXALIGN(sizeof(pgqsSharedState));
 	if (pgqs_resolve_oids)
-		size = add_size(size, hash_estimate_size(pgqs_max, sizeof(pgqsEntryWithNames)));
+		size = add_size(size, hash_estimate_size(pgqs_max_qual, sizeof(pgqsEntryWithNames)));
 	else
-		size = add_size(size, hash_estimate_size(pgqs_max, sizeof(pgqsEntry)));
+		size = add_size(size, hash_estimate_size(pgqs_max_qual, sizeof(pgqsEntry)));
 
 	if (pgqs_track_constants)
 	{
@@ -2321,10 +2328,10 @@ pgqs_memsize(void)
 		 * In that case, we also need an additional struct for storing
 		 * non-normalized queries.
 		 */
-		size = add_size(size, hash_estimate_size(pgqs_max,
+		size = add_size(size, hash_estimate_size(pgqs_max_workload,
 												 sizeof(pgqsQueryStringEntry) + pgqs_query_size * sizeof(char)));
 	}
-	size = add_size(size, hash_estimate_size(pgqs_max,
+	size = add_size(size, hash_estimate_size(pgqs_max_update,
 											 sizeof(pgqsUpdateHashEntry)));	
 #if PG_VERSION_NUM >= 90600
 	size = add_size(size, MAXALIGN(pgqs_sampled_array_size()));
@@ -2517,12 +2524,12 @@ pgqsInsertOverheadHash(ModifyTable *node, pgqsWalkerContext *context)
 			key.attnum = targetattnum;
 			key.queryid = context->queryId;
 
-			if (hash_get_num_entries(pgqs_update_hash) + 1 >= pgqs_max)
+			if (hash_get_num_entries(pgqs_update_hash) + 1 >= pgqs_max_update)
 			{
 				ereport(WARNING,
 						(errcode(ERRCODE_OUT_OF_MEMORY),
 						 errmsg("update hash table is full so current updates are skipped"),
-						 errhint("reset the stats or increase value of pgqs_max and restart")));
+						 errhint("reset the stats or increase value of pgqs_max_update and restart")));
 
 				PGQS_LWL_RELEASE(pgqs->querylock);
 

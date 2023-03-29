@@ -765,8 +765,8 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 
 			PGQS_LWL_ACQUIRE(pgqs->lock, LW_EXCLUSIVE);
 
-			while (hash_get_num_entries(pgqs_hash) +
-				   hash_get_num_entries(pgqs_localhash) >= pgqs_max)
+			if (hash_get_num_entries(pgqs_hash) +
+				hash_get_num_entries(pgqs_localhash) >= pgqs_max)
 			{
 				ereport(WARNING,
 						(errcode(ERRCODE_OUT_OF_MEMORY),
@@ -2561,7 +2561,7 @@ pgqsInsertOverheadHash(ModifyTable *node, pgqsWalkerContext *context)
 			key.attnum = targetattnum;
 			key.queryid = context->queryId;
 
-			while (hash_get_num_entries(pgqs_update_hash) + 1 >= pgqs_max)
+			if (hash_get_num_entries(pgqs_update_hash) + 1 >= pgqs_max)
 			{
 				ereport(WARNING,
 						(errcode(ERRCODE_OUT_OF_MEMORY),

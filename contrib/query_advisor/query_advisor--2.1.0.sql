@@ -1,37 +1,37 @@
 /*"""
-.. function:: advisor_index_recommendations()
+.. function:: query_advisor_index_recommendations()
 
   Generates index advises based on quals collected so far
 */
 
-CREATE FUNCTION advisor_index_recommendations(min_filter integer DEFAULT 1000, min_selectivity integer DEFAULT 30)
+CREATE FUNCTION query_advisor_index_recommendations(min_filter integer DEFAULT 1000, min_selectivity integer DEFAULT 30)
 RETURNS SETOF text
-AS 'MODULE_PATHNAME', 'advisor_index_recommendations'
+AS 'MODULE_PATHNAME', 'query_advisor_index_recommendations'
 LANGUAGE C;
 
 
 /*"""
-.. function:: advisor_qualstats_reset()
+.. function:: query_advisor_qualstats_reset()
 
   Resets statistics gathered by advisor.
 */
-CREATE FUNCTION advisor_qualstats_reset()
+CREATE FUNCTION query_advisor_qualstats_reset()
 RETURNS void
 AS 'MODULE_PATHNAME', 'pg_qualstats_reset'
 LANGUAGE C;
 
 /*"""
-.. function advisor_workload_queries()
+.. function query_advisor_workload_queries()
 
   Returns all the workload queries with their associated queryid
 */
-CREATE FUNCTION advisor_workload_queries(OUT queryid bigint, OUT query text, OUT frequency int)
+CREATE FUNCTION query_advisor_workload_queries(OUT queryid bigint, OUT query text, OUT frequency int)
 RETURNS SETOF record
 AS 'MODULE_PATHNAME', 'pg_qualstats_example_queries'
 LANGUAGE C;
 
 /*"""
-.. function:: advisor_qualstats()
+.. function:: query_advisor_qualstats()
 
   Returns:
     A SETOF record containing the data gathered by pg_qualstats
@@ -95,7 +95,7 @@ LANGUAGE C;
         or ``i`` if it was evaluated as an index predicate. If the qual is evaluated as an index predicate,
         then the nbfiltered value will most likely be 0, except if there was any rechecked conditions.
 */
-CREATE FUNCTION advisor_qualstats(
+CREATE FUNCTION query_advisor_qualstats(
   OUT userid oid,
   OUT dbid oid,
   OUT lrelid oid,
@@ -128,13 +128,13 @@ AS 'MODULE_PATHNAME', 'pg_qualstats_2_0'
 LANGUAGE C STRICT VOLATILE;
 
 /*"""
-.. function:: advisor_qualstats_names()
+.. function:: query_advisor_qualstats_names()
 
-  This function is the same as advisor_qualstats, but with additional columns corresponding
-  to the resolved names, if ``advisor_qualstats.resolve_oids`` is set to ``true``.
+  This function is the same as query_advisor_qualstats, but with additional columns corresponding
+  to the resolved names, if ``query_advisor_qualstats.resolve_oids`` is set to ``true``.
 
   Returns:
-    The same set of columns than :func:`advisor_qualstats()`, plus the following ones:
+    The same set of columns than :func:`query_advisor_qualstats()`, plus the following ones:
 
     rolname (text):
       the name of the role executing the query. Corresponds to userid.
@@ -147,7 +147,7 @@ LANGUAGE C STRICT VOLATILE;
     opname (text):
       the name of the operator. Corresponds to opno.
 */
-CREATE FUNCTION advisor_qualstats_names(
+CREATE FUNCTION query_advisor_qualstats_names(
   OUT userid oid,
   OUT dbid oid,
   OUT lrelid oid,
@@ -189,23 +189,23 @@ LANGUAGE C STRICT VOLATILE;
 
 -- Register a view on the function for ease of use.
 /*"""
-.. view:: advisor_qualstats
+.. view:: query_advisor_qualstats
 
-  This view is just a simple wrapper on the :func:`advisor_qualstats()` function, filtering on the current database for convenience.
+  This view is just a simple wrapper on the :func:`query_advisor_qualstats()` function, filtering on the current database for convenience.
 */
-CREATE VIEW advisor_qualstats AS
-  SELECT qs.* FROM advisor_qualstats() qs
+CREATE VIEW query_advisor_qualstats AS
+  SELECT qs.* FROM query_advisor_qualstats() qs
   INNER JOIN pg_database on qs.dbid = pg_database.oid
   WHERE pg_database.datname = current_database();
 
 
-GRANT SELECT ON advisor_qualstats TO PUBLIC;
+GRANT SELECT ON query_advisor_qualstats TO PUBLIC;
 
 -- Don't want this to be available to non-superusers.
-REVOKE ALL ON FUNCTION advisor_qualstats_reset() FROM PUBLIC;
+REVOKE ALL ON FUNCTION query_advisor_qualstats_reset() FROM PUBLIC;
 
 /*"""
-.. view:: advisor_qualstats_pretty
+.. view:: query_advisor_qualstats_pretty
 
   This view resolves oid "on the fly", for the current database.
 
@@ -229,7 +229,7 @@ REVOKE ALL ON FUNCTION advisor_qualstats_reset() FROM PUBLIC;
     nbfiltered (bigint):
       the total number of tuples filtered by this qual.
 */
-CREATE VIEW advisor_qualstats_pretty AS
+CREATE VIEW query_advisor_qualstats_pretty AS
   select
         nl.nspname as left_schema,
         al.attrelid::regclass as left_table,
@@ -241,7 +241,7 @@ CREATE VIEW advisor_qualstats_pretty AS
         sum(occurences) as occurences,
         sum(execution_count) as execution_count,
         sum(nbfiltered) as nbfiltered
-  from advisor_qualstats qs
+  from query_advisor_qualstats qs
   left join (pg_class cl inner join pg_namespace nl on nl.oid = cl.relnamespace) on cl.oid = qs.lrelid
   left join (pg_class cr inner join pg_namespace nr on nr.oid = cr.relnamespace) on cr.oid = qs.rrelid
   left join pg_attribute al on al.attrelid = qs.lrelid and al.attnum = qs.lattnum
@@ -250,7 +250,7 @@ CREATE VIEW advisor_qualstats_pretty AS
 ;
 
 
-CREATE OR REPLACE VIEW advisor_qualstats_all AS
+CREATE OR REPLACE VIEW query_advisor_qualstats_all AS
   SELECT dbid, relid, userid, queryid, array_agg(distinct attnum) as attnums,
     opno, max(qualid) as qualid, sum(occurences) as occurences,
     sum(execution_count) as execution_count, sum(nbfiltered) as nbfiltered,
@@ -272,7 +272,7 @@ CREATE OR REPLACE VIEW advisor_qualstats_all AS
           qs.execution_count as execution_count,
           qs.nbfiltered as nbfiltered,
           qs.queryid
-    FROM advisor_qualstats() qs
+    FROM query_advisor_qualstats() qs
     WHERE lrelid IS NOT NULL or rrelid IS NOT NULL
   ) t GROUP BY dbid, relid, userid, queryid, opno, coalesce(qualid, qualnodeid)
 ;
@@ -289,7 +289,7 @@ CREATE OR REPLACE VIEW advisor_qualstats_all AS
     opno (oid):
       the operator oid
     eval_type (char):
-      the evaluation type. See :func:`advisor_qualstats()` for an explanation of the eval_type.
+      the evaluation type. See :func:`query_advisor_qualstats()` for an explanation of the eval_type.
 */
 CREATE TYPE qual AS (
   relid oid,
@@ -312,7 +312,7 @@ CREATE TYPE qual AS (
     opname (text):
       the operator name
     eval_type (char):
-      the evaluation type. See :func:`advisor_qualstats()` for an explanation of the eval_type.
+      the evaluation type. See :func:`query_advisor_qualstats()` for an explanation of the eval_type.
 */
 CREATE TYPE qualname AS (
   relname text,

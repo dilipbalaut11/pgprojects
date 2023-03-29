@@ -31,17 +31,17 @@ PG_FUNCTION_INFO_V1(query_advisor_index_recommendations);
 #define DEBUG_INDEX_ADVISOR
 
 /*
- * If 'advisor_disable_stats' is set to indicate the pg_qualstats's executor
+ * If 'qa_disable_stats' is set to indicate the pg_qualstats's executor
  * hook to not to collect the stattistics for those queries because those
  * are just executed by index advisor in order to evaluate the indexes.
  */
-bool advisor_disable_stats = false;
+bool qa_disable_stats = false;
 
 /* 
  * Advisor's planner hook will store the cost of the last planned query in
- * 'advisor_plan_cost' variable.
+ * 'qa_plan_cost' variable.
  */
-static float advisor_plan_cost = 0.0;
+static float qa_plan_cost = 0.0;
 planner_hook_type prev_planner_hook = NULL;
 
 /* Index candidate information */
@@ -167,40 +167,40 @@ char *query =
 "\nSELECT * FROM filtered where amname='btree' OR amname='brin' ORDER BY relid, amname DESC, cardinality(attnumlist);";
 
 /* static function declarations */
-static char **advisor_generate_advise(MemoryContext per_query_ctx,
-									  int min_filter,
-									  int min_selectivity,
-									  int *nindexes);
-static char **advisor_process_rel(char **prevarray,
-										CandidateInfo *candidates,
-										int ncandidates, int *nindexes,
-										MemoryContext per_query_ctx);
-static int advisor_iterative(IndexAdvisorContext *context);
-static QueryInfo *advisor_get_queries(CandidateInfo *candidates,
-											int ncandidates, int *nqueries);
-static bool advisor_is_queryid_exists(int64 *queryids, int nqueryids,
-									  int64 queryid, int *idx);
-static char *advisor_get_query(int64 queryid, int *freq);
-static CandidateInfo *advisor_get_final_candidates(CandidateInfo *candidates,
-								   						  int *ncandidates);
-static bool advisor_is_candidate_exists(CandidateInfo *candidates,
-											  CandidateInfo *cand,
-											  int ncandidates);
-static bool advisor_is_index_exists(Relation rel, CandidateInfo *cand);
-static void advisor_remove_existing_candidates(CandidateInfo *candidates,
-													 int ncandidates);
+static char **qa_generate_advise(MemoryContext per_query_ctx,
+								 int min_filter,
+								 int min_selectivity,
+								 int *nindexes);
+static char **qa_process_rel(char **prevarray,
+							 CandidateInfo *candidates,
+							 int ncandidates, int *nindexes,
+							 MemoryContext per_query_ctx);
+static int qa_iterative(IndexAdvisorContext *context);
+static QueryInfo *qa_get_queries(CandidateInfo *candidates,
+								 int ncandidates, int *nqueries);
+static bool qa_is_queryid_exists(int64 *queryids, int nqueryids,
+								 int64 queryid, int *idx);
+static char *qa_get_query(int64 queryid, int *freq);
+static CandidateInfo *qa_get_final_candidates(CandidateInfo *candidates,
+											  int *ncandidates);
+static bool qa_is_candidate_exists(CandidateInfo *candidates,
+								   CandidateInfo *cand,
+								   int ncandidates);
+static bool qa_is_index_exists(Relation rel, CandidateInfo *cand);
+static void qa_remove_existing_candidates(CandidateInfo *candidates,
+										  int ncandidates);
 
-static void advisor_get_updates(CandidateInfo *candidates,
+static void qa_get_updates(CandidateInfo *candidates,
+						   int ncandidates);
+
+static bool qa_generate_index_queries(CandidateInfo *candidates,
 									  int ncandidates);
-
-static bool advisor_generate_index_queries(CandidateInfo *candidates,
-												 int ncandidates);
-static void advisor_set_basecost(QueryInfo *queryinfos, int nqueries);
-static void advisor_plan_query(const char *query);
-static void advisor_compute_index_benefit(IndexAdvisorContext *context,
-												int nqueries, int *queryidxs);
-static double advisor_get_index_overhead(CandidateInfo *cand, Oid idxid);
-static int advisor_get_best_candidate(IndexAdvisorContext *context);
+static void qa_set_basecost(QueryInfo *queryinfos, int nqueries);
+static void qa_plan_query(const char *query);
+static void qa_compute_index_benefit(IndexAdvisorContext *context,
+									 int nqueries, int *queryidxs);
+static double qa_get_index_overhead(CandidateInfo *cand, Oid idxid);
+static int qa_get_best_candidate(IndexAdvisorContext *context);
 
 #ifdef DEBUG_INDEX_ADVISOR
 static void print_candidates(CandidateInfo *candidates, int ncandidates);
@@ -229,10 +229,10 @@ query_advisor_index_recommendations(PG_FUNCTION_ARGS)
 		funcctx = SRF_FIRSTCALL_INIT();
 
 		/* generate index advises and save it for subsequent calls */
-		funcctx->user_fctx = advisor_generate_advise(per_query_ctx,
-													 min_filter,
-													 min_selectivity,
-													 &nindexes);
+		funcctx->user_fctx = qa_generate_advise(per_query_ctx,
+												min_filter,
+												min_selectivity,
+												&nindexes);
 		funcctx->max_calls = nindexes;
 		funcctx->call_cntr = 0;
 	}
@@ -251,8 +251,8 @@ query_advisor_index_recommendations(PG_FUNCTION_ARGS)
  * send them to the core index advisor machinary for the further processing.
  */
 static char **
-advisor_generate_advise(MemoryContext per_query_ctx, int min_filter,
-						int min_selectivity, int *nindexes)
+qa_generate_advise(MemoryContext per_query_ctx, int min_filter,
+				   int min_selectivity, int *nindexes)
 {
 	int			ret;
 	int			i;
@@ -331,10 +331,10 @@ advisor_generate_advise(MemoryContext per_query_ctx, int min_filter,
 	{
 		if (OidIsValid(prevrelid) && prevrelid != candidates[i].relid)
 		{
-			index_array = advisor_process_rel(index_array,
-													&candidates[idxcand],
-													nrelcand, nindexes,
-													per_query_ctx);
+			index_array = qa_process_rel(index_array,
+										 &candidates[idxcand],
+										 nrelcand, nindexes,
+										 per_query_ctx);
 			nrelcand = 0;
 			idxcand = i;
 		}
@@ -343,10 +343,10 @@ advisor_generate_advise(MemoryContext per_query_ctx, int min_filter,
 	}
 
 	/* process candidates of the last relation */
-	index_array = advisor_process_rel(index_array,
-											&candidates[idxcand],
-											nrelcand, nindexes,
-											per_query_ctx);
+	index_array = qa_process_rel(index_array,
+								 &candidates[idxcand],
+								 nrelcand, nindexes,
+								 per_query_ctx);
 
 	SPI_finish();
 
@@ -364,9 +364,9 @@ advisor_generate_advise(MemoryContext per_query_ctx, int min_filter,
  * best candidates list.
  */
 static char **
-advisor_process_rel(char **prevarray, CandidateInfo *candidates,
-					int ncandidates, int *nindexes,
-					MemoryContext per_query_ctx)
+qa_process_rel(char **prevarray, CandidateInfo *candidates,
+			   int ncandidates, int *nindexes,
+			   MemoryContext per_query_ctx)
 {
 	CandidateInfo   *finalcand;
 	QueryInfo   *queryinfos;
@@ -386,7 +386,7 @@ advisor_process_rel(char **prevarray, CandidateInfo *candidates,
 	 * Process all candidate and get the list of all the unique queryids along
 	 * with the actual queries.
 	 */
-	queryinfos = advisor_get_queries(candidates, ncandidates, &nqueries);
+	queryinfos = qa_get_queries(candidates, ncandidates, &nqueries);
 
 	/*
 	 * Process all candidates and generate all distinct one and two column
@@ -397,21 +397,21 @@ advisor_process_rel(char **prevarray, CandidateInfo *candidates,
 	 * candidates which can increasing the time complexity.  In future if
 	 * required we can consider candidates with more columns.
 	 */
-	finalcand = advisor_get_final_candidates(candidates, &ncandidates);
-	advisor_remove_existing_candidates(finalcand, ncandidates);
+	finalcand = qa_get_final_candidates(candidates, &ncandidates);
+	qa_remove_existing_candidates(finalcand, ncandidates);
 
 	/*
 	 * Process all the candidates and get the total update count we are
 	 * performing on key attributes for each candidate.
 	 */
-	advisor_get_updates(finalcand, ncandidates);
+	qa_get_updates(finalcand, ncandidates);
 
 	/*
 	 * Generate index creation statement for each candidate.  We need to output
 	 * the index statements so store them in per query context.
 	 */
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
-	if (!advisor_generate_index_queries(finalcand, ncandidates))
+	if (!qa_generate_index_queries(finalcand, ncandidates))
 		return prevarray;
 	MemoryContextSwitchTo(oldcontext);
 
@@ -431,7 +431,7 @@ advisor_process_rel(char **prevarray, CandidateInfo *candidates,
 	 * Process index candidates with iterative approach and find out the best
 	 * candidates which can produce maximum benefit to the workload queries.
 	 */
-	nnewindexes = advisor_iterative(&context);
+	nnewindexes = qa_iterative(&context);
 
 	/*
 	 * No index selected for this relation so directly return the previous
@@ -467,7 +467,7 @@ advisor_process_rel(char **prevarray, CandidateInfo *candidates,
  * Iterative approach for finding the best set of indexes.
  */
 int
-advisor_iterative(IndexAdvisorContext *context)
+qa_iterative(IndexAdvisorContext *context)
 {
 	int			i;
 	int			ncandidates = context->ncandidates;
@@ -505,7 +505,7 @@ advisor_iterative(IndexAdvisorContext *context)
 	 * also note that in this round the previously selected candidate are out
 	 * of the selection process.
 	 */
-	advisor_set_basecost(queryinfos, nqueries);
+	qa_set_basecost(queryinfos, nqueries);
 	while (true)
 	{
 		int		bestcand;
@@ -515,7 +515,7 @@ advisor_iterative(IndexAdvisorContext *context)
 		 * Create each index one at a time and replan every query and fill
 		 * index-query benefit matrix.
 		 */
-		advisor_compute_index_benefit(context, nqueries, queryidxs);
+		qa_compute_index_benefit(context, nqueries, queryidxs);
 
 #ifdef DEBUG_INDEX_ADVISOR
 		print_benefit_matrix(context);
@@ -525,7 +525,7 @@ advisor_iterative(IndexAdvisorContext *context)
 		 * Compute the overall benefit of all the candidate and get the  best
 		 * candidate.
 		 */
-		bestcand = advisor_get_best_candidate(context);
+		bestcand = qa_get_best_candidate(context);
 		if (bestcand == -1)
 			break;
 
@@ -584,8 +584,8 @@ advisor_iterative(IndexAdvisorContext *context)
  * workload hash and store in query info.
  */
 static QueryInfo *
-advisor_get_queries(CandidateInfo *candidates, int ncandidates,
-						  int *nqueries)
+qa_get_queries(CandidateInfo *candidates, int ncandidates,
+			   int *nqueries)
 {
 	int			i;
 	int			j;
@@ -608,8 +608,8 @@ advisor_get_queries(CandidateInfo *candidates, int ncandidates,
 		{
 			int index = -1;
 
-			if (advisor_is_queryid_exists(queryids, nids, cand->queryids[j],
-										  &index))
+			if (qa_is_queryid_exists(queryids, nids, cand->queryids[j],
+									 &index))
 				continue;
 
 			if (nids >= maxids)
@@ -627,8 +627,8 @@ advisor_get_queries(CandidateInfo *candidates, int ncandidates,
 	/* get the actual query and execution frequency for each queryid */
 	for (i = 0; i < nids; i++)
 	{
-		queryinfos[i].query = advisor_get_query(queryids[i],
-													  &queryinfos[i].frequency);
+		queryinfos[i].query = qa_get_query(queryids[i],
+										   &queryinfos[i].frequency);
 #ifdef DEBUG_INDEX_ADVISOR
 		elog(NOTICE, "query %d: %s-freq:%d", i, queryinfos[i].query, queryinfos[i].frequency);
 #endif
@@ -642,8 +642,8 @@ advisor_get_queries(CandidateInfo *candidates, int ncandidates,
 }
 
 static bool
-advisor_is_queryid_exists(int64 *queryids, int nqueryids, int64 queryid,
-						  int *idx)
+qa_is_queryid_exists(int64 *queryids, int nqueryids, int64 queryid,
+					 int *idx)
 {
 	int			i;
 
@@ -660,7 +660,7 @@ advisor_is_queryid_exists(int64 *queryids, int nqueryids, int64 queryid,
 }
 
 static char *
-advisor_get_query(int64 queryid, int *freq)
+qa_get_query(int64 queryid, int *freq)
 {
 	pgqsQueryStringEntry   *entry;
 	pgqsQueryStringHashKey	queryKey;
@@ -703,8 +703,7 @@ advisor_get_query(int64 queryid, int *freq)
  * index candidate array.
  */
 static CandidateInfo *
-advisor_get_final_candidates(CandidateInfo *candidates,
-								   int *ncandidates)
+qa_get_final_candidates(CandidateInfo *candidates, int *ncandidates)
 {
 	CandidateInfo *finalcand;
 	CandidateInfo	cand;
@@ -731,7 +730,7 @@ advisor_get_final_candidates(CandidateInfo *candidates,
 			cand.attnum = (int *) palloc0(sizeof(int));
 			cand.attnum[0] = candidates[i].attnum[j];
 
-			if (!advisor_is_candidate_exists(finalcand, &cand, nfinalcand))
+			if (!qa_is_candidate_exists(finalcand, &cand, nfinalcand))
 			{
 				/*
 				 * If the number of elements are already equal to the max size
@@ -765,7 +764,7 @@ advisor_get_final_candidates(CandidateInfo *candidates,
 				 * we can consider this as duplicate (no need to check strict
 				 * column order)
 				 */
-				if (!advisor_is_candidate_exists(finalcand, &cand, nfinalcand))
+				if (!qa_is_candidate_exists(finalcand, &cand, nfinalcand))
 				{
 					if (nfinalcand == nmaxcand)
 					{
@@ -789,7 +788,7 @@ advisor_get_final_candidates(CandidateInfo *candidates,
  * Check whether the inpute candidate already present in the candidate array.
  */
 static bool
-advisor_is_candidate_exists(CandidateInfo *candidates,
+qa_is_candidate_exists(CandidateInfo *candidates,
 								  CandidateInfo *cand,
 								  int ncandidates)
 {
@@ -821,7 +820,7 @@ advisor_is_candidate_exists(CandidateInfo *candidates,
  * attributes as input candidate.
  */
 static bool
-advisor_is_index_exists(Relation rel, CandidateInfo *cand)
+qa_is_index_exists(Relation rel, CandidateInfo *cand)
 {
 	ListCell   *lc;
 	List	   *index_oids = RelationGetIndexList(rel);
@@ -876,7 +875,7 @@ advisor_is_index_exists(Relation rel, CandidateInfo *cand)
  * of the index advisor alorithm.
  */
 static void
-advisor_remove_existing_candidates(CandidateInfo *candidates,
+qa_remove_existing_candidates(CandidateInfo *candidates,
 										 int ncandidates)
 {
 	Relation	relation;
@@ -890,7 +889,7 @@ advisor_remove_existing_candidates(CandidateInfo *candidates,
 	{
 		CandidateInfo *cand = &candidates[i];
 
-		if (advisor_is_index_exists(relation, cand))
+		if (qa_is_index_exists(relation, cand))
 			cand->isvalid = false;
 	}
 
@@ -902,7 +901,7 @@ advisor_remove_existing_candidates(CandidateInfo *candidates,
  * each index candidates based on the index column update counts.
  */
 static void
-advisor_get_updates(CandidateInfo *candidates, int ncandidates)
+qa_get_updates(CandidateInfo *candidates, int ncandidates)
 {
 	HASH_SEQ_STATUS 		hash_seq;
 	int64	   *qrueryid_done;
@@ -979,7 +978,7 @@ advisor_get_updates(CandidateInfo *candidates, int ncandidates)
  * candidate structure for later use.
  */
 static bool
-advisor_generate_index_queries(CandidateInfo *candidates, int ncandidates)
+qa_generate_index_queries(CandidateInfo *candidates, int ncandidates)
 {
 	int		i;
 	int		j;
@@ -1024,29 +1023,29 @@ advisor_generate_index_queries(CandidateInfo *candidates, int ncandidates)
  * query.
  */
 static void
-advisor_set_basecost(QueryInfo *queryinfos, int nqueries)
+qa_set_basecost(QueryInfo *queryinfos, int nqueries)
 {
 	int		i;
 
 	/* enable cost tracking before planning queries */
-	advisor_disable_stats = true;
+	qa_disable_stats = true;
 
 	/* 
 	 * plan each query and get its cost
 	 */
 	for (i = 0; i < nqueries; i++)
 	{
-		advisor_plan_query(queryinfos[i].query);
-		queryinfos[i].cost = advisor_plan_cost;
+		qa_plan_query(queryinfos[i].query);
+		queryinfos[i].cost = qa_plan_cost;
 	}
 
 	/* disable cost tracking */
-	advisor_disable_stats = false;
+	qa_disable_stats = false;
 }
 
 /* Plan a given query */
 static void
-advisor_plan_query(const char *query)
+qa_plan_query(const char *query)
 {
 	StringInfoData	explainquery;
 
@@ -1073,8 +1072,8 @@ advisor_plan_query(const char *query)
  * candidate.
  */
 static void
-advisor_compute_index_benefit(IndexAdvisorContext *context,
-							  int nqueries, int *queryidxs)
+qa_compute_index_benefit(IndexAdvisorContext *context,
+						 int nqueries, int *queryidxs)
 {
 	int 	ncandidates = context->ncandidates;
 	int		i;
@@ -1086,7 +1085,7 @@ advisor_compute_index_benefit(IndexAdvisorContext *context,
 	 * Make sure qualstats does not collect statistics for queries executed
 	 * by the advisor.
 	 */
-	advisor_disable_stats = true;
+	qa_disable_stats = true;
 
 	/*
 	 * Loop through each candidate and Replan all the queries indexed by the
@@ -1112,14 +1111,14 @@ advisor_compute_index_benefit(IndexAdvisorContext *context,
 
 		/* If candidate's overhead is not yet computed then do it now */
 		if (cand->overhead == 0)
-			cand->overhead = advisor_get_index_overhead(cand, relpages);
+			cand->overhead = qa_get_index_overhead(cand, relpages);
 
 		/* replan each query and update benefit matrix */
 		for (j = 0; j < nqueries; j++)
 		{
 			int		qidx = (queryidxs != NULL) ? queryidxs[j] : j;
 
-			advisor_plan_query(queryinfos[qidx].query);
+			qa_plan_query(queryinfos[qidx].query);
 
 			/*
 			 * If the index reduces the cost at least by 5% and the cost with
@@ -1128,10 +1127,10 @@ advisor_compute_index_benefit(IndexAdvisorContext *context,
 			 * and update the benefit matrix slot with the plan cost reduction.
 			 * Otherwise, set the benefit to 0.
 			 */
-			if ((advisor_plan_cost < queryinfos[qidx].cost * 0.95) &&
-				(advisor_plan_cost + cand->overhead < queryinfos[qidx].cost))
+			if ((qa_plan_cost < queryinfos[qidx].cost * 0.95) &&
+				(qa_plan_cost + cand->overhead < queryinfos[qidx].cost))
 			{
-				benefit[qidx][i] = queryinfos[qidx].cost - advisor_plan_cost;
+				benefit[qidx][i] = queryinfos[qidx].cost - qa_plan_cost;
 			}
 			else
 				benefit[qidx][i] = 0;
@@ -1141,14 +1140,14 @@ advisor_compute_index_benefit(IndexAdvisorContext *context,
 		hypo_index_remove(idxid);
 	}
 
-	advisor_disable_stats = false;
+	qa_disable_stats = false;
 }
 
 /*
  * Compute the overhead of given candidate index
  */
 static double
-advisor_get_index_overhead(CandidateInfo *cand, BlockNumber relpages)
+qa_get_index_overhead(CandidateInfo *cand, BlockNumber relpages)
 {
 	double		T = relpages;
 	double		index_pages;
@@ -1180,7 +1179,7 @@ advisor_get_index_overhead(CandidateInfo *cand, BlockNumber relpages)
  * which is generating maximum total benefit.
  */
 static int
-advisor_get_best_candidate(IndexAdvisorContext *context)
+qa_get_best_candidate(IndexAdvisorContext *context)
 {
 	CandidateInfo   *candidates = context->candidates;
 	QueryInfo	    *queryinfos = context->queryinfos;
@@ -1224,11 +1223,11 @@ advisor_get_best_candidate(IndexAdvisorContext *context)
 
 /* planner hook */
 PlannedStmt *
-advisor_planner(Query *parse,
+qa_planner(Query *parse,
 #if PG_VERSION_NUM >= 130000
-		 		const char *query_string,
+		  const char *query_string,
 #endif
-		 		int cursorOptions, ParamListInfo boundParams)
+		  int cursorOptions, ParamListInfo boundParams)
 {
 	PlannedStmt *result;
 
@@ -1249,7 +1248,7 @@ advisor_planner(Query *parse,
 					  boundParams);
 
 	/* remember the plan cost */
-	advisor_plan_cost = result->planTree->total_cost;
+	qa_plan_cost = result->planTree->total_cost;
 
 	return result;
 }

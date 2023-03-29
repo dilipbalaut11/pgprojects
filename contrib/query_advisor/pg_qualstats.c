@@ -283,7 +283,7 @@ _PG_init(void)
 #endif
 
 	prev_planner_hook = planner_hook;
-	planner_hook = advisor_planner;
+	planner_hook = qa_planner;
 	prev_ExecutorStart = ExecutorStart_hook;
 	ExecutorStart_hook = pgqs_ExecutorStart;
 	prev_ExecutorRun = ExecutorRun_hook;
@@ -514,7 +514,7 @@ pgqs_ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
 	/* Setup instrumentation */
 	if (pgqs_enabled  && strlen(queryDesc->sourceText) < pgqs_query_size &&
-		!advisor_disable_stats)
+		!qa_disable_stats)
 	{
 		/*
 		 * For rate sampling, randomly choose top-level statement. Either all
@@ -635,7 +635,7 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 	bool		found;
 
 	if ((pgqs || pgqs_backend) && pgqs_enabled && pgqs_is_query_sampled() &&
-		!advisor_disable_stats
+		!qa_disable_stats
 #if PG_VERSION_NUM >= 90600
 		&& (!IsParallelWorker())
 #endif

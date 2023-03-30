@@ -4,8 +4,13 @@
   Generates index advises based on quals collected so far
 */
 
-CREATE FUNCTION query_advisor_index_recommendations(min_filter integer DEFAULT 1000, min_selectivity integer DEFAULT 30)
-RETURNS SETOF text
+CREATE FUNCTION query_advisor_index_recommendations(
+	min_filter integer DEFAULT 1000,
+	min_selectivity integer DEFAULT 30,
+	OUT index text,
+	OUT estimated_size_in_bytes int8,
+	OUT estimated_pct_cost_reduction float4)
+RETURNS SETOF record
 AS 'MODULE_PATHNAME', 'query_advisor_index_recommendations'
 LANGUAGE C;
 

@@ -28,7 +28,7 @@ extern PGDLLEXPORT Datum query_advisor_index_recommendations(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(query_advisor_index_recommendations);
 
 /* define this to enable the developer level debugging informations */
-#define DEBUG_INDEX_ADVISOR
+//#define DEBUG_INDEX_ADVISOR
 
 /*
  * If 'qa_disable_stats' is set to indicate the pg_qualstats's executor
@@ -44,6 +44,15 @@ bool qa_disable_stats = false;
 static float qa_plan_cost = 0.0;
 planner_hook_type prev_planner_hook = NULL;
 
+/* Array of the final selected indexes */
+typedef struct FinalIndexInfo
+{
+	char   *indexstmt;
+	float4	pctcostbenefit;
+	int64	size;
+
+} FinalIndexInfo;
+
 /* Index candidate information */
 typedef struct CandidateInfo
 {
@@ -58,10 +67,10 @@ typedef struct CandidateInfo
 							   involved in this candididate */
 	int		nupdatefreq;	/* frequency of the updates on candidate keys */
 	double	overhead;		/* overhead of the candidate */
-	char   *indexstmt;		/* ddl statement for creating index for the
-							   candidate */
 	bool	isvalid;		/* is candidate still valid (not rejected)*/
 	bool	isselected;		/* is candidate already selected in final list */
+	FinalIndexInfo indexinfo; /* index related info which we want to give as
+								 final output. */
 } CandidateInfo;
 
 /* workload query information */
@@ -167,14 +176,15 @@ char *query =
 "\nSELECT * FROM filtered where amname='btree' OR amname='brin' ORDER BY relid, amname DESC, cardinality(attnumlist);";
 
 /* static function declarations */
-static char **qa_generate_advise(MemoryContext per_query_ctx,
-								 int min_filter,
-								 int min_selectivity,
-								 int *nindexes);
-static char **qa_process_rel(char **prevarray,
-							 CandidateInfo *candidates,
-							 int ncandidates, int *nindexes,
-							 MemoryContext per_query_ctx);
+static FinalIndexInfo *qa_generate_advise(MemoryContext per_query_ctx,
+										  int min_filter,
+										  int min_selectivity,
+										  int *nindexes);
+
+static FinalIndexInfo *qa_process_rel(FinalIndexInfo *previnxinfos,
+									  CandidateInfo *candidates,
+									  int ncandidates, int *nindexes,
+									  MemoryContext per_query_ctx);
 static int qa_iterative(IndexAdvisorContext *context);
 static QueryInfo *qa_get_queries(CandidateInfo *candidates,
 								 int ncandidates, int *nqueries);
@@ -195,12 +205,13 @@ static void qa_get_updates(CandidateInfo *candidates,
 
 static bool qa_generate_index_queries(CandidateInfo *candidates,
 									  int ncandidates);
-static void qa_set_basecost(QueryInfo *queryinfos, int nqueries);
+static double qa_set_basecost(QueryInfo *queryinfos, int nqueries);
 static void qa_plan_query(const char *query);
 static void qa_compute_index_benefit(IndexAdvisorContext *context,
 									 int nqueries, int *queryidxs);
 static double qa_get_index_overhead(CandidateInfo *cand, Oid idxid);
-static int qa_get_best_candidate(IndexAdvisorContext *context);
+static int qa_get_best_candidate(IndexAdvisorContext *context,
+								 double *benefit);
 
 #ifdef DEBUG_INDEX_ADVISOR
 static void print_candidates(CandidateInfo *candidates, int ncandidates);
@@ -218,15 +229,30 @@ query_advisor_index_recommendations(PG_FUNCTION_ARGS)
 	int			min_selectivity = PG_GETARG_INT32(1);
 	int			nindexes = 0;
 	int			counter;
-	char	  **index_array;
+	FinalIndexInfo *indexinfo;
 	ReturnSetInfo  *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	FuncCallContext *funcctx;
 
 	if (SRF_IS_FIRSTCALL())
 	{
+		TupleDesc		tupdesc;
+		MemoryContext	oldctx;
 		MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
 
 		funcctx = SRF_FIRSTCALL_INIT();
+
+		oldctx = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+		tupdesc = CreateTemplateTupleDesc(3);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "index",
+						   TEXTOID, -1, 0);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "estimated_size_in_bytes",
+						   INT8OID, -1, 0);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "estimated_pct_cost_reduction",
+						   FLOAT4OID, -1, 0);
+
+		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
+		MemoryContextSwitchTo(oldctx);
 
 		/* generate index advises and save it for subsequent calls */
 		funcctx->user_fctx = qa_generate_advise(per_query_ctx,
@@ -237,11 +263,27 @@ query_advisor_index_recommendations(PG_FUNCTION_ARGS)
 		funcctx->call_cntr = 0;
 	}
 	funcctx = SRF_PERCALL_SETUP();
-	index_array = (char **) funcctx->user_fctx;
+	indexinfo = (FinalIndexInfo*) funcctx->user_fctx;
 	counter = funcctx->call_cntr;
 
 	if (counter < funcctx->max_calls)
-		SRF_RETURN_NEXT(funcctx, CStringGetTextDatum(index_array[counter]));
+	{
+		Datum		values[3];
+		bool		nulls[3];
+		HeapTuple	tuple;
+		Datum		result;
+
+		MemSet(nulls, 0, sizeof(nulls));
+
+		values[0] = CStringGetTextDatum(indexinfo[counter].indexstmt);
+		values[1] = Int64GetDatum(indexinfo[counter].size);
+		values[2] = Float4GetDatum(indexinfo[counter].pctcostbenefit);
+
+		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
+		result = HeapTupleGetDatum(tuple);
+
+		SRF_RETURN_NEXT(funcctx, result);
+	}
 
 	SRF_RETURN_DONE(funcctx);
 }
@@ -250,7 +292,7 @@ query_advisor_index_recommendations(PG_FUNCTION_ARGS)
  * This function will execute the query and generate the index candidates and
  * send them to the core index advisor machinary for the further processing.
  */
-static char **
+static FinalIndexInfo *
 qa_generate_advise(MemoryContext per_query_ctx, int min_filter,
 				   int min_selectivity, int *nindexes)
 {
@@ -260,9 +302,10 @@ qa_generate_advise(MemoryContext per_query_ctx, int min_filter,
 	int			nrelcand = 0;
 	int			idxcand = 0;
 	Oid			prevrelid = InvalidOid;
-	char	  **index_array;
 	TupleDesc	tupdesc;
-	CandidateInfo *candidates;
+	CandidateInfo  *candidates;
+	FinalIndexInfo *indexinfo;
+
 	Oid paramTypes[2] = { INT4OID, INT4OID };
 	Datum paramValues[1];
 
@@ -331,10 +374,10 @@ qa_generate_advise(MemoryContext per_query_ctx, int min_filter,
 	{
 		if (OidIsValid(prevrelid) && prevrelid != candidates[i].relid)
 		{
-			index_array = qa_process_rel(index_array,
-										 &candidates[idxcand],
-										 nrelcand, nindexes,
-										 per_query_ctx);
+			indexinfo = qa_process_rel(indexinfo,
+									   &candidates[idxcand],
+									   nrelcand, nindexes,
+									   per_query_ctx);
 			nrelcand = 0;
 			idxcand = i;
 		}
@@ -343,19 +386,19 @@ qa_generate_advise(MemoryContext per_query_ctx, int min_filter,
 	}
 
 	/* process candidates of the last relation */
-	index_array = qa_process_rel(index_array,
-								 &candidates[idxcand],
-								 nrelcand, nindexes,
-								 per_query_ctx);
+	indexinfo = qa_process_rel(indexinfo,
+							   &candidates[idxcand],
+							   nrelcand, nindexes,
+							   per_query_ctx);
 
 	SPI_finish();
 
-	return index_array;
+	return indexinfo;
 }
 
 /*
  * Process index candidate and generate advise for one relation and append them
- * to a '**prevarray' which is a common array for all the relations.
+ * to a '*previnxinfos' which is a common array for all the relations.
  *
  * This functions do various processing with the input candidate like generate
  * workload queries, generate 1 and 2 column index candidates from these
@@ -363,16 +406,15 @@ qa_generate_advise(MemoryContext per_query_ctx, int min_filter,
  * and finally send them to a iterative index selection method to find out the
  * best candidates list.
  */
-static char **
-qa_process_rel(char **prevarray, CandidateInfo *candidates,
-			   int ncandidates, int *nindexes,
-			   MemoryContext per_query_ctx)
+static FinalIndexInfo *
+qa_process_rel(FinalIndexInfo *previnxinfos, CandidateInfo *candidates,
+			   int ncandidates, int *nindexes, MemoryContext per_query_ctx)
 {
 	CandidateInfo   *finalcand;
 	QueryInfo   *queryinfos;
 	IndexAdvisorContext	context;
 	MemoryContext 		oldcontext;
-	char  **index_array = NULL;
+	FinalIndexInfo	   *indexinfos = NULL;
 	int		nqueries;
 	int		nnewindexes;
 	int		prev_indexes = *nindexes;
@@ -412,7 +454,7 @@ qa_process_rel(char **prevarray, CandidateInfo *candidates,
 	 */
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
 	if (!qa_generate_index_queries(finalcand, ncandidates))
-		return prevarray;
+		return previnxinfos;
 	MemoryContextSwitchTo(oldcontext);
 
 #ifdef DEBUG_INDEX_ADVISOR
@@ -438,7 +480,7 @@ qa_process_rel(char **prevarray, CandidateInfo *candidates,
 	 * array.
 	 */
 	if (nnewindexes == 0)
-		return prevarray;
+		return previnxinfos;
 
 	(*nindexes) += nnewindexes;
 
@@ -448,19 +490,22 @@ qa_process_rel(char **prevarray, CandidateInfo *candidates,
 	 */
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
 	if (prev_indexes == 0)
-		index_array = (char **) palloc(nnewindexes * sizeof(char *));
+		indexinfos = (FinalIndexInfo *) palloc(nnewindexes * sizeof(FinalIndexInfo));
 	else
-		index_array = (char ** ) repalloc(prevarray, (*nindexes) * sizeof(char *));
+		indexinfos = (FinalIndexInfo* ) repalloc(previnxinfos, (*nindexes) * sizeof(FinalIndexInfo));
 	MemoryContextSwitchTo(oldcontext);
 
 	/* append new indexes to the existing index array */
 	for (i = 0; i < ncandidates; i++)
 	{
 		if (finalcand[i].isselected)
-			index_array[prev_indexes++] = finalcand[i].indexstmt;
+		{
+			memcpy(&indexinfos[prev_indexes++], &finalcand[i].indexinfo,
+				   sizeof(FinalIndexInfo));
+		}
 	}
 
-	return index_array;
+	return indexinfos;
 }
 
 /*
@@ -474,6 +519,7 @@ qa_iterative(IndexAdvisorContext *context)
 	int			nseletced = 0;
 	int			nqueries = context->nqueries;
 	int		   *queryidxs = NULL;
+	double		totalcost;
 	QueryInfo  *queryinfos = context->queryinfos;
 	CandidateInfo *candidates = context->candidates;
 
@@ -505,11 +551,14 @@ qa_iterative(IndexAdvisorContext *context)
 	 * also note that in this round the previously selected candidate are out
 	 * of the selection process.
 	 */
-	qa_set_basecost(queryinfos, nqueries);
+	totalcost = qa_set_basecost(queryinfos, nqueries);
 	while (true)
 	{
 		int		bestcand;
 		int		i;
+		float4	pct_benefit;
+		double  benefit;
+		BlockNumber	relpages;
 
 		/*
 		 * Create each index one at a time and replan every query and fill
@@ -525,7 +574,7 @@ qa_iterative(IndexAdvisorContext *context)
 		 * Compute the overall benefit of all the candidate and get the  best
 		 * candidate.
 		 */
-		bestcand = qa_get_best_candidate(context);
+		bestcand = qa_get_best_candidate(context, &benefit);
 		if (bestcand == -1)
 			break;
 
@@ -536,7 +585,11 @@ qa_iterative(IndexAdvisorContext *context)
 		 * index is already exist now and check benefit of each candidate by
 		 * assuming this candidate is already finalized.
 		 */
-		hypo_create_index(candidates[bestcand].indexstmt, NULL);
+		hypo_create_index(candidates[bestcand].indexinfo.indexstmt, &relpages);
+		candidates[bestcand].indexinfo.size = relpages * BLCKSZ;
+
+		pct_benefit =  (benefit / totalcost) * 100;
+		candidates[bestcand].indexinfo.pctcostbenefit = pct_benefit;
 
 		/*
 		 * Allocate the memory to remember the query indexes which got
@@ -1010,8 +1063,8 @@ qa_generate_index_queries(CandidateInfo *candidates, int ncandidates)
 		}
 
 		appendStringInfo(&buf, ");");
-		cand->indexstmt = palloc(buf.len + 1);
-		strcpy(cand->indexstmt, buf.data);
+		cand->indexinfo.indexstmt = palloc(buf.len + 1);
+		strcpy(cand->indexinfo.indexstmt, buf.data);
 		resetStringInfo(&buf);
 	}
 	RelationClose(rel);
@@ -1022,10 +1075,11 @@ qa_generate_index_queries(CandidateInfo *candidates, int ncandidates)
  * Plan all given queries without any new index and fill base cost for each
  * query.
  */
-static void
+static double
 qa_set_basecost(QueryInfo *queryinfos, int nqueries)
 {
 	int		i;
+	double	total_cost = 0.0;
 
 	/* enable cost tracking before planning queries */
 	qa_disable_stats = true;
@@ -1037,10 +1091,13 @@ qa_set_basecost(QueryInfo *queryinfos, int nqueries)
 	{
 		qa_plan_query(queryinfos[i].query);
 		queryinfos[i].cost = qa_plan_cost;
+		total_cost += qa_plan_cost;
 	}
 
 	/* disable cost tracking */
 	qa_disable_stats = false;
+
+	return total_cost;
 }
 
 /* Plan a given query */
@@ -1107,7 +1164,7 @@ qa_compute_index_benefit(IndexAdvisorContext *context,
 			continue;
 
 		/* create a hypothetical index for the candidate before replanning */
-		idxid = hypo_create_index(cand->indexstmt, &relpages);
+		idxid = hypo_create_index(cand->indexinfo.indexstmt, &relpages);
 
 		/* If candidate's overhead is not yet computed then do it now */
 		if (cand->overhead == 0)
@@ -1179,7 +1236,7 @@ qa_get_index_overhead(CandidateInfo *cand, BlockNumber relpages)
  * which is generating maximum total benefit.
  */
 static int
-qa_get_best_candidate(IndexAdvisorContext *context)
+qa_get_best_candidate(IndexAdvisorContext *context, double *cost_benefit)
 {
 	CandidateInfo   *candidates = context->candidates;
 	QueryInfo	    *queryinfos = context->queryinfos;
@@ -1217,6 +1274,8 @@ qa_get_best_candidate(IndexAdvisorContext *context)
 			bestcandidx = i;
 		}
 	}
+
+	*cost_benefit = max_benefit;
 
 	return bestcandidx;
 }
@@ -1262,7 +1321,7 @@ print_candidates(CandidateInfo *candidates, int ncandidates)
 
 	for (i = 0; i < ncandidates; i++)
 	{
-		elog(NOTICE, "Index: %s: update: %lld freq: %d valid:%d", candidates[i].indexstmt,
+		elog(NOTICE, "Index: %s: update: %lld freq: %d valid:%d", candidates[i].indexinfo.indexstmt,
 			 (long long int) candidates[i].nupdates, candidates[i].nupdatefreq, candidates[i].isvalid);
 	}
 }

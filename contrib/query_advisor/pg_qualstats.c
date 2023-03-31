@@ -154,11 +154,17 @@ static void pgqs_ExecutorRun(QueryDesc *queryDesc,
 );
 static void pgqs_ExecutorFinish(QueryDesc *queryDesc);
 static void pgqs_ExecutorEnd(QueryDesc *queryDesc);
+static void pgqs_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
+								bool readOnlyTree,
+								ProcessUtilityContext context, ParamListInfo params,
+								QueryEnvironment *queryEnv,
+								DestReceiver *dest, QueryCompletion *qc);
 
 static ExecutorStart_hook_type prev_ExecutorStart = NULL;
 static ExecutorRun_hook_type prev_ExecutorRun = NULL;
 static ExecutorFinish_hook_type prev_ExecutorFinish = NULL;
 static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
+static ProcessUtility_hook_type prev_ProcessUtility = NULL;
 #if PG_VERSION_NUM >= 150000
 static shmem_request_hook_type prev_shmem_request_hook = NULL;
 #endif
@@ -180,6 +186,7 @@ static int	pgqs_max_update = PGQS_MAX_DEFAULT;		/* max # statements to track */
 static bool pgqs_track_pgcatalog = false;	/* track queries on pg_catalog */
 static bool pgqs_resolve_oids = false;	/* resolve oids */
 static bool pgqs_enabled;
+static bool	is_utility = false;
 static bool pgqs_track_constants = true;
 static double pgqs_sample_rate;
 static int	pgqs_min_err_ratio;
@@ -287,6 +294,8 @@ _PG_init(void)
 	ExecutorFinish_hook = pgqs_ExecutorFinish;
 	prev_ExecutorEnd = ExecutorEnd_hook;
 	ExecutorEnd_hook = pgqs_ExecutorEnd;
+	prev_ProcessUtility = ProcessUtility_hook;
+	ProcessUtility_hook = pgqs_ProcessUtility;
 	prev_get_relation_info_hook = get_relation_info_hook;
 	get_relation_info_hook = hypo_get_relation_info_hook;
 	prev_explain_get_index_name_hook = explain_get_index_name_hook;
@@ -513,7 +522,7 @@ pgqs_ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
 	/* Setup instrumentation */
 	if (pgqs_enabled  && strlen(queryDesc->sourceText) < pgqs_query_size &&
-		!qa_disable_stats)
+		queryDesc->params == NULL && !qa_disable_stats)
 	{
 		/*
 		 * For rate sampling, randomly choose top-level statement. Either all
@@ -634,7 +643,9 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 	bool		found;
 
 	if ((pgqs || pgqs_backend) && pgqs_enabled && pgqs_is_query_sampled() &&
-		!qa_disable_stats
+		!qa_disable_stats &&
+		!(is_utility &&
+		  !(queryDesc->estate->es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY))
 #if PG_VERSION_NUM >= 90600
 		&& (!IsParallelWorker())
 #endif
@@ -815,6 +826,29 @@ cleanup:
 		prev_ExecutorEnd(queryDesc);
 	else
 		standard_ExecutorEnd(queryDesc);
+}
+
+/*
+ * ProcessUtility hook
+ */
+static void
+pgqs_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
+					bool readOnlyTree,
+					ProcessUtilityContext context,
+					ParamListInfo params, QueryEnvironment *queryEnv,
+					DestReceiver *dest, QueryCompletion *qc)
+{
+	is_utility = true;
+
+	if (prev_ProcessUtility)
+		prev_ProcessUtility(pstmt, queryString, readOnlyTree,
+							context, params, queryEnv,
+							dest, qc);
+	else
+		standard_ProcessUtility(pstmt, queryString, readOnlyTree,
+								context, params, queryEnv,
+								dest, qc);
+	is_utility = false;
 }
 
 /* Initialize all non-key fields of the given entry. */

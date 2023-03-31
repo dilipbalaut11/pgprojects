@@ -1768,7 +1768,7 @@ hypo_create_index(char *sql, BlockNumber *relpages)
 	List	   *parsetree_list;
 	ListCell   *parsetree_item;
 	int			i = 1;
-	Oid			idxid;
+	Oid			idxid = InvalidOid;
 
 	parsetree_list = pg_parse_query(sql);
 

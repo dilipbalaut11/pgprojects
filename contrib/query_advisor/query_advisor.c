@@ -304,10 +304,9 @@ qa_generate_advise(MemoryContext per_query_ctx, int min_filter,
 	Oid			prevrelid = InvalidOid;
 	TupleDesc	tupdesc;
 	CandidateInfo  *candidates;
-	FinalIndexInfo *indexinfo;
-
-	Oid paramTypes[2] = { INT4OID, INT4OID };
-	Datum paramValues[1];
+	FinalIndexInfo *indexinfo = NULL;
+	Oid		paramTypes[2] = { INT4OID, INT4OID };
+	Datum	paramValues[2];
 
 	if ((ret = SPI_connect()) < 0)
 		elog(ERROR, "pg_qualstat: SPI_connect returned %d", ret);
@@ -956,6 +955,7 @@ qa_remove_existing_candidates(CandidateInfo *candidates,
 static void
 qa_get_updates(CandidateInfo *candidates, int ncandidates)
 {
+#if PG_VERSION_NUM >= 140000	
 	HASH_SEQ_STATUS 		hash_seq;
 	int64	   *qrueryid_done;
 	int64		nupdates = 0;
@@ -1024,6 +1024,7 @@ qa_get_updates(CandidateInfo *candidates, int ncandidates)
 	}
 
 	PGQS_LWL_RELEASE(pgqs->querylock);
+#endif	
 }
 
 /*

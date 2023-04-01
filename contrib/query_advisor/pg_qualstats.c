@@ -522,7 +522,7 @@ pgqs_ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
 	/* Setup instrumentation */
 	if (pgqs_enabled  && strlen(queryDesc->sourceText) < pgqs_query_size &&
-		queryDesc->params == NULL && !qa_disable_stats)
+		!qa_disable_stats)
 	{
 		/*
 		 * For rate sampling, randomly choose top-level statement. Either all
@@ -645,7 +645,8 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 	if ((pgqs || pgqs_backend) && pgqs_enabled && pgqs_is_query_sampled() &&
 		!qa_disable_stats &&
 		!(is_utility &&
-		  !(queryDesc->estate->es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY))
+		  !(queryDesc->estate->es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY &&
+		    queryDesc->params == NULL))
 #if PG_VERSION_NUM >= 90600
 		&& (!IsParallelWorker())
 #endif
@@ -840,15 +841,22 @@ pgqs_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 {
 	is_utility = true;
 
-	if (prev_ProcessUtility)
-		prev_ProcessUtility(pstmt, queryString, readOnlyTree,
-							context, params, queryEnv,
-							dest, qc);
-	else
-		standard_ProcessUtility(pstmt, queryString, readOnlyTree,
+	PG_TRY();
+	{
+		if (prev_ProcessUtility)
+			prev_ProcessUtility(pstmt, queryString, readOnlyTree,
 								context, params, queryEnv,
 								dest, qc);
-	is_utility = false;
+		else
+			standard_ProcessUtility(pstmt, queryString, readOnlyTree,
+									context, params, queryEnv,
+									dest, qc);
+	}
+	PG_FINALLY();
+	{
+		is_utility = false;
+	}
+	PG_END_TRY();
 }
 
 /* Initialize all non-key fields of the given entry. */

@@ -288,6 +288,44 @@ query_advisor_index_recommendations(PG_FUNCTION_ARGS)
 	SRF_RETURN_DONE(funcctx);
 }
 
+static void
+qa_plan_query_test()
+{
+	Oid		*paramTypes = palloc0(sizeof(Oid));
+	int		numparam;
+	List *parseTreeList;
+	Node *parseTreeNode;
+	List *queryTreeList;
+	Query *query;
+	PlannedStmt *plan;
+	double cost;
+	char *querytext = "SELECT * FROM TEST WHERE a=$1 AND b=$2";
+ 
+	parseTreeList = pg_parse_query(querytext);
+	if (list_length(parseTreeList) != 1)
+	{
+		ereport(ERROR, (errmsg("cannot execute multiple utility events")));
+	}
+
+	parseTreeNode = (Node *) linitial(parseTreeList);
+
+	queryTreeList = pg_analyze_and_rewrite_varparams(parseTreeNode,
+					  querytext,
+					  &paramTypes,
+					  &numparam,
+					  NULL);
+
+	if (list_length(queryTreeList) != 1)
+	{
+		ereport(ERROR, (errmsg("can only execute a single query")));
+	}
+
+	query = (Query *) linitial(queryTreeList);
+	plan = pg_plan_query(query, querytext, 0, NULL);
+	cost = plan->planTree->total_cost;
+	elog(WARNING, "cost = %f", cost);
+}
+
 /* 
  * This function will execute the query and generate the index candidates and
  * send them to the core index advisor machinary for the further processing.
@@ -729,19 +767,9 @@ qa_get_query(int64 queryid, int *freq)
 		PGQS_LWL_RELEASE(pgqs->querylock);
 		return NULL;
 	}
-	if (entry->isExplain)
-	{
-		query = palloc0(entry->qrylen);
-		strcpy(query, entry->querytext);
-	}
-	else
-	{
-		int		explainlen = strlen("EXPLAIN ");
 
-		query = palloc0(explainlen + entry->qrylen);
-		strncpy(query, "EXPLAIN ", explainlen);
-		strcpy(query + explainlen, entry->querytext);
-	}
+	query = palloc0(entry->qrylen);
+	strcpy(query, entry->querytext);
 
 	*freq = entry->frequency;
 
@@ -1101,6 +1129,7 @@ qa_set_basecost(QueryInfo *queryinfos, int nqueries)
 	return total_cost;
 }
 
+#if 0
 /* Plan a given query */
 static void
 qa_plan_query(const char *query)
@@ -1122,6 +1151,44 @@ qa_plan_query(const char *query)
 
 	/* diable hypo index injection */
 	hypo_is_enabled = false;
+}
+#endif
+
+static void
+qa_plan_query(const char *querytext)
+{
+	Oid		*paramTypes = palloc0(sizeof(Oid));
+	int		numparam = 0;
+	List *parseTreeList;
+	Node *parseTreeNode;
+	List *queryTreeList;
+	Query *query;
+	PlannedStmt *plan;
+ 
+ 	if (querytext == NULL)
+		return;
+
+	parseTreeList = pg_parse_query(querytext);
+	if (list_length(parseTreeList) != 1)
+	{
+		ereport(ERROR, (errmsg("cannot execute multiple utility events")));
+	}
+
+	parseTreeNode = (Node *) linitial(parseTreeList);
+
+	queryTreeList = pg_analyze_and_rewrite_varparams(parseTreeNode,
+													 querytext,
+													 &paramTypes,
+													 &numparam,
+													 NULL);
+	if (list_length(queryTreeList) != 1)
+		ereport(ERROR, (errmsg("can only execute a single query")));
+
+	query = (Query *) linitial(queryTreeList);
+	hypo_is_enabled = true;
+	plan = pg_plan_query(query, querytext, 0, NULL);
+	hypo_is_enabled = false;
+	qa_plan_cost = plan->planTree->total_cost;
 }
 
 /*

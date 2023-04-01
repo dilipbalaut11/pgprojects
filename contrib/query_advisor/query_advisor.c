@@ -207,7 +207,8 @@ static void qa_get_updates(CandidateInfo *candidates,
 static bool qa_generate_index_queries(CandidateInfo *candidates,
 									  int ncandidates);
 static double qa_set_basecost(QueryInfo *queryinfos, int nqueries);
-static void qa_plan_query(const char *query);
+static bool qa_plan_query(QueryInfo *queryinfo, bool *have_internal_subtxn,
+			  			  MemoryContext oldcontext, ResourceOwner oldowner);
 static void qa_compute_index_benefit(IndexAdvisorContext *context,
 									 int nqueries, int *queryidxs);
 static double qa_get_index_overhead(CandidateInfo *cand, Oid idxid);
@@ -1084,29 +1085,13 @@ qa_set_basecost(QueryInfo *queryinfos, int nqueries)
 	 */
 	for (i = 0; i < nqueries; i++)
 	{
-		if (!have_internal_subtxn)
-		{
-			BeginInternalSubTransaction(NULL);
-			MemoryContextSwitchTo(oldcontext);
-			have_internal_subtxn = true;
-		}
 
-		PG_TRY();
-		{
-			qa_plan_query(queryinfos[i].query);
-			queryinfos[i].cost = qa_plan_cost;
-			total_cost += qa_plan_cost;
-		}
-		PG_CATCH();
-		{
-			/* Abort the inner transaction */
-			FlushErrorState();
-			RollbackAndReleaseCurrentSubTransaction();
-			MemoryContextSwitchTo(oldcontext);
-			have_internal_subtxn = false;
-			queryinfos[i].failed = true;
-		}
-		PG_END_TRY();
+		if (!qa_plan_query(&queryinfos[i], &have_internal_subtxn, oldcontext,
+						   oldowner))
+			continue;
+
+		queryinfos[i].cost = qa_plan_cost;
+		total_cost += qa_plan_cost;
 	}
 
 	if (have_internal_subtxn)
@@ -1148,41 +1133,64 @@ qa_plan_query(const char *query)
 }
 #endif
 
-static void
-qa_plan_query(const char *querytext)
+static bool
+qa_plan_query(QueryInfo *queryinfo, bool *have_internal_subtxn,
+			  MemoryContext oldcontext, ResourceOwner oldowner)
 {
-	Oid		*paramTypes = palloc0(sizeof(Oid));
-	int		numparam = 0;
-	List *parseTreeList;
-	Node *parseTreeNode;
-	List *queryTreeList;
-	Query *query;
-	PlannedStmt *plan;
- 
- 	if (querytext == NULL)
-		return;
-
-	parseTreeList = pg_parse_query(querytext);
-	if (list_length(parseTreeList) != 1)
+	if (!(*have_internal_subtxn))
 	{
-		ereport(ERROR, (errmsg("cannot execute multiple utility events")));
+		BeginInternalSubTransaction(NULL);
+		MemoryContextSwitchTo(oldcontext);
+		*have_internal_subtxn = true;
 	}
 
-	parseTreeNode = (Node *) linitial(parseTreeList);
+	PG_TRY();
+	{
+		Oid	   *paramTypes = palloc0(sizeof(Oid));
+		int		numparam = 0;
+		List   *parseTreeList = NULL;
+		Node   *parseTreeNode;
+		List   *queryTreeList = NULL;
+		Query  *query;
+		char   *querytext = queryinfo->query;
+		PlannedStmt *plan;
 
-	queryTreeList = pg_analyze_and_rewrite_varparams(parseTreeNode,
-													 querytext,
-													 &paramTypes,
-													 &numparam,
-													 NULL);
-	if (list_length(queryTreeList) != 1)
-		ereport(ERROR, (errmsg("can only execute a single query")));
+		parseTreeList = pg_parse_query(querytext);
+		if (list_length(parseTreeList) != 1)
+			ereport(ERROR, (errmsg("cannot execute multiple utility events")));
 
-	query = (Query *) linitial(queryTreeList);
-	hypo_is_enabled = true;
-	plan = pg_plan_query(query, querytext, 0, NULL);
-	hypo_is_enabled = false;
-	qa_plan_cost = plan->planTree->total_cost;
+		parseTreeNode = (Node *) linitial(parseTreeList);
+
+		queryTreeList = pg_analyze_and_rewrite_varparams((RawStmt *) parseTreeNode,
+														 querytext,
+														 &paramTypes,
+														 &numparam,
+														 NULL);
+		if (list_length(queryTreeList) != 1)
+			ereport(ERROR, (errmsg("can only execute a single query")));
+
+		query = (Query *) linitial(queryTreeList);
+		hypo_is_enabled = true;
+		plan = pg_plan_query(query, querytext, 0, NULL);
+		hypo_is_enabled = false;
+		qa_plan_cost = plan->planTree->total_cost;
+	}
+	PG_CATCH();
+	{
+		/* Abort the inner transaction */
+		FlushErrorState();
+		RollbackAndReleaseCurrentSubTransaction();
+		MemoryContextSwitchTo(oldcontext);
+		CurrentResourceOwner = oldowner;		
+		*have_internal_subtxn = false;
+		queryinfo->failed = true;
+	}
+	PG_END_TRY();
+
+	if (queryinfo->failed)
+		return false;
+	else
+		return true;
 }
 
 /*
@@ -1196,9 +1204,11 @@ qa_compute_index_benefit(IndexAdvisorContext *context,
 {
 	int 	ncandidates = context->ncandidates;
 	int		i;
-	CandidateInfo *candidates = context->candidates;
-	QueryInfo	  *queryinfos = context->queryinfos;
-	double		 **benefit = context->benefitmat;
+	CandidateInfo  *candidates = context->candidates;
+	QueryInfo	   *queryinfos = context->queryinfos;
+	double		  **benefit = context->benefitmat;
+	MemoryContext	oldcontext = CurrentMemoryContext;
+	ResourceOwner	oldowner = CurrentResourceOwner;
 
 	/*
 	 * Make sure qualstats does not collect statistics for queries executed
@@ -1214,8 +1224,6 @@ qa_compute_index_benefit(IndexAdvisorContext *context,
 	for (i = 0; i < ncandidates; i++)
 	{
 		CandidateInfo   *cand = &candidates[i];
-		MemoryContext	oldcontext = CurrentMemoryContext;
-		ResourceOwner	oldowner = CurrentResourceOwner;
 		BlockNumber		relpages;
 		Oid		idxid = InvalidOid;
 		int		j;
@@ -1246,6 +1254,7 @@ qa_compute_index_benefit(IndexAdvisorContext *context,
 			/* Abort the inner transaction */
 			RollbackAndReleaseCurrentSubTransaction();
 			MemoryContextSwitchTo(oldcontext);
+			CurrentResourceOwner = oldowner;
 			have_internal_subtxn = false;
 			cand->isvalid = false;
 		}
@@ -1266,28 +1275,9 @@ qa_compute_index_benefit(IndexAdvisorContext *context,
 			if (queryinfos[qidx].failed)
 				continue;
 
-			if (!have_internal_subtxn)
-			{
-				BeginInternalSubTransaction(NULL);
-				MemoryContextSwitchTo(oldcontext);
-				have_internal_subtxn = true;
-			}
-
-			PG_TRY();
-			{
-				qa_plan_query(queryinfos[qidx].query);
-			}
-			PG_CATCH();
-			{
-				FlushErrorState();
-
-				/* Abort the inner transaction */
-				RollbackAndReleaseCurrentSubTransaction();
-				MemoryContextSwitchTo(oldcontext);
-				have_internal_subtxn = false;
-				queryinfos[qidx].failed = true;
-			}
-			PG_END_TRY();
+			if (!qa_plan_query(&queryinfos[qidx], &have_internal_subtxn, 
+							   oldcontext, oldowner))
+				continue;
 
 			/*
 			 * If the index reduces the cost at least by 5% and the cost with

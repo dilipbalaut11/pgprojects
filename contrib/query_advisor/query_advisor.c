@@ -78,6 +78,7 @@ typedef struct QueryInfo
 {
 	double	cost;			/* query based cost */
 	int		frequency;		/* frequency of the execution */
+	bool	failed;			/* query execution failed do not try again */
 	char   *query;			/* actual query text */
 } QueryInfo;
 
@@ -173,7 +174,7 @@ char *query =
 "\n			 avg_selectivity >= $2"
 "\n          GROUP BY (qual).relid, amname, parent"
 "\n        )"
-"\nSELECT * FROM filtered where amname='btree' OR amname='brin' ORDER BY relid, amname DESC, cardinality(attnumlist);";
+"\nSELECT * FROM filtered where amname='btree' ORDER BY relid, amname DESC, cardinality(attnumlist);";
 
 /* static function declarations */
 static FinalIndexInfo *qa_generate_advise(MemoryContext per_query_ctx,
@@ -286,44 +287,6 @@ query_advisor_index_recommendations(PG_FUNCTION_ARGS)
 	}
 
 	SRF_RETURN_DONE(funcctx);
-}
-
-static void
-qa_plan_query_test()
-{
-	Oid		*paramTypes = palloc0(sizeof(Oid));
-	int		numparam;
-	List *parseTreeList;
-	Node *parseTreeNode;
-	List *queryTreeList;
-	Query *query;
-	PlannedStmt *plan;
-	double cost;
-	char *querytext = "SELECT * FROM TEST WHERE a=$1 AND b=$2";
- 
-	parseTreeList = pg_parse_query(querytext);
-	if (list_length(parseTreeList) != 1)
-	{
-		ereport(ERROR, (errmsg("cannot execute multiple utility events")));
-	}
-
-	parseTreeNode = (Node *) linitial(parseTreeList);
-
-	queryTreeList = pg_analyze_and_rewrite_varparams(parseTreeNode,
-					  querytext,
-					  &paramTypes,
-					  &numparam,
-					  NULL);
-
-	if (list_length(queryTreeList) != 1)
-	{
-		ereport(ERROR, (errmsg("can only execute a single query")));
-	}
-
-	query = (Query *) linitial(queryTreeList);
-	plan = pg_plan_query(query, querytext, 0, NULL);
-	cost = plan->planTree->total_cost;
-	elog(WARNING, "cost = %f", cost);
 }
 
 /* 
@@ -712,7 +675,7 @@ qa_get_queries(CandidateInfo *candidates, int ncandidates,
 		}
 	}
 
-	queryinfos = (QueryInfo *) palloc(nids * sizeof(QueryInfo));
+	queryinfos = (QueryInfo *) palloc0(nids * sizeof(QueryInfo));
 
 	/* get the actual query and execution frequency for each queryid */
 	for (i = 0; i < nids; i++)
@@ -1109,6 +1072,9 @@ qa_set_basecost(QueryInfo *queryinfos, int nqueries)
 {
 	int		i;
 	double	total_cost = 0.0;
+	MemoryContext	oldcontext = CurrentMemoryContext;
+	ResourceOwner	oldowner = CurrentResourceOwner;
+	bool	have_internal_subtxn = false;
 
 	/* enable cost tracking before planning queries */
 	qa_disable_stats = true;
@@ -1118,9 +1084,37 @@ qa_set_basecost(QueryInfo *queryinfos, int nqueries)
 	 */
 	for (i = 0; i < nqueries; i++)
 	{
-		qa_plan_query(queryinfos[i].query);
-		queryinfos[i].cost = qa_plan_cost;
-		total_cost += qa_plan_cost;
+		if (!have_internal_subtxn)
+		{
+			BeginInternalSubTransaction(NULL);
+			MemoryContextSwitchTo(oldcontext);
+			have_internal_subtxn = true;
+		}
+
+		PG_TRY();
+		{
+			qa_plan_query(queryinfos[i].query);
+			queryinfos[i].cost = qa_plan_cost;
+			total_cost += qa_plan_cost;
+		}
+		PG_CATCH();
+		{
+			/* Abort the inner transaction */
+			FlushErrorState();
+			RollbackAndReleaseCurrentSubTransaction();
+			MemoryContextSwitchTo(oldcontext);
+			have_internal_subtxn = false;
+			queryinfos[i].failed = true;
+		}
+		PG_END_TRY();
+	}
+
+	if (have_internal_subtxn)
+	{
+		ReleaseCurrentSubTransaction();
+		MemoryContextSwitchTo(oldcontext);
+		CurrentResourceOwner = oldowner;
+		have_internal_subtxn = false;
 	}
 
 	/* disable cost tracking */
@@ -1219,10 +1213,13 @@ qa_compute_index_benefit(IndexAdvisorContext *context,
 	 */
 	for (i = 0; i < ncandidates; i++)
 	{
-		CandidateInfo *cand = &candidates[i];
-		BlockNumber	relpages;
-		Oid			idxid;
-		int			j;
+		CandidateInfo   *cand = &candidates[i];
+		MemoryContext	oldcontext = CurrentMemoryContext;
+		ResourceOwner	oldowner = CurrentResourceOwner;
+		BlockNumber		relpages;
+		Oid		idxid = InvalidOid;
+		int		j;
+		bool	have_internal_subtxn = false;
 
 		/*
 		 * Skip the candidate if it has been marked invalid or are already on
@@ -1231,8 +1228,31 @@ qa_compute_index_benefit(IndexAdvisorContext *context,
 		if (!cand->isvalid || cand->isselected)
 			continue;
 
+		if (!have_internal_subtxn)
+		{
+			BeginInternalSubTransaction(NULL);
+			MemoryContextSwitchTo(oldcontext);
+			have_internal_subtxn = true;
+		}
 		/* create a hypothetical index for the candidate before replanning */
-		idxid = hypo_create_index(cand->indexinfo.indexstmt, &relpages);
+		PG_TRY();
+		{
+			idxid = hypo_create_index(cand->indexinfo.indexstmt, &relpages);
+		}
+		PG_CATCH();
+		{
+			FlushErrorState();
+
+			/* Abort the inner transaction */
+			RollbackAndReleaseCurrentSubTransaction();
+			MemoryContextSwitchTo(oldcontext);
+			have_internal_subtxn = false;
+			cand->isvalid = false;
+		}
+		PG_END_TRY();
+
+		if (!OidIsValid(idxid))
+			continue;
 
 		/* If candidate's overhead is not yet computed then do it now */
 		if (cand->overhead == 0)
@@ -1243,7 +1263,31 @@ qa_compute_index_benefit(IndexAdvisorContext *context,
 		{
 			int		qidx = (queryidxs != NULL) ? queryidxs[j] : j;
 
-			qa_plan_query(queryinfos[qidx].query);
+			if (queryinfos[qidx].failed)
+				continue;
+
+			if (!have_internal_subtxn)
+			{
+				BeginInternalSubTransaction(NULL);
+				MemoryContextSwitchTo(oldcontext);
+				have_internal_subtxn = true;
+			}
+
+			PG_TRY();
+			{
+				qa_plan_query(queryinfos[qidx].query);
+			}
+			PG_CATCH();
+			{
+				FlushErrorState();
+
+				/* Abort the inner transaction */
+				RollbackAndReleaseCurrentSubTransaction();
+				MemoryContextSwitchTo(oldcontext);
+				have_internal_subtxn = false;
+				queryinfos[qidx].failed = true;
+			}
+			PG_END_TRY();
 
 			/*
 			 * If the index reduces the cost at least by 5% and the cost with
@@ -1259,6 +1303,14 @@ qa_compute_index_benefit(IndexAdvisorContext *context,
 			}
 			else
 				benefit[qidx][i] = 0;
+		}
+
+		if (have_internal_subtxn)
+		{
+			ReleaseCurrentSubTransaction();
+			MemoryContextSwitchTo(oldcontext);
+			CurrentResourceOwner = oldowner;
+			have_internal_subtxn = false;
 		}
 
 		/* now we can remove the hypothetical index */

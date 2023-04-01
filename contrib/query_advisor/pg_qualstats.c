@@ -643,7 +643,7 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 	bool		found;
 
 	if ((pgqs || pgqs_backend) && pgqs_enabled && pgqs_is_query_sampled() &&
-		!qa_disable_stats)
+		!qa_disable_stats
 #if PG_VERSION_NUM >= 90600
 		&& (!IsParallelWorker())
 #endif
@@ -2593,7 +2593,7 @@ pgqs_uint32_hashfn(const void *key, Size keysize)
 static void
 pgqsInsertOverheadHash(ModifyTable *node, pgqsWalkerContext *context)
 {
-#if PG_VERSION_NUM >= 140000
+#if PG_VERSION_NUM >= 160000
 	ListCell	*l;
 	RangeTblEntry *rte;
 	Instrumentation *instrumentation = context->planstate->instrument;

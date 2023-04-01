@@ -522,7 +522,7 @@ pgqs_ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
 	/* Setup instrumentation */
 	if (pgqs_enabled  && strlen(queryDesc->sourceText) < pgqs_query_size &&
-		!qa_disable_stats)
+		!qa_disable_stats && !is_utility)
 	{
 		/*
 		 * For rate sampling, randomly choose top-level statement. Either all
@@ -643,10 +643,7 @@ pgqs_ExecutorEnd(QueryDesc *queryDesc)
 	bool		found;
 
 	if ((pgqs || pgqs_backend) && pgqs_enabled && pgqs_is_query_sampled() &&
-		!qa_disable_stats &&
-		!(is_utility &&
-		  !(queryDesc->estate->es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY &&
-		    queryDesc->params == NULL))
+		!qa_disable_stats)
 #if PG_VERSION_NUM >= 90600
 		&& (!IsParallelWorker())
 #endif

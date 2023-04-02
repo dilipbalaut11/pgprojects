@@ -12,6 +12,7 @@
  */
 #include "postgres.h"
 
+#include "access/relation.h"
 #include "executor/spi.h"
 #include "funcapi.h"
 #include "miscadmin.h"
@@ -205,7 +206,7 @@ static void qa_get_updates(CandidateInfo *candidates,
 						   int ncandidates);
 
 static bool qa_generate_index_queries(CandidateInfo *candidates,
-									  int ncandidates);
+									  int ncandidates, Relation rel);
 static double qa_set_basecost(QueryInfo *queryinfos, int nqueries);
 static bool qa_plan_query(QueryInfo *queryinfo, bool *have_internal_subtxn,
 			  			  MemoryContext oldcontext, ResourceOwner oldowner);
@@ -416,6 +417,7 @@ qa_process_rel(FinalIndexInfo *previnxinfos, CandidateInfo *candidates,
 	IndexAdvisorContext	context;
 	MemoryContext 		oldcontext;
 	FinalIndexInfo	   *indexinfos = NULL;
+	Relation			rel;
 	int		nqueries;
 	int		nnewindexes;
 	int		prev_indexes = *nindexes;
@@ -424,6 +426,9 @@ qa_process_rel(FinalIndexInfo *previnxinfos, CandidateInfo *candidates,
 #ifdef DEBUG_INDEX_ADVISOR
 	elog(NOTICE, "candidate Relation %d", candidates[0].relid);
 #endif
+
+	if (ncandidates == 0)
+		return previnxinfos;
 
 	/*
 	 * Process all candidate and get the list of all the unique queryids along
@@ -449,13 +454,20 @@ qa_process_rel(FinalIndexInfo *previnxinfos, CandidateInfo *candidates,
 	 */
 	qa_get_updates(finalcand, ncandidates);
 
+	rel = try_relation_open(candidates[0].relid, AccessShareLock);
+	if (rel == NULL)
+		return previnxinfos;
+
 	/*
 	 * Generate index creation statement for each candidate.  We need to output
 	 * the index statements so store them in per query context.
 	 */
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
-	if (!qa_generate_index_queries(finalcand, ncandidates))
+	if (!qa_generate_index_queries(finalcand, ncandidates, rel))
+	{
+		relation_close(rel, AccessShareLock);
 		return previnxinfos;
+	}
 	MemoryContextSwitchTo(oldcontext);
 
 #ifdef DEBUG_INDEX_ADVISOR
@@ -481,7 +493,10 @@ qa_process_rel(FinalIndexInfo *previnxinfos, CandidateInfo *candidates,
 	 * array.
 	 */
 	if (nnewindexes == 0)
+	{
+		relation_close(rel, AccessShareLock);
 		return previnxinfos;
+	}
 
 	(*nindexes) += nnewindexes;
 
@@ -505,6 +520,8 @@ qa_process_rel(FinalIndexInfo *previnxinfos, CandidateInfo *candidates,
 				   sizeof(FinalIndexInfo));
 		}
 	}
+
+	relation_close(rel, AccessShareLock);
 
 	return indexinfos;
 }
@@ -1024,16 +1041,12 @@ qa_get_updates(CandidateInfo *candidates, int ncandidates)
  * candidate structure for later use.
  */
 static bool
-qa_generate_index_queries(CandidateInfo *candidates, int ncandidates)
+qa_generate_index_queries(CandidateInfo *candidates, int ncandidates,
+						  Relation rel)
 {
 	int		i;
 	int		j;
-	Relation	rel;
 	StringInfoData buf;
-
-	rel = RelationIdGetRelation(candidates[0].relid);
-	if (rel == NULL)
-		return false;
 
 	initStringInfo(&buf);
 
@@ -1060,7 +1073,7 @@ qa_generate_index_queries(CandidateInfo *candidates, int ncandidates)
 		strcpy(cand->indexinfo.indexstmt, buf.data);
 		resetStringInfo(&buf);
 	}
-	RelationClose(rel);
+
 	return true;
 }
 

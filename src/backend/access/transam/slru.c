@@ -175,31 +175,33 @@ SimpleLruShmemSize(int nslots, int nlsns)
 void
 SlruLockAllPartition(SlruCtl ctl, LWLockMode mode)
 {
-	SlruShared	shared = ctl->shared;
-	int			i;
+	int		i;
 
-	if (shared->ControlLock != NULL)
-		LWLockAcquire(shared->ControlLock, mode);
-	else
+	/* If SLRU has centralised control lock then just lock that and return*/
+	if (ctl->shared->ControlLock != NULL)
 	{
-		for (i = 0; i < shared->num_locks; i++)
-			LWLockAcquire(shared->partlock[i], mode);
+		LWLockAcquire(ctl->shared->ControlLock, mode);
+		return;
 	}
+
+	for (i = 0; i < NUM_SLRU_PARTITIONS; i++)
+		LWLockAcquire(SubtransPartitionLockByIndex(ctl, i), mode);
 }
 
 void
 SlruUnLockAllPartition(SlruCtl ctl)
 {
-	SlruShared	shared = ctl->shared;
-	int			i;
+	int		i;
 
-	if (shared->ControlLock != NULL)
-		LWLockRelease(shared->ControlLock);
-	else
+	/* If SLRU has centralised control lock then just unlock that and return*/
+	if (ctl->shared->ControlLock != NULL)
 	{
-		for (i = 0; i < shared->num_locks; i++)
-			LWLockRelease(shared->partlock[i]);
+		LWLockRelease(ctl->shared->ControlLock);
+		return;
 	}
+
+	for (i = 0; i < NUM_SLRU_PARTITIONS; i++)
+		LWLockRelease(SubtransPartitionLockByIndex(ctl, i));
 }
 
 static int

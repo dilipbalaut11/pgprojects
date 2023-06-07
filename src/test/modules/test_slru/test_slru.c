@@ -231,9 +231,9 @@ test_slru_shmem_startup(void)
 	LWLockInitialize(TestSLRULock, test_tranche_id);
 
 	TestSlruCtl->PagePrecedes = test_slru_page_precedes_logically;
-	SimpleLruInit(TestSlruCtl, "TestSLRU",
+	SimpleLruInit(TestSlruCtl, "TestSLRU", NULL,
 				  NUM_TEST_BUFFERS, 0, TestSLRULock, slru_dir_name,
-				  test_tranche_id, SYNC_HANDLER_NONE);
+				  test_tranche_id, -1, SYNC_HANDLER_NONE);
 }
 
 void

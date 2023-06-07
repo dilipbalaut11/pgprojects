@@ -16,6 +16,7 @@
 #include "access/xlogdefs.h"
 #include "storage/lwlock.h"
 #include "storage/sync.h"
+#include "utils/hsearch.h"
 
 
 /*
@@ -56,6 +57,7 @@ typedef struct SlruSharedData
 
 	/* Number of buffers managed by this SLRU structure */
 	int			num_slots;
+	int			slru_lock_offset;
 
 	/*
 	 * Arrays holding info for each buffer slot.  Page number is undefined
@@ -111,6 +113,8 @@ typedef struct SlruCtlData
 {
 	SlruShared	shared;
 
+	HTAB	   *SlruBufHash;
+
 	/*
 	 * Which sync handler function to use when handing sync requests over to
 	 * the checkpointer.  SYNC_HANDLER_NONE to disable fsync (eg pg_notify).
@@ -138,14 +142,23 @@ typedef struct SlruCtlData
 
 typedef SlruCtlData *SlruCtl;
 
+typedef struct SlruBufLookupEnt
+{
+	int		pageno;			/* key */
+	int		slotno;			/* slot number in slru buffer array */
+} SlruBufLookupEnt;
 
 extern Size SimpleLruShmemSize(int nslots, int nlsns);
-extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
-						  LWLock *ctllock, const char *subdir, int tranche_id,
-						  SyncRequestHandler sync_handler);
+extern void SimpleLruInit(SlruCtl ctl, const char *name, const char *hashname,
+						  int nslots, int nlsns, LWLock *ctllock,
+						  const char *subdir, int tranche_id,
+						  int lock_offset, SyncRequestHandler sync_handler);
 extern int	SimpleLruZeroPage(SlruCtl ctl, int pageno);
 extern int	SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 							  TransactionId xid);
+extern int SimpleLruReadPage_BufferHash(SlruCtl ctl, int pageno,
+										TransactionId xid, bool read_only,
+										int *partno);
 extern int	SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno,
 									   TransactionId xid);
 extern void SimpleLruWritePage(SlruCtl ctl, int slotno);
@@ -170,5 +183,9 @@ extern bool SlruScanDirCbReportPresence(SlruCtl ctl, char *filename,
 										int segpage, void *data);
 extern bool SlruScanDirCbDeleteAll(SlruCtl ctl, char *filename, int segpage,
 								   void *data);
-
+extern void SimpleLruLockRelease(SlruCtl ctl, int partno);
+extern void SimpleLruLockAllPartition(SlruCtl ctl, LWLockMode mode);
+extern void SimpleLruUnlockAllPartition(SlruCtl ctl);
+extern void SimpleLruLockAllPartition(SlruCtl ctl, LWLockMode mode);
+extern void SimpleLruUnlockAllPartition(SlruCtl ctl);
 #endif							/* SLRU_H */

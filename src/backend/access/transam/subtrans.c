@@ -32,8 +32,9 @@
 #include "access/subtrans.h"
 #include "access/transam.h"
 #include "pg_trace.h"
+#include "storage/shmem.h"
 #include "utils/snapmgr.h"
-
+#include "utils/hsearch.h"
 
 /*
  * Defines for SubTrans page sizes.  A page is the same BLCKSZ as is used
@@ -62,10 +63,8 @@ static SlruCtlData SubTransCtlData;
 
 #define SubTransCtl  (&SubTransCtlData)
 
-
 static int	ZeroSUBTRANSPage(int pageno);
 static bool SubTransPagePrecedes(int page1, int page2);
-
 
 /*
  * Record the parent of a subtransaction in the subtrans log.
@@ -76,6 +75,7 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 	int			pageno = TransactionIdToPage(xid);
 	int			entryno = TransactionIdToEntry(xid);
 	int			slotno;
+	int			partno;
 	TransactionId *ptr;
 
 	Assert(TransactionIdIsValid(parent));
@@ -83,7 +83,9 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 
 	LWLockAcquire(SubtransSLRULock, LW_EXCLUSIVE);
 
-	slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
+	/* lock is acquired by SimpleLruReadPage_BufferHash */
+	slotno = SimpleLruReadPage_BufferHash(SubTransCtl, pageno, xid, false,
+										  &partno);
 	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
 	ptr += entryno;
 
@@ -99,7 +101,7 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 		SubTransCtl->shared->page_dirty[slotno] = true;
 	}
 
-	LWLockRelease(SubtransSLRULock);
+	SimpleLruLockRelease(SubTransCtl, partno);
 }
 
 /*
@@ -111,6 +113,7 @@ SubTransGetParent(TransactionId xid)
 	int			pageno = TransactionIdToPage(xid);
 	int			entryno = TransactionIdToEntry(xid);
 	int			slotno;
+	int			partno = -1;
 	TransactionId *ptr;
 	TransactionId parent;
 
@@ -121,15 +124,15 @@ SubTransGetParent(TransactionId xid)
 	if (!TransactionIdIsNormal(xid))
 		return InvalidTransactionId;
 
-	/* lock is acquired by SimpleLruReadPage_ReadOnly */
-
-	slotno = SimpleLruReadPage_ReadOnly(SubTransCtl, pageno, xid);
+	/* lock is acquired by SimpleLruReadPage_BufferHash */
+	slotno = SimpleLruReadPage_BufferHash(SubTransCtl, pageno, xid, true,
+										  &partno);
 	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
 	ptr += entryno;
 
 	parent = *ptr;
 
-	LWLockRelease(SubtransSLRULock);
+	SimpleLruLockRelease(SubTransCtl, partno);
 
 	return parent;
 }
@@ -184,16 +187,24 @@ SubTransGetTopmostTransaction(TransactionId xid)
 Size
 SUBTRANSShmemSize(void)
 {
-	return SimpleLruShmemSize(NUM_SUBTRANS_BUFFERS, 0);
+	Size	size;
+
+	size = SimpleLruShmemSize(NUM_SUBTRANS_BUFFERS, 0);
+	size += hash_estimate_size(NUM_SUBTRANS_BUFFERS, sizeof(SlruBufLookupEnt));
+
+	return size;
 }
 
 void
 SUBTRANSShmemInit(void)
 {
 	SubTransCtl->PagePrecedes = SubTransPagePrecedes;
-	SimpleLruInit(SubTransCtl, "Subtrans", NUM_SUBTRANS_BUFFERS, 0,
-				  SubtransSLRULock, "pg_subtrans",
-				  LWTRANCHE_SUBTRANS_BUFFER, SYNC_HANDLER_NONE);
+	SimpleLruInit(SubTransCtl, "Subtrans", "Subtrans Buffer Lookup Table",
+				  NUM_SUBTRANS_BUFFERS, 0,
+				  NULL, "pg_subtrans",
+				  LWTRANCHE_SUBTRANS_BUFFER,
+				  SUBTRANS_BUF_MAPPING_LWLOCK_OFFSET,
+				  SYNC_HANDLER_NONE);
 	SlruPagePrecedesUnitTests(SubTransCtl, SUBTRANS_XACTS_PER_PAGE);
 }
 
@@ -212,7 +223,7 @@ BootStrapSUBTRANS(void)
 {
 	int			slotno;
 
-	LWLockAcquire(SubtransSLRULock, LW_EXCLUSIVE);
+	SimpleLruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
 
 	/* Create and zero the first page of the subtrans log */
 	slotno = ZeroSUBTRANSPage(0);
@@ -221,7 +232,7 @@ BootStrapSUBTRANS(void)
 	SimpleLruWritePage(SubTransCtl, slotno);
 	Assert(!SubTransCtl->shared->page_dirty[slotno]);
 
-	LWLockRelease(SubtransSLRULock);
+	SimpleLruUnlockAllPartition(SubTransCtl);
 }
 
 /*
@@ -258,7 +269,7 @@ StartupSUBTRANS(TransactionId oldestActiveXID)
 	 * Whenever we advance into a new page, ExtendSUBTRANS will likewise zero
 	 * the new page without regard to whatever was previously on disk.
 	 */
-	LWLockAcquire(SubtransSLRULock, LW_EXCLUSIVE);
+	SimpleLruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
 
 	startPage = TransactionIdToPage(oldestActiveXID);
 	nextXid = ShmemVariableCache->nextXid;
@@ -274,7 +285,7 @@ StartupSUBTRANS(TransactionId oldestActiveXID)
 	}
 	(void) ZeroSUBTRANSPage(startPage);
 
-	LWLockRelease(SubtransSLRULock);
+	SimpleLruUnlockAllPartition(SubTransCtl);
 }
 
 /*
@@ -319,12 +330,13 @@ ExtendSUBTRANS(TransactionId newestXact)
 
 	pageno = TransactionIdToPage(newestXact);
 
-	LWLockAcquire(SubtransSLRULock, LW_EXCLUSIVE);
+	/* see if the block is in the buffer pool already */
+	SimpleLruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
 
 	/* Zero the page */
 	ZeroSUBTRANSPage(pageno);
 
-	LWLockRelease(SubtransSLRULock);
+	SimpleLruUnlockAllPartition(SubTransCtl);
 }
 
 

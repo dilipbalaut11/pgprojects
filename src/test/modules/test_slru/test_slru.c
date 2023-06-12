@@ -201,7 +201,7 @@ test_slru_shmem_request(void)
 		prev_shmem_request_hook();
 
 	/* reserve shared memory for the test SLRU */
-	RequestAddinShmemSpace(SimpleLruShmemSize(NUM_TEST_BUFFERS, 0));
+	RequestAddinShmemSpace(SimpleLruShmemSize(NUM_TEST_BUFFERS, 0, false));
 }
 
 static bool

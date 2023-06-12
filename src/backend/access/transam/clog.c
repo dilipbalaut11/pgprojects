@@ -688,7 +688,7 @@ CLOGShmemBuffers(void)
 Size
 CLOGShmemSize(void)
 {
-	return SimpleLruShmemSize(CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE);
+	return SimpleLruShmemSize(CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE, false);
 }
 
 void

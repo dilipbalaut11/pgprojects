@@ -1331,7 +1331,7 @@ PredicateLockShmemSize(void)
 
 	/* Shared memory structures for SLRU tracking of old committed xids. */
 	size = add_size(size, sizeof(SerialControlData));
-	size = add_size(size, SimpleLruShmemSize(NUM_SERIAL_BUFFERS, 0));
+	size = add_size(size, SimpleLruShmemSize(NUM_SERIAL_BUFFERS, 0, false));
 
 	return size;
 }

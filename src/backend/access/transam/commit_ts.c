@@ -506,7 +506,7 @@ CommitTsShmemBuffers(void)
 Size
 CommitTsShmemSize(void)
 {
-	return SimpleLruShmemSize(CommitTsShmemBuffers(), 0) +
+	return SimpleLruShmemSize(CommitTsShmemBuffers(), 0, false) +
 		sizeof(CommitTimestampShared);
 }
 

@@ -142,13 +142,7 @@ typedef struct SlruCtlData
 
 typedef SlruCtlData *SlruCtl;
 
-typedef struct SlruBufLookupEnt
-{
-	int		pageno;			/* key */
-	int		slotno;			/* slot number in slru buffer array */
-} SlruBufLookupEnt;
-
-extern Size SimpleLruShmemSize(int nslots, int nlsns);
+extern Size SimpleLruShmemSize(int nslots, int nlsns, bool bufhash);
 extern void SimpleLruInit(SlruCtl ctl, const char *name, const char *hashname,
 						  int nslots, int nlsns, LWLock *ctllock,
 						  const char *subdir, int tranche_id,

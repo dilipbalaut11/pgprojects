@@ -187,12 +187,7 @@ SubTransGetTopmostTransaction(TransactionId xid)
 Size
 SUBTRANSShmemSize(void)
 {
-	Size	size;
-
-	size = SimpleLruShmemSize(NUM_SUBTRANS_BUFFERS, 0);
-	size += hash_estimate_size(NUM_SUBTRANS_BUFFERS, sizeof(SlruBufLookupEnt));
-
-	return size;
+	return SimpleLruShmemSize(NUM_SUBTRANS_BUFFERS, 0, true);
 }
 
 void

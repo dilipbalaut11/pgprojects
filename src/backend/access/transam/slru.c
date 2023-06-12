@@ -80,6 +80,12 @@ typedef struct SlruWriteAllData
 
 typedef struct SlruWriteAllData *SlruWriteAll;
 
+typedef struct SlruBufLookupEnt
+{
+	int		pageno;			/* key */
+	int		slotno;			/* slot number in slru buffer array */
+} SlruBufLookupEnt;
+
 /*
  * Populate a file tag describing a segment file.  We only use the segment
  * number, since we can derive everything else we need by having separate
@@ -153,7 +159,7 @@ static void SlruInternalDeleteSegment(SlruCtl ctl, int segno);
  */
 
 Size
-SimpleLruShmemSize(int nslots, int nlsns)
+SimpleLruShmemSize(int nslots, int nlsns, bool bufhash)
 {
 	Size		sz;
 
@@ -168,6 +174,8 @@ SimpleLruShmemSize(int nslots, int nlsns)
 
 	if (nlsns > 0)
 		sz += MAXALIGN(nslots * nlsns * sizeof(XLogRecPtr));	/* group_lsn[] */
+	if (bufhash)
+		sz += hash_estimate_size(nslots, sizeof(SlruBufLookupEnt));
 
 	return BUFFERALIGN(sz) + BLCKSZ * nslots;
 }
@@ -300,7 +308,7 @@ SimpleLruInit(SlruCtl ctl, const char *name, const char *hashname,int nslots,
 	HASHCTL		info;
 	int			size;
 	shared = (SlruShared) ShmemInitStruct(name,
-										  SimpleLruShmemSize(nslots, nlsns),
+										  SimpleLruShmemSize(nslots, nlsns, false),
 										  &found);
 
 	if (!IsUnderPostmaster)
@@ -362,7 +370,7 @@ SimpleLruInit(SlruCtl ctl, const char *name, const char *hashname,int nslots,
 		}
 
 		/* Should fit to estimated shmem size */
-		Assert(ptr - (char *) shared <= SimpleLruShmemSize(nslots, nlsns));
+		Assert(ptr - (char *) shared <= SimpleLruShmemSize(nslots, nlsns, false));
 	}
 	else
 		Assert(found);

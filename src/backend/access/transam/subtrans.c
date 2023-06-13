@@ -194,7 +194,7 @@ void
 SUBTRANSShmemInit(void)
 {
 	SubTransCtl->PagePrecedes = SubTransPagePrecedes;
-	SimpleLruInit(SubTransCtl, "Subtrans", "Subtrans Buffer Lookup Table",
+	SimpleLruInit(SubTransCtl, "Subtrans", true,
 				  NUM_SUBTRANS_BUFFERS, 0,
 				  NULL, "pg_subtrans",
 				  LWTRANCHE_SUBTRANS_BUFFER,
@@ -218,7 +218,7 @@ BootStrapSUBTRANS(void)
 {
 	int			slotno;
 
-	SimpleLruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
+	SimpleLruAcquireControlLock(SubTransCtl, LW_EXCLUSIVE);
 
 	/* Create and zero the first page of the subtrans log */
 	slotno = ZeroSUBTRANSPage(0);
@@ -227,7 +227,7 @@ BootStrapSUBTRANS(void)
 	SimpleLruWritePage(SubTransCtl, slotno);
 	Assert(!SubTransCtl->shared->page_dirty[slotno]);
 
-	SimpleLruUnlockAllPartition(SubTransCtl);
+	SimpleLruReleaseControlLock(SubTransCtl);
 }
 
 /*
@@ -264,7 +264,7 @@ StartupSUBTRANS(TransactionId oldestActiveXID)
 	 * Whenever we advance into a new page, ExtendSUBTRANS will likewise zero
 	 * the new page without regard to whatever was previously on disk.
 	 */
-	SimpleLruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
+	SimpleLruAcquireControlLock(SubTransCtl, LW_EXCLUSIVE);
 
 	startPage = TransactionIdToPage(oldestActiveXID);
 	nextXid = ShmemVariableCache->nextXid;
@@ -280,7 +280,7 @@ StartupSUBTRANS(TransactionId oldestActiveXID)
 	}
 	(void) ZeroSUBTRANSPage(startPage);
 
-	SimpleLruUnlockAllPartition(SubTransCtl);
+	SimpleLruReleaseControlLock(SubTransCtl);
 }
 
 /*
@@ -326,12 +326,12 @@ ExtendSUBTRANS(TransactionId newestXact)
 	pageno = TransactionIdToPage(newestXact);
 
 	/* see if the block is in the buffer pool already */
-	SimpleLruLockAllPartition(SubTransCtl, LW_EXCLUSIVE);
+	SimpleLruAcquireControlLock(SubTransCtl, LW_EXCLUSIVE);
 
 	/* Zero the page */
 	ZeroSUBTRANSPage(pageno);
 
-	SimpleLruUnlockAllPartition(SubTransCtl);
+	SimpleLruReleaseControlLock(SubTransCtl);
 }
 
 

@@ -143,7 +143,7 @@ typedef struct SlruCtlData
 typedef SlruCtlData *SlruCtl;
 
 extern Size SimpleLruShmemSize(int nslots, int nlsns, bool bufhash);
-extern void SimpleLruInit(SlruCtl ctl, const char *name, const char *hashname,
+extern void SimpleLruInit(SlruCtl ctl, const char *name, bool use_bufhash,
 						  int nslots, int nlsns, LWLock *ctllock,
 						  const char *subdir, int tranche_id,
 						  int lock_offset, SyncRequestHandler sync_handler);
@@ -178,8 +178,8 @@ extern bool SlruScanDirCbReportPresence(SlruCtl ctl, char *filename,
 extern bool SlruScanDirCbDeleteAll(SlruCtl ctl, char *filename, int segpage,
 								   void *data);
 extern void SimpleLruLockRelease(SlruCtl ctl, int partno);
-extern void SimpleLruLockAllPartition(SlruCtl ctl, LWLockMode mode);
-extern void SimpleLruUnlockAllPartition(SlruCtl ctl);
-extern void SimpleLruLockAllPartition(SlruCtl ctl, LWLockMode mode);
-extern void SimpleLruUnlockAllPartition(SlruCtl ctl);
+extern void SimpleLruAcquireControlLock(SlruCtl ctl, LWLockMode mode);
+extern void SimpleLruReleaseControlLock(SlruCtl ctl);
+extern void SimpleLruAcquireControlLock(SlruCtl ctl, LWLockMode mode);
+extern void SimpleLruReleaseControlLock(SlruCtl ctl);
 #endif							/* SLRU_H */

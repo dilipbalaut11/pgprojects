@@ -81,8 +81,6 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 	Assert(TransactionIdIsValid(parent));
 	Assert(TransactionIdFollows(xid, parent));
 
-	LWLockAcquire(SubtransSLRULock, LW_EXCLUSIVE);
-
 	/* lock is acquired by SimpleLruReadPage_BufferHash */
 	slotno = SimpleLruReadPage_BufferHash(SubTransCtl, pageno, xid, false,
 										  &partno);

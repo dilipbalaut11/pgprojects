@@ -739,6 +739,7 @@ SimpleLruReadPage_BufferHash(SlruCtl ctl, int pageno, TransactionId xid,
 	 * as we are going to search the entire buffer pool.
 	 */
 	LWLockRelease(partitionLock);
+	*partno = -1;
 	SimpleLruAcquireControlLock(ctl, LW_EXCLUSIVE);
 
 	return SimpleLruReadPage(ctl, pageno, true, xid);

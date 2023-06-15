@@ -744,6 +744,7 @@ XLogInsertRecord(XLogRecData *rdata,
 	XLogRecPtr	StartPos;
 	XLogRecPtr	EndPos;
 	bool		prevDoPageWrites = doPageWrites;
+	bool		callerHoldingExlock = holdingAllLocks;
 	TimeLineID	insertTLI;
 
 	/* we assume that all of the record header is in the first chunk */
@@ -792,10 +793,18 @@ XLogInsertRecord(XLogRecData *rdata,
 	 *----------
 	 */
 	START_CRIT_SECTION();
-	if (isLogSwitch)
-		WALInsertLockAcquireExclusive();
-	else
-		WALInsertLockAcquire();
+
+	/*
+	 * Acquire wal insertion lock, nothing to do if the caller is already
+	 * holding the exclusive lock.
+	 */
+	if (!callerHoldingExlock)
+	{
+		if (isLogSwitch)
+			WALInsertLockAcquireExclusive();
+		else
+			WALInsertLockAcquire();
+	}
 
 	/*
 	 * Check to see if my copy of RedoRecPtr is out of date. If so, may have
@@ -828,7 +837,10 @@ XLogInsertRecord(XLogRecData *rdata,
 		 * Oops, some buffer now needs to be backed up that the caller didn't
 		 * back up.  Start over.
 		 */
-		WALInsertLockRelease();
+
+		/* release the wal insertion lock if we have acquired it here */
+		if (!callerHoldingExlock)
+			WALInsertLockRelease();
 		END_CRIT_SECTION();
 		return InvalidXLogRecPtr;
 	}
@@ -886,9 +898,12 @@ XLogInsertRecord(XLogRecData *rdata,
 	}
 
 	/*
-	 * Done! Let others know that we're finished.
+	 * Done! Let others know that we're finished.  But if we haven't acquire
+	 * the lock in this function then don't release it now, the caller will
+	 * take care of that.
 	 */
-	WALInsertLockRelease();
+	if (!callerHoldingExlock)
+		WALInsertLockRelease();
 
 	END_CRIT_SECTION();
 
@@ -6598,6 +6613,32 @@ CreateCheckPoint(int flags)
 	RedoRecPtr = XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
 
 	/*
+	 * Insert a special purpose CHECKPOINT_REDO record as the first record at
+	 * checkpoint redo lsn.  Although we have the checkpoint record that
+	 * contains the exact redo lsn, there might have been some other records
+	 * those got inserted between the redo lsn and the actual checkpoint
+	 * record.  So when processing the wal, we cannot rely on the checkpoint
+	 * record if we want to stop at the checkpoint-redo LSN.
+	 *
+	 * This special record, however, is not required when we doing a shutdown
+	 * checkpoint, as there will be no concurrent wal insertions during that
+	 * time.  So, the shutdown checkpoint LSN will be the same as
+	 * checkpoint-redo LSN.
+	 *
+	 * This record is guaranteed to be the first record at checkpoint redo lsn
+	 * because we are inserting this while holding the exclusive wal insertion
+	 * lock.
+	 */
+	if (!shutdown)
+	{
+		int			dummy = 0;
+
+		XLogBeginInsert();
+		XLogRegisterData((char *) &dummy, sizeof(dummy));
+		recptr = XLogInsert(RM_XLOG_ID, XLOG_CHECKPOINT_REDO);
+	}
+
+	/*
 	 * Now we can release the WAL insertion locks, allowing other xacts to
 	 * proceed while we are flushing disk buffers.
 	 */
@@ -8059,6 +8100,11 @@ xlog_redo(XLogReaderState *record)
 		/* Keep track of full_page_writes */
 		lastFullPageWrites = fpw;
 	}
+	else if (info == XLOG_CHECKPOINT_REDO)
+	{
+		/* nothing to do here */
+	}
+
 }
 
 /*

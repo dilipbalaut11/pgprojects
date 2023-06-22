@@ -33,7 +33,7 @@
  * listed anywhere in the PGPROC array is not a running transaction.  Else we
  * have to look at pg_subtrans.
  */
-#define PGPROC_MAX_CACHED_SUBXIDS 64	/* XXX guessed-at value */
+#define PGPROC_MAX_CACHED_SUBXIDS 300	/* XXX guessed-at value */
 
 struct XidCache
 {
@@ -247,7 +247,7 @@ typedef struct PGXACT
 	uint8		vacuumFlags;	/* vacuum-related flags, see above */
 	bool		overflowed;
 
-	uint8		nxids;
+	uint16		nxids;
 } PGXACT;
 
 /*

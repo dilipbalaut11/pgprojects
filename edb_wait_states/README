@@ -1,0 +1,173 @@
+EDB wait states contrib module
+==============================
+EDB's wait states contrib module contains two main components.
+
+1. EDB wait states background worker (EWSBW)
+--------------------------------------------------
+When the wait states background worker is registered as one of the shared
+preload libraries EWSBW probes each of the running sessions at regular
+intervals. For every session it collects information such as the database is
+connected to, logged in user of the session, query running in that session,
+and the wait events it is waiting on. This information is saved in a set of
+files under a user-configurable directory under the data directory.
+
+To launch the worker, it must be registered postgres.conf using
+shared_preload_libraries e.g.:
+shared_preload_libraries = '$libdir/edb_wait_states'
+
+2. Interface for reading this information
+-----------------------------------------
+The reading interface includes following functions. Each of these functions
+has common input and output parameters. We will explain those first
+
+o. start_ts and end_ts (IN) together specify the time interval, data within
+which is to be read. If only start_ts is specified, the data starting from
+start_ts is output. If only end_ts is provided, data upto end_ts is output. If
+none of those are provided, all the data is output. Every function outputs
+different data. We will explain the output of each function below.
+
+o. query_id (OUT) identifies a normalized query. It is internal hash code
+computed from the query. A user would usually not be required to read this field.
+
+o. session_id (OUT) identifies a session. User would usually not be required to
+read this field.
+
+o. ref_start_ts and ref_end_ts provide the timestamps of a file containing
+a particular data point. A data point may be wait event sample record or a
+query record or a session record.  A user would usually not be required to read
+this field.
+
+O. edb_wait_states_data
+~~~~~~~~~~~~~~~~~~~~~
+This function is used to read the data collected by EWSBW. The function
+signature looks like
+edb_wait_states_data(
+	IN start_ts timestamptz default '-infinity'::timestamptz,
+	IN end_ts timestamptz default 'infinity'::timestamptz,
+	OUT session_id int4,
+	OUT dbname text,
+	OUT username text,
+	OUT query text,
+	OUT query_start_time timestamptz,
+	OUT sample_time timestamptz,
+	OUT wait_event_type text,
+	OUT wait_event text
+)
+
+Each row of the output gives
+sample_time: the time when wait event data was collected.
+wait_event_type: the type of wait event the session (backend) is waiting on
+wait_event: the wait event the session (backend) is waiting on
+dbname: the session's database
+username: the session's logged in user
+query: the query running in the session
+query_start_time: the time when .the query started
+
+This function can be used to find out
+1. The queries running at in the given duration (defined by start_ts and
+end_ts) in all the sessions, and the wait events (if any) they were waiting on.
+e.g. SELECT query, session_id, wait_event_type, wait_event
+		FROM edb_wait_states_data(start_ts, end_ts);
+
+2. The progress of a session within a given duration i.e the queries run in a
+session (session_id = 100000), wait events the queries waited on.
+e.g. SELECT query, wait_event_type, wait_event FROM
+		edb_wait_states_data(start_ts, end_ts) WHERE session_id = 100000;
+
+3. The duration for which the samples are available.
+e.g. SELECT min(sample_time), max(sample_time) FROM edb_wait_states_data();
+
+O. edb_wait_states_queries
+~~~~~~~~~~~~~~~~~~~~~~~~
+Gives information about the queries sampled by PGDR.
+edb_wait_states_queries(
+	IN start_ts timestamptz default '-infinity'::timestamptz,
+	IN end_ts timestamptz default 'infinity'::timestamptz,
+	OUT query_id int8,
+	OUT query text,
+	OUT ref_start_ts timestamptz
+	OUT ref_end_ts timestamptz
+)
+Each row of the output gives
+query_id: as explained above
+query: normalized query text
+ref_start_ts and ref_end_ts: as explained above
+
+A new queries file is created periodically and thus there can be multiple
+query files generated corresponding to specific intervals. This function
+returns all the queries in query files that overlap with the given time
+interval. A query like below, gives all the queries in query files that
+contained queries sampled between start_ts and end_ts. IOW, the function may
+output queries which did not run in the given interval. To exactly know that
+user should use edb_wait_states_data().
+e.g. SELECT query FROM edb_wait_states_queries(start_ts, end_ts);
+
+O. edb_wait_states_sessions
+~~~~~~~~~~~~~~~~~~~~~~~~~
+Gives information about the sessions sampled by PGDR
+edb_wait_states_sessions(
+	IN start_ts timestamptz default '-infinity'::timestamptz,
+	IN end_ts timestamptz default 'infinity'::timestamptz,
+	OUT session_id int4,
+	OUT dbname text,
+	OUT username text,
+	OUT ref_start_ts timestamptz
+	OUT ref_end_ts timestamptz
+)
+
+session_id: a session identifier. Users usually do not require to read this
+field.
+dbname: database, the session is connected to
+username: login user of the session
+ref_start_ts, ref_end_ts: as explained above
+
+This function can be used to know the databases were connected to and/or
+which users started those sessions.
+e.g. SELECT dbname, username, session_id FROM edb_wait_states_sessions();
+
+Similar to edb_wait_states_queries() (as explained above), this function outputs
+all the session logged in session files that contain sessions sampled within
+the given interval and not necessarily only the sessions sampled within the
+given interval. To know that one should use edb_wait_states_data().
+
+O. edb_wait_states_samples
+~~~~~~~~~~~~~~~~~~~~~~~~
+Gives information about wait events sampled by PGDR.
+edb_wait_states_samples(
+	IN start_ts timestamptz default '-infinity'::timestamptz,
+	IN end_ts timestamptz default 'infinity'::timestamptz,
+	OUT query_id int8,
+	OUT session_id int4,
+	OUT query_start_time timestamptz,
+	OUT sample_time timestamptz,
+	OUT wait_event_type text,
+	OUT wait_event text
+)
+
+Each row of the output gives
+query_id, session_id: as explained above
+sample_time: the time when wait event data was collected.
+wait_event_type: the type of wait event the session is waiting on
+wait_event: the wait event the session (backend) is waiting on
+query_start_time: the time when the query started in this session
+
+Usually, a user would not be required to call this function directly.
+
+O. edb_wait_states_purge(
+	IN start_ts timestamptz default '-infinity'::timestamptz,
+	IN end_ts timestamptz default 'infinity'::timestamptz
+)
+The function deletes all the sampled data files (queries, sessions and wait
+event samples) that were created after start_ts and aged (rotated) before
+end_ts. Usually a user doesn't need to run this function. The backend should
+purge those according to the retention age. But in case, that doesn't happen
+for some reason, this function may be used. In order to know the duration for
+which we have retained the samples, use edb_wait_states_data() as explained
+above in examples of that function.
+
+All these funtions expose queries, utility statements which might contain
+sensitive information. To avoid exposing this information, we don't want any of
+the functions defined in this extension to be available to a non-superuser.
+Monitoring tools such as PEM may want these functions to be accessible by a
+user who is part monitoring roles and thus would change the permissions
+accordingly.

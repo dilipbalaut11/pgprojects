@@ -1333,6 +1333,7 @@ ews_log_events(TimestampTz ts, EdbWaitStatesLogFile *session_file,
 		samplingItem->session_id = procpid;
 		samplingItem->sample_ts = ts;
 		samplingItem->wait_event_id = proc->wait_event_info;
+		samplingItem->sample_interval = edb_wait_states_sampling_interval;
 		samplingItem->query_start_ts = query_start_ts;
 	}
 	/* Throw away the current stats snapshot. */

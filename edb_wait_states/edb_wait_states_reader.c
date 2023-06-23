@@ -64,13 +64,15 @@ static void read_edb_wait_states_one_session_file(char *session_file_name,
 									  TimestampTz file_end_ts);
 
 
-#define Natts_sample 6
+#define Natts_sample 7
 #define Anum_sample_queryid 0
 #define Anum_sample_sessionid 1
 #define Anum_sample_query_start_ts 2
 #define Anum_sample_ts 3
 #define Anum_sample_wait_event_type 4
 #define Anum_sample_wait_event 5
+#define Anum_sample_interval 6
+
 
 #define Natts_query 4
 #define Anum_query_id 0
@@ -452,6 +454,7 @@ read_edb_wait_states_one_sample_file(char *sample_file_name,
 		values[Anum_sample_sessionid] = Int32GetDatum(sample.session_id);
 		values[Anum_sample_ts] = TimestampTzGetDatum(sample.sample_ts);
 		values[Anum_sample_query_start_ts] = TimestampTzGetDatum(sample.query_start_ts);
+		values[Anum_sample_interval] = Int32GetDatum(sample.sample_interval);
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 

@@ -17,7 +17,8 @@ CREATE FUNCTION edb_wait_states_samples(
     OUT query_start_time timestamptz,
     OUT sample_time timestamptz,
 	OUT wait_event_type text,
-	OUT wait_event text
+	OUT wait_event text,
+	OUT sampling_interval int4
 )
 RETURNS SETOF record
 AS 'MODULE_PATHNAME'
@@ -81,3 +82,15 @@ RETURNS void
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
 REVOKE ALL ON FUNCTION edb_wait_states_purge(timestamptz, timestamptz) FROM PUBLIC;
+
+CREATE VIEW edb_wait_states_get_dbtime AS
+SELECT SUM(sampling_interval) AS dbtime FROM edb_wait_states_samples();
+
+CREATE VIEW edb_wait_states_get_cputime AS
+SELECT SUM(sampling_interval) AS cputime FROM edb_wait_states_samples() WHERE wait_event IS NULL;
+
+CREATE VIEW edb_wait_states_get_waittime AS
+SELECT SUM(sampling_interval) AS waittime FROM edb_wait_states_samples() WHERE wait_event IS NOT NULL;;
+
+
+

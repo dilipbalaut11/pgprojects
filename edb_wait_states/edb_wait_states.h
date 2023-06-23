@@ -37,6 +37,8 @@ typedef struct EDBWaitStatesSample
 								 * was collected */
 	int32		session_id;		/* backend process id on which the query was
 								 * running */
+	int32		sample_interval; /* sampling interval when this sample was taken */
+
 	TimestampTz query_start_ts; /* timestamp when the query began it's
 								 * execution */
 } EDBWaitStatesSample;

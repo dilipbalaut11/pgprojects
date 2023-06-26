@@ -83,14 +83,89 @@ AS 'MODULE_PATHNAME'
 LANGUAGE C;
 REVOKE ALL ON FUNCTION edb_wait_states_purge(timestamptz, timestamptz) FROM PUBLIC;
 
-CREATE VIEW edb_wait_states_get_dbtime AS
-SELECT SUM(sampling_interval) AS dbtime FROM edb_wait_states_samples();
+CREATE FUNCTION edb_wait_states_dbtime(
+	IN start_ts timestamptz default '-infinity'::timestamptz,
+	IN end_ts timestamptz default 'infinity'::timestamptz,
+	OUT query_id int8,
+    OUT dbtime int4
+) RETURNS SETOF record
+AS $$
+SELECT query_id, SUM(sampling_interval) AS dbtime FROM edb_wait_states_samples() GROUP BY query_id;
+$$
+LANGUAGE SQL;
+REVOKE ALL ON FUNCTION edb_wait_states_dbtime(timestamptz, timestamptz) FROM PUBLIC;
 
-CREATE VIEW edb_wait_states_get_cputime AS
-SELECT SUM(sampling_interval) AS cputime FROM edb_wait_states_samples() WHERE wait_event IS NULL;
+CREATE FUNCTION edb_wait_states_cputime(
+	IN start_ts timestamptz default '-infinity'::timestamptz,
+	IN end_ts timestamptz default 'infinity'::timestamptz,
+	OUT query_id int8,
+    OUT cputime int4
+) RETURNS SETOF record
+AS $$
+SELECT query_id, SUM(sampling_interval) AS cputime FROM edb_wait_states_samples() WHERE wait_event IS NULL GROUP BY query_id;
+$$
+LANGUAGE SQL;
+REVOKE ALL ON FUNCTION edb_wait_states_cputime(timestamptz, timestamptz) FROM PUBLIC;
 
-CREATE VIEW edb_wait_states_get_waittime AS
-SELECT SUM(sampling_interval) AS waittime FROM edb_wait_states_samples() WHERE wait_event IS NOT NULL;;
+CREATE FUNCTION edb_wait_states_waittime(
+	IN start_ts timestamptz default '-infinity'::timestamptz,
+	IN end_ts timestamptz default 'infinity'::timestamptz,
+	OUT query_id int8,
+    OUT waittime int4
+) RETURNS SETOF record
+AS $$
+SELECT query_id, SUM(sampling_interval) AS waittime FROM edb_wait_states_samples() WHERE wait_event IS NOT NULL GROUP BY query_id;
+$$
+LANGUAGE SQL;
+REVOKE ALL ON FUNCTION edb_wait_states_waittime(timestamptz, timestamptz) FROM PUBLIC;
 
+CREATE FUNCTION edb_wait_states_waitevent(
+	IN start_ts timestamptz default '-infinity'::timestamptz,
+	IN end_ts timestamptz default 'infinity'::timestamptz,
+	OUT query_id int8,
+    OUT wait_event text,
+	OUT wait_time int4
+) RETURNS SETOF record
+AS $$
+SELECT query_id, wait_event, SUM(sampling_interval) AS waittime FROM edb_wait_states_samples() WHERE wait_event IS NOT NULL GROUP BY query_id, wait_event;
+$$
+LANGUAGE SQL;
+REVOKE ALL ON FUNCTION edb_wait_states_waittime(timestamptz, timestamptz) FROM PUBLIC;
 
+CREATE FUNCTION edb_wait_states_waitevents(
+	IN start_ts timestamptz default '-infinity'::timestamptz,
+	IN end_ts timestamptz default 'infinity'::timestamptz,
+	OUT wait_event text,
+    OUT waittime int4
+) RETURNS SETOF record
+AS $$
+SELECT wait_event, SUM(sampling_interval) AS waittime FROM edb_wait_states_samples() WHERE wait_event IS NOT NULL GROUP BY wait_event;
+$$
+LANGUAGE SQL;
+REVOKE ALL ON FUNCTION edb_wait_states_waittime(timestamptz, timestamptz) FROM PUBLIC;
 
+/*
+TO BE REMOVED - queries for generating html output
+--Q1
+SELECT wait_event, waittime, (waittime*100/d.dbtime) AS pct_dbtime
+FROM edb_wait_states_waitevents(),
+(select SUM(dbtime) AS dbtime FROM edb_wait_states_dbtime) AS d;
+  wait_event   | waittime | pct_dbtime 
+---------------+----------+------------
+ tuple         |       10 |         14
+ transactionid |       40 |         57
+
+--Q2
+SELECT we.query_id, dt.dbtime dbtime, wt.waittime waittime, ct.cputime cputime, we.wait_event top_wait_event
+FROM edb_wait_states_dbtime() dt, edb_wait_states_waittime() wt, edb_wait_states_cputime() ct, edb_wait_states_waitevent() we,
+(SELECT MAX(wait_time) top_wait_time
+ FROM edb_wait_states_waitevent()
+ GROUP BY query_id) AS maxwt
+ WHERE dt.query_id=wt.query_id AND wt.query_id=ct.query_id AND ct.query_id=we.query_id AND we.wait_time=maxwt.top_wait_time;
+
+       query_id       | dbtime | waittime | cputime | top_wait_event 
+----------------------+--------+----------+---------+----------------
+ -2331406789928976424 |     12 |        5 |       7 | transactionid
+  1341496867771568417 |     50 |       45 |       5 | transactionid
+
+*/

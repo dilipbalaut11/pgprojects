@@ -20,7 +20,7 @@
  * only the per-buffer lock for the buffer it is working on.
  *
  * "Holding the control lock" means exclusive lock in all cases except for
- * SimpleLruReadPage_ReadOnly(); see comments for SlruRecentlyUsed() for
+ * SimpleLruReadPage_ReadOnly(); see comments for SlfuFrequentlyUsed() for
  * the implications of that.
  *
  * When initiating I/O on a buffer, we acquire the per-buffer lock exclusively
@@ -48,6 +48,7 @@
 #include "postgres.h"
 
 #include <fcntl.h>
+#include <math.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -126,6 +127,18 @@ typedef struct SlruBufLookupEnt
 		} \
 	} while (0)
 
+#define SlfuFrequentlyUsed(shared, slotno, freq)	\
+	pg_atomic_add_fetch_u64(&((shared)->page_lfu_count[slotno]), freq);
+
+static inline void
+SlfuCounterDecay(SlruShared shared, int slotno, uint64 old)
+{
+	uint64 	new = floor(old / 2);
+	uint64	sub = Max(old - new, 1);
+
+	pg_atomic_sub_fetch_u64(&(shared->page_lfu_count[slotno]), sub);
+}
+
 /* Saved info for SlruReportIOError */
 typedef enum
 {
@@ -149,6 +162,7 @@ static bool SlruPhysicalWritePage(SlruCtl ctl, int pageno, int slotno,
 								  SlruWriteAll fdata);
 static void SlruReportIOError(SlruCtl ctl, int pageno, TransactionId xid);
 static int	SlruSelectLRUPage(SlruCtl ctl, int pageno);
+static int	SlfuSelectLFUPage(SlruCtl ctl, int pageno);
 
 static bool SlruScanDirCbDeleteCutoff(SlruCtl ctl, char *filename,
 									  int segpage, void *data);
@@ -170,6 +184,7 @@ SimpleLruShmemSize(int nslots, int nlsns, bool bufhash)
 	sz += MAXALIGN(nslots * sizeof(bool));	/* page_dirty[] */
 	sz += MAXALIGN(nslots * sizeof(int));	/* page_number[] */
 	sz += MAXALIGN(nslots * sizeof(int));	/* page_lru_count[] */
+	sz += MAXALIGN(nslots * sizeof(int64));	/* page_lru_count[] */
 	sz += MAXALIGN(nslots * sizeof(LWLockPadded));	/* buffer_locks[] */
 
 	if (nlsns > 0)
@@ -381,6 +396,8 @@ SimpleLruInit(SlruCtl ctl, const char *name, bool use_bufhash, int nslots,
 		offset += MAXALIGN(nslots * sizeof(int));
 		shared->page_lru_count = (int *) (ptr + offset);
 		offset += MAXALIGN(nslots * sizeof(int));
+		shared->page_lfu_count = (pg_atomic_uint64 *) (ptr + offset);
+		offset += MAXALIGN(nslots * sizeof(int64));
 
 		/* Initialize LWLocks */
 		shared->buffer_locks = (LWLockPadded *) (ptr + offset);
@@ -402,6 +419,7 @@ SimpleLruInit(SlruCtl ctl, const char *name, bool use_bufhash, int nslots,
 			shared->page_status[slotno] = SLRU_PAGE_EMPTY;
 			shared->page_dirty[slotno] = false;
 			shared->page_lru_count[slotno] = 0;
+			pg_atomic_init_u64(&shared->page_lfu_count[slotno], 0);
 			ptr += BLCKSZ;
 		}
 
@@ -464,7 +482,7 @@ SimpleLruZeroPage(SlruCtl ctl, int pageno)
 	int			oldpageno;
 
 	/* Find a suitable buffer slot for the page */
-	slotno = SlruSelectLRUPage(ctl, pageno);
+	slotno = SlfuSelectLFUPage(ctl, pageno);
 	Assert(shared->page_status[slotno] == SLRU_PAGE_EMPTY ||
 		   (shared->page_status[slotno] == SLRU_PAGE_VALID &&
 			!shared->page_dirty[slotno]) ||
@@ -481,7 +499,7 @@ SimpleLruZeroPage(SlruCtl ctl, int pageno)
 	shared->page_number[slotno] = pageno;
 	shared->page_status[slotno] = SLRU_PAGE_VALID;
 	shared->page_dirty[slotno] = true;
-	SlruRecentlyUsed(shared, slotno);
+	SlfuFrequentlyUsed(shared, slotno, 10);
 
 	/* Set the buffer to zeroes */
 	MemSet(shared->page_buffer[slotno], 0, BLCKSZ);
@@ -593,7 +611,7 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 		bool		ok;
 
 		/* See if page already is in memory; if not, pick victim slot */
-		slotno = SlruSelectLRUPage(ctl, pageno);
+		slotno = SlfuSelectLFUPage(ctl, pageno);
 
 		/* Did we find the page in memory? */
 		if (shared->page_number[slotno] == pageno &&
@@ -612,7 +630,7 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 				continue;
 			}
 			/* Otherwise, it's ready to use */
-			SlruRecentlyUsed(shared, slotno);
+			SlfuFrequentlyUsed(shared, slotno, 1);
 
 			/* update the stats counter of pages found in the SLRU */
 			pgstat_count_slru_page_hit(shared->slru_stats_idx);
@@ -669,7 +687,7 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 		if (!ok)
 			SlruReportIOError(ctl, pageno, xid);
 
-		SlruRecentlyUsed(shared, slotno);
+		SlfuFrequentlyUsed(shared, slotno, 10);
 
 		/* update the stats counter of pages not found in SLRU */
 		pgstat_count_slru_page_read(shared->slru_stats_idx);
@@ -724,8 +742,8 @@ SimpleLruReadPage_BufferHash(SlruCtl ctl, int pageno, TransactionId xid,
 		shared->page_status[slotno] != SLRU_PAGE_EMPTY &&
 		shared->page_status[slotno] != SLRU_PAGE_READ_IN_PROGRESS)
 	{
-		/* See comments for SlruRecentlyUsed macro */
-		SlruRecentlyUsed(shared, slotno);
+		/* See comments for SlfuFrequentlyUsed macro */
+		SlfuFrequentlyUsed(shared, slotno, 1);
 
 		/* update the stats counter of pages found in the SLRU */
 		pgstat_count_slru_page_hit(shared->slru_stats_idx);
@@ -775,8 +793,8 @@ SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno, TransactionId xid)
 			shared->page_status[slotno] != SLRU_PAGE_EMPTY &&
 			shared->page_status[slotno] != SLRU_PAGE_READ_IN_PROGRESS)
 		{
-			/* See comments for SlruRecentlyUsed macro */
-			SlruRecentlyUsed(shared, slotno);
+			/* See comments for SlfuFrequentlyUsed macro */
+			SlfuFrequentlyUsed(shared, slotno, 1);
 
 			/* update the stats counter of pages found in the SLRU */
 			pgstat_count_slru_page_hit(shared->slru_stats_idx);
@@ -1333,7 +1351,7 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		 *
 		 * Normally the page_lru_count values will all be different and so
 		 * there will be a well-defined LRU page.  But since we allow
-		 * concurrent execution of SlruRecentlyUsed() within
+		 * concurrent execution of SlfuFrequentlyUsed() within
 		 * SimpleLruReadPage_ReadOnly(), it is possible that multiple pages
 		 * acquire the same lru_count values.  In that case we break ties by
 		 * choosing the furthest-back page.
@@ -1341,7 +1359,7 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		 * Notice that this next line forcibly advances cur_lru_count to a
 		 * value that is certainly beyond any value that will be in the
 		 * page_lru_count array after the loop finishes.  This ensures that
-		 * the next execution of SlruRecentlyUsed will mark the page newly
+		 * the next execution of SlfuFrequentlyUsed will mark the page newly
 		 * used, even if it's for a page that has the current counter value.
 		 * That gets us back on the path to having good data when there are
 		 * multiple pages with the same lru_count.
@@ -1404,6 +1422,129 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		 * all the I/Os in progress and may therefore finish first.
 		 */
 		if (best_valid_delta < 0)
+		{
+			SimpleLruWaitIO(ctl, bestinvalidslot);
+			continue;
+		}
+
+		/*
+		 * If the selected page is clean, we're set.
+		 */
+		if (!shared->page_dirty[bestvalidslot])
+			return bestvalidslot;
+
+		/*
+		 * Write the page.
+		 */
+		SlruInternalWritePage(ctl, bestvalidslot, NULL);
+
+		/*
+		 * Now loop back and try again.  This is the easiest way of dealing
+		 * with corner cases such as the victim page being re-dirtied while we
+		 * wrote it.
+		 */
+	}
+}
+
+static int
+SlfuSelectLFUPage(SlruCtl ctl, int pageno)
+{
+	SlruShared	shared = ctl->shared;
+
+	/* Outer loop handles restart after I/O */
+	for (;;)
+	{
+		int			slotno;
+		int			bestvalidslot = 0;		/* keep compiler quiet */
+		uint64		best_valid_freq = UINT64_MAX;
+		int			best_valid_page_number = 0; /* keep compiler quiet */
+		int			bestinvalidslot = 0;	/* keep compiler quiet */
+		uint64		best_invalid_freq = UINT64_MAX;
+		int			best_invalid_page_number = 0;	/* keep compiler quiet */
+
+		/* See if page already has a buffer assigned */
+		for (slotno = 0; slotno < shared->num_slots; slotno++)
+		{
+			if (shared->page_number[slotno] == pageno &&
+				shared->page_status[slotno] != SLRU_PAGE_EMPTY)
+				return slotno;
+		}
+
+		/*
+		 * If we find any EMPTY slot, just select that one. Else choose a
+		 * victim page to replace.  We normally take the least recently used
+		 * valid page, but we will never take the slot containing
+		 * latest_page_number, even if it appears least recently used.  We
+		 * will select a slot that is already I/O busy only if there is no
+		 * other choice: a read-busy slot will not be least recently used once
+		 * the read finishes, and waiting for an I/O on a write-busy slot is
+		 * inferior to just picking some other slot.  Testing shows the slot
+		 * we pick instead will often be clean, allowing us to begin a read at
+		 * once.
+		 *
+		 * Normally the page_lru_count values will all be different and so
+		 * there will be a well-defined LRU page.  But since we allow
+		 * concurrent execution of SlfuFrequentlyUsed() within
+		 * SimpleLruReadPage_ReadOnly(), it is possible that multiple pages
+		 * acquire the same lru_count values.  In that case we break ties by
+		 * choosing the furthest-back page.
+		 *
+		 * Notice that this next line forcibly advances cur_lru_count to a
+		 * value that is certainly beyond any value that will be in the
+		 * page_lru_count array after the loop finishes.  This ensures that
+		 * the next execution of SlfuFrequentlyUsed will mark the page newly
+		 * used, even if it's for a page that has the current counter value.
+		 * That gets us back on the path to having good data when there are
+		 * multiple pages with the same lru_count.
+		 */
+		for (slotno = 0; slotno < shared->num_slots; slotno++)
+		{
+			uint64			this_freq;
+			int			this_page_number;
+
+			if (shared->page_status[slotno] == SLRU_PAGE_EMPTY)
+				return slotno;
+			this_freq = pg_atomic_read_u64(&shared->page_lfu_count[slotno]);
+			this_page_number = shared->page_number[slotno];
+
+			SlfuCounterDecay(shared, slotno, this_freq);
+
+			if (this_page_number == shared->latest_page_number)
+				continue;
+			if (shared->page_status[slotno] == SLRU_PAGE_VALID)
+			{
+				if (this_freq < best_valid_freq ||
+					(this_freq == best_valid_freq &&
+					 ctl->PagePrecedes(this_page_number,
+									   best_valid_page_number)))
+				{
+					bestvalidslot = slotno;
+					best_valid_freq = this_freq;
+					best_valid_page_number = this_page_number;
+				}
+			}
+			else
+			{
+				if (this_freq < best_invalid_freq ||
+					(this_freq == best_invalid_freq &&
+					 ctl->PagePrecedes(this_page_number,
+									   best_invalid_page_number)))
+				{
+					bestinvalidslot = slotno;
+					best_invalid_freq = this_freq;
+					best_invalid_page_number = this_page_number;
+				}
+			}
+		}
+
+		/*
+		 * If all pages (except possibly the latest one) are I/O busy, we'll
+		 * have to wait for an I/O to complete and then retry.  In that
+		 * unhappy case, we choose to wait for the I/O on the least recently
+		 * used slot, on the assumption that it was likely initiated first of
+		 * all the I/Os in progress and may therefore finish first.
+		 */
+		if (best_valid_freq == UINT64_MAX)
 		{
 			SimpleLruWaitIO(ctl, bestinvalidslot);
 			continue;

@@ -68,6 +68,7 @@ typedef struct SlruSharedData
 	bool	   *page_dirty;
 	int		   *page_number;
 	int		   *page_lru_count;
+	pg_atomic_uint64	*page_lfu_count;
 	LWLockPadded *buffer_locks;
 
 	/*

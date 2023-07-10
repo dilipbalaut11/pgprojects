@@ -144,6 +144,37 @@ $$
 LANGUAGE SQL;
 REVOKE ALL ON FUNCTION edb_wait_states_waittime(timestamptz, timestamptz) FROM PUBLIC;
 
+CREATE TYPE waitevents AS (wait_event text, waittime int, pct_dbtime int);
+CREATE TYPE statements_event AS (queryid int8, dbtime int, waittime int, cputime int, top_waitevent text);
+
+CREATE FUNCTION edb_wait_states_top_wait_events(
+	IN start_ts timestamptz default '-infinity'::timestamptz,
+	IN end_ts timestamptz default 'infinity'::timestamptz
+) RETURNS SETOF json
+AS $$
+ SELECT row_to_json(row(wait_event, waittime, (waittime*100/d.dbtime))::waitevents)
+ FROM edb_wait_states_waitevents(),
+ (select SUM(dbtime) AS dbtime FROM edb_wait_states_dbtime) AS d;
+$$
+LANGUAGE SQL;
+
+REVOKE ALL ON FUNCTION edb_wait_states_waittime(timestamptz, timestamptz) FROM PUBLIC;
+
+CREATE FUNCTION edb_wait_states_sql_statements(
+	IN start_ts timestamptz default '-infinity'::timestamptz,
+	IN end_ts timestamptz default 'infinity'::timestamptz
+) RETURNS SETOF json
+AS $$
+SELECT row_to_json(row(we.query_id, dt.dbtime, wt.waittime, ct.cputime, we.wait_event)::statements_event)
+FROM edb_wait_states_dbtime(start_ts, end_ts) dt, edb_wait_states_waittime(start_ts, end_ts) wt, edb_wait_states_cputime(start_ts, end_ts) ct, edb_wait_states_waitevent(start_ts, end_ts) we,
+(SELECT MAX(wait_time) top_wait_time
+ FROM edb_wait_states_waitevent()
+ GROUP BY query_id) AS maxwt
+ WHERE dt.query_id=wt.query_id AND wt.query_id=ct.query_id AND ct.query_id=we.query_id AND we.wait_time=maxwt.top_wait_time;
+$$
+LANGUAGE SQL;
+REVOKE ALL ON FUNCTION edb_wait_states_waittime(timestamptz, timestamptz) FROM PUBLIC;
+
 /*
 TO BE REMOVED - queries for generating html output
 --Q1

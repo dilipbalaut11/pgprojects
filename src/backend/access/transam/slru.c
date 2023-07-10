@@ -159,7 +159,7 @@ static void SlruInternalDeleteSegment(SlruCtl ctl, int segno);
  */
 
 Size
-SimpleLruShmemSize(int nslots, int nlsns, bool bufhash)
+SimpleLruShmemSize(int nslots, int nlsns, bool use_buffmaping_hash)
 {
 	Size		sz;
 
@@ -179,7 +179,7 @@ SimpleLruShmemSize(int nslots, int nlsns, bool bufhash)
 	 * If the caller has asked to use the buffer mapping hash table over the
 	 * slru buffer pool then add the size of the hash as well.
 	 */	
-	if (bufhash)
+	if (use_buffmaping_hash)
 		sz += hash_estimate_size(nslots, sizeof(SlruBufLookupEnt));
 
 	return BUFFERALIGN(sz) + BLCKSZ * nslots;
@@ -216,7 +216,7 @@ SlruPartitionLockByIndex(SlruCtl ctl, uint32 index)
 static inline uint32
 SlruBufTableHashCode(SlruCtl ctl, int pageno)
 {
-	return get_hash_value(ctl->SlruBufHash, (void *) &pageno);
+	return get_hash_value(ctl->buf_mapping, (void *) &pageno);
 }
 
 /*
@@ -231,7 +231,7 @@ SlruBufTableLookup(SlruCtl ctl, int pageno, uint32 hashcode)
 {
 	SlruBufLookupEnt *result;
 
-	result = (SlruBufLookupEnt *) hash_search_with_hash_value(ctl->SlruBufHash,
+	result = (SlruBufLookupEnt *) hash_search_with_hash_value(ctl->buf_mapping,
 															  (void *) &pageno,
 															  hashcode,
 															  HASH_FIND,
@@ -255,17 +255,17 @@ static inline void
 SlruBufTableInsert(SlruCtl ctl, int pageno, int slotno)
 {
 	SlruBufLookupEnt *result;
-	bool		found;
+	bool		found PG_USED_FOR_ASSERTS_ONLY;
 
 	Assert(slotno >= 0);		/* -1 is reserved for not-in-table */
 
-	result = (SlruBufLookupEnt *) hash_search(ctl->SlruBufHash,
+	result = (SlruBufLookupEnt *) hash_search(ctl->buf_mapping,
 											  (void *) &pageno,
 											  HASH_ENTER,
 											  &found);
+	Assert(!found);
 
-	if (!found)
-		result->slotno = slotno;
+	result->slotno = slotno;
 }
 
 /*
@@ -277,23 +277,20 @@ SlruBufTableInsert(SlruCtl ctl, int pageno, int slotno)
 static inline void
 SlruBufTableDelete(SlruCtl ctl, int pageno)
 {
-	SlruBufLookupEnt *result;
+	bool		found PG_USED_FOR_ASSERTS_ONLY;
 
-	result = (SlruBufLookupEnt *) hash_search(ctl->SlruBufHash,
-											  (void *) &pageno,
-											  HASH_REMOVE,
-											  NULL);
-
+	hash_search(ctl->buf_mapping, (void *) &pageno, HASH_REMOVE, &found);
+	Assert(found);
 }
 
 /*
  * If buffer mapping hash is used then lock all the partitions of the hash
  * table otherwise lock the control lock.
  */
-void
+static void
 SimpleLruAcquireControlLock(SlruCtl ctl, LWLockMode mode)
 {
-	if (ctl->SlruBufHash)
+	if (ctl->buf_mapping)
 	{
 		int		i;
 
@@ -308,10 +305,10 @@ SimpleLruAcquireControlLock(SlruCtl ctl, LWLockMode mode)
  * If buffer mapping hash is used then release lock of all the partitions of
  * the hash table otherwise just release the control lock.
  */
-void
+static void
 SimpleLruReleaseControlLock(SlruCtl ctl)
 {
-	if (ctl->SlruBufHash)
+	if (ctl->buf_mapping)
 	{
 		int		i;
 
@@ -335,9 +332,9 @@ SimpleLruReleaseControlLock(SlruCtl ctl)
  * sync_handler: which set of functions to use to handle sync requests
  */
 void
-SimpleLruInit(SlruCtl ctl, const char *name, bool use_bufhash, int nslots,
-			  int nlsns, LWLock *ctllock, const char *subdir, int tranche_id,
-			  int lock_offset, SyncRequestHandler sync_handler)
+SimpleLruInit(SlruCtl ctl, const char *name, bool use_buffmaping_hash,
+			  int nslots, int nlsns, LWLock *ctllock, const char *subdir,
+			  int tranche_id, int lock_offset, SyncRequestHandler sync_handler)
 {
 	SlruShared	shared;
 	bool		found;
@@ -415,7 +412,7 @@ SimpleLruInit(SlruCtl ctl, const char *name, bool use_bufhash, int nslots,
 	 * If the caller has asked to use the buffer mapping hash table over the
 	 * slru buffer pool then initialize the hash as well.
 	 */
-	if (use_bufhash)
+	if (use_buffmaping_hash)
 	{
 		StringInfoData	buf;
 
@@ -429,7 +426,7 @@ SimpleLruInit(SlruCtl ctl, const char *name, bool use_bufhash, int nslots,
 		info.num_partitions = NUM_SLRU_PARTITIONS;
 
 		size = nslots + NUM_SLRU_PARTITIONS;
-		ctl->SlruBufHash = ShmemInitHash(buf.data,
+		ctl->buf_mapping = ShmemInitHash(buf.data,
 										 size, size,
 										 &info,
 										 HASH_ELEM | HASH_BLOBS |
@@ -471,7 +468,7 @@ SimpleLruZeroPage(SlruCtl ctl, int pageno)
 		   shared->page_number[slotno] == pageno);
 
 	oldpageno = shared->page_number[slotno];
-	if (oldpageno != pageno && ctl->SlruBufHash != NULL)
+	if (oldpageno != pageno && ctl->buf_mapping != NULL)
 	{
 		SlruBufTableDelete(ctl, oldpageno);
 		SlruBufTableInsert(ctl, pageno, slotno);
@@ -651,7 +648,7 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 		 * delete the entry of the oldpageno and add the entry for new pageno
 		 * for this slot.
 		 */
-		if (ctl->SlruBufHash != NULL)
+		if (ctl->buf_mapping != NULL)
 		{
 			SlruBufTableDelete(ctl, oldpageno);
 			SlruBufTableInsert(ctl, pageno, slotno);
@@ -705,7 +702,7 @@ SimpleLruReadPage_BufferHash(SlruCtl ctl, int pageno, TransactionId xid,
 	 * This function must be called by slru which have enabled buffer mapping
 	 * support.
 	 */
-	Assert(ctl->SlruBufHash != NULL && partno != NULL);
+	Assert(ctl->buf_mapping != NULL && partno != NULL);
 
 	/* determine its hash code and partition lock */
 	hashcode = SlruBufTableHashCode(ctl, pageno);
@@ -720,10 +717,12 @@ SimpleLruReadPage_BufferHash(SlruCtl ctl, int pageno, TransactionId xid,
 	 * If we have found a valid slot with valid page status then directly
 	 * return the slotno.
 	 */
-	if (slotno > 0 && shared->page_number[slotno] == pageno &&
-		shared->page_status[slotno] != SLRU_PAGE_EMPTY &&
+	if (slotno >= 0 &&
 		shared->page_status[slotno] != SLRU_PAGE_READ_IN_PROGRESS)
 	{
+		Assert(shared->page_status[slotno] != SLRU_PAGE_EMPTY);
+		Assert(shared->page_number[slotno] == pageno);
+
 		/* See comments for SlruRecentlyUsed macro */
 		SlruRecentlyUsed(shared, slotno);
 
@@ -1311,12 +1310,30 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		int			best_invalid_delta = -1;
 		int			best_invalid_page_number = 0;	/* keep compiler quiet */
 
-		/* See if page already has a buffer assigned */
-		for (slotno = 0; slotno < shared->num_slots; slotno++)
+		/*
+		 * See if page already has a buffer assigned, if it has buf mapping
+		 * support enable then directly look into that otherwise loop through
+		 * the buffer pool.
+		 */
+		if (ctl->buf_mapping != NULL)
 		{
-			if (shared->page_number[slotno] == pageno &&
-				shared->page_status[slotno] != SLRU_PAGE_EMPTY)
+			slotno = SlruBufTableLookup(ctl, pageno,
+										SlruBufTableHashCode(ctl, pageno));
+			if (slotno >= 0)
+			{
+				Assert(shared->page_number[slotno] == pageno);
+				Assert(shared->page_status[slotno] != SLRU_PAGE_EMPTY);
 				return slotno;
+			}
+		}
+		else
+		{
+			for (slotno = 0; slotno < shared->num_slots; slotno++)
+			{
+				if (shared->page_number[slotno] == pageno &&
+					shared->page_status[slotno] != SLRU_PAGE_EMPTY)
+					return slotno;
+			}
 		}
 
 		/*
@@ -1549,6 +1566,8 @@ restart:
 		if (shared->page_status[slotno] == SLRU_PAGE_VALID &&
 			!shared->page_dirty[slotno])
 		{
+			if (ctl->buf_mapping != NULL)
+				SlruBufTableDelete(ctl, shared->page_number[slotno]);
 			shared->page_status[slotno] = SLRU_PAGE_EMPTY;
 			continue;
 		}
@@ -1631,6 +1650,8 @@ restart:
 		if (shared->page_status[slotno] == SLRU_PAGE_VALID &&
 			!shared->page_dirty[slotno])
 		{
+			if (ctl->buf_mapping != NULL)
+				SlruBufTableDelete(ctl, shared->page_number[slotno]);
 			shared->page_status[slotno] = SLRU_PAGE_EMPTY;
 			continue;
 		}

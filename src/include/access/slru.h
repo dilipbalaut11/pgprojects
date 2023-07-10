@@ -113,7 +113,8 @@ typedef struct SlruCtlData
 {
 	SlruShared	shared;
 
-	HTAB	   *SlruBufHash;
+	/* optional partitioned buffer mapping hash table over slru buffer pool */
+	HTAB	   *buf_mapping;
 
 	/*
 	 * Which sync handler function to use when handing sync requests over to
@@ -142,8 +143,10 @@ typedef struct SlruCtlData
 
 typedef SlruCtlData *SlruCtl;
 
-extern Size SimpleLruShmemSize(int nslots, int nlsns, bool bufhash);
-extern void SimpleLruInit(SlruCtl ctl, const char *name, bool use_bufhash,
+extern Size SimpleLruShmemSize(int nslots, int nlsns,
+							   bool use_buffmaping_hash);
+extern void SimpleLruInit(SlruCtl ctl, const char *name,
+						  bool use_buffmaping_hash,
 						  int nslots, int nlsns, LWLock *ctllock,
 						  const char *subdir, int tranche_id,
 						  int lock_offset, SyncRequestHandler sync_handler);
@@ -178,8 +181,4 @@ extern bool SlruScanDirCbReportPresence(SlruCtl ctl, char *filename,
 extern bool SlruScanDirCbDeleteAll(SlruCtl ctl, char *filename, int segpage,
 								   void *data);
 extern void SimpleLruLockRelease(SlruCtl ctl, int partno);
-extern void SimpleLruAcquireControlLock(SlruCtl ctl, LWLockMode mode);
-extern void SimpleLruReleaseControlLock(SlruCtl ctl);
-extern void SimpleLruAcquireControlLock(SlruCtl ctl, LWLockMode mode);
-extern void SimpleLruReleaseControlLock(SlruCtl ctl);
 #endif							/* SLRU_H */

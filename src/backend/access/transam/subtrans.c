@@ -184,7 +184,8 @@ SubTransGetTopmostTransaction(TransactionId xid)
 Size
 SUBTRANSShmemSize(void)
 {
-	return SimpleLruShmemSize(NUM_SUBTRANS_BUFFERS, 0);
+	return SimpleLruShmemSize(NUM_SUBTRANS_BUFFERS, 0,
+							  NUM_SUBTRANS_BUFFER_MAPPING_HASH_PARTITIONS);
 }
 
 void
@@ -192,8 +193,10 @@ SUBTRANSShmemInit(void)
 {
 	SubTransCtl->PagePrecedes = SubTransPagePrecedes;
 	SimpleLruInit(SubTransCtl, "Subtrans", NUM_SUBTRANS_BUFFERS, 0,
+				  NUM_SUBTRANS_BUFFER_MAPPING_HASH_PARTITIONS,
 				  SubtransSLRULock, "pg_subtrans",
-				  LWTRANCHE_SUBTRANS_BUFFER, SYNC_HANDLER_NONE);
+				  LWTRANCHE_SUBTRANS_BUFFER, LWTRANCHE_SUBTRANS_BUFFER_MAPPING,
+				  SYNC_HANDLER_NONE);
 	SlruPagePrecedesUnitTests(SubTransCtl, SUBTRANS_XACTS_PER_PAGE);
 }
 

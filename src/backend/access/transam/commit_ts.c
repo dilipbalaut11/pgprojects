@@ -506,7 +506,7 @@ CommitTsShmemBuffers(void)
 Size
 CommitTsShmemSize(void)
 {
-	return SimpleLruShmemSize(CommitTsShmemBuffers(), 0) +
+	return SimpleLruShmemSize(CommitTsShmemBuffers(), 0, 1) +
 		sizeof(CommitTimestampShared);
 }
 
@@ -520,9 +520,10 @@ CommitTsShmemInit(void)
 	bool		found;
 
 	CommitTsCtl->PagePrecedes = CommitTsPagePrecedes;
-	SimpleLruInit(CommitTsCtl, "CommitTs", CommitTsShmemBuffers(), 0,
+	SimpleLruInit(CommitTsCtl, "CommitTs", CommitTsShmemBuffers(), 0, 1,
 				  CommitTsSLRULock, "pg_commit_ts",
 				  LWTRANCHE_COMMITTS_BUFFER,
+				  LWTRANCHE_COMMITTS_BUFFER_MAPPING,
 				  SYNC_HANDLER_COMMIT_TS);
 	SlruPagePrecedesUnitTests(CommitTsCtl, COMMIT_TS_XACTS_PER_PAGE);
 

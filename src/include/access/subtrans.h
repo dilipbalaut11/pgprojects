@@ -13,6 +13,7 @@
 
 /* Number of SLRU buffers to use for subtrans */
 #define NUM_SUBTRANS_BUFFERS	32
+#define NUM_SUBTRANS_BUFFER_MAPPING_HASH_PARTITIONS	8
 
 extern void SubTransSetParent(TransactionId xid, TransactionId parent);
 extern TransactionId SubTransGetParent(TransactionId xid);

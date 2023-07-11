@@ -163,7 +163,7 @@ static int SlruMappingFind(SlruCtl ctl, int pageno);
  */
 
 static Size
-SimpleLruStructSize(int nslots, int nlsns)
+SimpleLruStructSize(int nslots, int nlsns, int npartitions)
 {
 	Size		sz;
 
@@ -175,6 +175,7 @@ SimpleLruStructSize(int nslots, int nlsns)
 	sz += MAXALIGN(nslots * sizeof(int));	/* page_number[] */
 	sz += MAXALIGN(nslots * sizeof(int));	/* page_lru_count[] */
 	sz += MAXALIGN(nslots * sizeof(LWLockPadded));	/* buffer_locks[] */
+	sz += MAXALIGN(npartitions * sizeof(LWLockPadded));	/* partition locks[] */
 
 	if (nlsns > 0)
 		sz += MAXALIGN(nslots * nlsns * sizeof(XLogRecPtr));	/* group_lsn[] */
@@ -182,9 +183,9 @@ SimpleLruStructSize(int nslots, int nlsns)
 }
 
 Size
-SimpleLruShmemSize(int nslots, int nlsns)
+SimpleLruShmemSize(int nslots, int nlsns, int npartitions)
 {
-	return SimpleLruStructSize(nslots, nlsns) +
+	return SimpleLruStructSize(nslots, nlsns, npartitions) +
 		hash_estimate_size(nslots, sizeof(SlruMappingTableEntry));
 }
 
@@ -202,17 +203,20 @@ SimpleLruShmemSize(int nslots, int nlsns)
  */
 void
 SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
-			  LWLock *ctllock, const char *subdir, int tranche_id,
+			  int npartitions, LWLock *ctllock, const char *subdir,
+			  int tranche_id, int partition_tranche_id,
 			  SyncRequestHandler sync_handler)
 {
 	char		mapping_table_name[SHMEM_INDEX_KEYSIZE];
 	HASHCTL		mapping_table_info;
 	HTAB	   *mapping_table;
 	SlruShared	shared;
+	int			partno;
 	bool		found;
 
 	shared = (SlruShared) ShmemInitStruct(name,
-										  SimpleLruStructSize(nslots, nlsns),
+										  SimpleLruStructSize(nslots, nlsns,
+															  npartitions),
 										  &found);
 
 	if (!IsUnderPostmaster)
@@ -253,6 +257,8 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		/* Initialize LWLocks */
 		shared->buffer_locks = (LWLockPadded *) (ptr + offset);
 		offset += MAXALIGN(nslots * sizeof(LWLockPadded));
+		shared->partition_locks = (LWLockPadded *) (ptr + offset);
+		offset += MAXALIGN(npartitions * sizeof(LWLockPadded));
 
 		if (nlsns > 0)
 		{
@@ -274,7 +280,8 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		}
 
 		/* Should fit to estimated shmem size */
-		Assert(ptr - (char *) shared <= SimpleLruShmemSize(nslots, nlsns));
+		Assert(ptr - (char *) shared <=
+			   SimpleLruShmemSize(nslots, nlsns, npartitions));
 	}
 	else
 		Assert(found);
@@ -283,10 +290,18 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 	memset(&mapping_table_info, 0, sizeof(mapping_table_info));
 	mapping_table_info.keysize = sizeof(int);
 	mapping_table_info.entrysize = sizeof(SlruMappingTableEntry);
+	mapping_table_info.num_partitions = npartitions;
 	snprintf(mapping_table_name, sizeof(mapping_table_name),
 			 "%s Lookup Table", name);
 	mapping_table = ShmemInitHash(mapping_table_name, nslots, nslots,
 								  &mapping_table_info, HASH_ELEM | HASH_BLOBS);
+
+	/* initialize partition locks for buffer mapping hash table */
+	for (partno = 0; partno < npartitions; partno++)
+	{
+		LWLockInitialize(&shared->partition_locks[partno].lock,
+						 partition_tranche_id);
+	}
 
 	/*
 	 * Initialize the unshared control struct, including directory path. We

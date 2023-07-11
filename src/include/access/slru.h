@@ -68,6 +68,7 @@ typedef struct SlruSharedData
 	int		   *page_number;
 	int		   *page_lru_count;
 	LWLockPadded *buffer_locks;
+	LWLockPadded *partition_locks;
 
 	/*
 	 * Optional array of WAL flush LSNs associated with entries in the SLRU
@@ -141,10 +142,11 @@ typedef struct SlruCtlData
 typedef SlruCtlData *SlruCtl;
 
 
-extern Size SimpleLruShmemSize(int nslots, int nlsns);
+extern Size SimpleLruShmemSize(int nslots, int nlsns, int npartitions);
 extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
-						  LWLock *ctllock, const char *subdir, int tranche_id,
-						  SyncRequestHandler sync_handler);
+						  int npartitions, LWLock *ctllock, const char *subdir,
+						  int tranche_id, int partition_tranche_id,
+						  SyncRequestHandler sync_handler);						  
 extern int	SimpleLruZeroPage(SlruCtl ctl, int pageno);
 extern int	SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 							  TransactionId xid);

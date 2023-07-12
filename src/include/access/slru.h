@@ -16,6 +16,7 @@
 #include "access/xlogdefs.h"
 #include "storage/lwlock.h"
 #include "storage/sync.h"
+#include "utils/hsearch.h"
 
 
 /*
@@ -57,6 +58,9 @@ typedef struct SlruSharedData
 	/* Number of buffers managed by this SLRU structure */
 	int			num_slots;
 
+	/* Number of hash table partitions if buffer mapping table is used */
+	int			num_partitions;
+
 	/*
 	 * Arrays holding info for each buffer slot.  Page number is undefined
 	 * when status is EMPTY, as is page_lru_count.
@@ -67,6 +71,7 @@ typedef struct SlruSharedData
 	int		   *page_number;
 	int		   *page_lru_count;
 	LWLockPadded *buffer_locks;
+	LWLockPadded *partition_locks;
 
 	/*
 	 * Optional array of WAL flush LSNs associated with entries in the SLRU
@@ -111,6 +116,9 @@ typedef struct SlruCtlData
 {
 	SlruShared	shared;
 
+	/* optional partitioned buffer mapping hash table over slru buffer pool */
+	HTAB	   *buf_mapping;
+
 	/*
 	 * Which sync handler function to use when handing sync requests over to
 	 * the checkpointer.  SYNC_HANDLER_NONE to disable fsync (eg pg_notify).
@@ -130,6 +138,16 @@ typedef struct SlruCtlData
 	bool		(*PagePrecedes) (int, int);
 
 	/*
+	 * Currently locked partition number or -1 if all partitions are locked.
+	 * XXX this is kind of hack because when caller read the page from SLRU
+	 * it doesn't know whether caller got the page directly from buffer mapping
+	 * hash and in that case it will just lock that particular partition.
+	 * Otherwise, it need to lock all the partitions in order to search in the
+	 * slru buffer pool.
+	 */
+	int			locked_partition_no;
+
+	/*
 	 * Dir is set during SimpleLruInit and does not change thereafter. Since
 	 * it's always the same, it doesn't need to be in shared memory.
 	 */
@@ -138,16 +156,20 @@ typedef struct SlruCtlData
 
 typedef SlruCtlData *SlruCtl;
 
-
-extern Size SimpleLruShmemSize(int nslots, int nlsns);
-extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
-						  LWLock *ctllock, const char *subdir, int tranche_id,
+extern Size SimpleLruShmemSize(int nslots, int nlsns,
+							   int npartitions);
+extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots,
+						  int nlsns, int npartitions, LWLock *ctllock,
+						  const char *subdir, int tranche_id,
+						  int partition_tranche_id,
 						  SyncRequestHandler sync_handler);
 extern int	SimpleLruZeroPage(SlruCtl ctl, int pageno);
 extern int	SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 							  TransactionId xid);
 extern int	SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno,
 									   TransactionId xid);
+extern int SimpleLruReadPageBufferMapping(SlruCtl ctl, int pageno,
+									  	  TransactionId xid, bool readonly);
 extern void SimpleLruWritePage(SlruCtl ctl, int slotno);
 extern void SimpleLruWriteAll(SlruCtl ctl, bool allow_redirtied);
 #ifdef USE_ASSERT_CHECKING
@@ -170,5 +192,7 @@ extern bool SlruScanDirCbReportPresence(SlruCtl ctl, char *filename,
 										int segpage, void *data);
 extern bool SlruScanDirCbDeleteAll(SlruCtl ctl, char *filename, int segpage,
 								   void *data);
-
+extern void SimpleLruAcquireControlLock(SlruCtl ctl, LWLockMode mode);
+extern void SimpleLruReleaseControlLock(SlruCtl ctl);
+extern void SimpleLruLockRelease(SlruCtl ctl);
 #endif							/* SLRU_H */

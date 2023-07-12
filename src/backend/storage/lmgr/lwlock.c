@@ -76,6 +76,7 @@
  */
 #include "postgres.h"
 
+#include "access/subtrans.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "pgstat.h"
@@ -190,6 +191,8 @@ static const char *const BuiltinTrancheNames[] = {
 	"LogicalRepLauncherDSA",
 	/* LWTRANCHE_LAUNCHER_HASH: */
 	"LogicalRepLauncherHash",
+	/*LWTRANCHE_SUBTRANS_BUFFER_MAPPING: */
+	"SubtransBufferMapping",
 };
 
 StaticAssertDecl(lengthof(BuiltinTrancheNames) ==

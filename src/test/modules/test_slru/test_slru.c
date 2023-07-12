@@ -201,7 +201,7 @@ test_slru_shmem_request(void)
 		prev_shmem_request_hook();
 
 	/* reserve shared memory for the test SLRU */
-	RequestAddinShmemSpace(SimpleLruShmemSize(NUM_TEST_BUFFERS, 0));
+	RequestAddinShmemSpace(SimpleLruShmemSize(NUM_TEST_BUFFERS, 0, false));
 }
 
 static bool
@@ -232,8 +232,8 @@ test_slru_shmem_startup(void)
 
 	TestSlruCtl->PagePrecedes = test_slru_page_precedes_logically;
 	SimpleLruInit(TestSlruCtl, "TestSLRU",
-				  NUM_TEST_BUFFERS, 0, TestSLRULock, slru_dir_name,
-				  test_tranche_id, SYNC_HANDLER_NONE);
+				  NUM_TEST_BUFFERS, 0, 0, TestSLRULock, slru_dir_name,
+				  test_tranche_id, -1, SYNC_HANDLER_NONE);
 }
 
 void

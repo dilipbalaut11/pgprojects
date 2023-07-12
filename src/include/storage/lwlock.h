@@ -94,6 +94,9 @@ extern PGDLLIMPORT int NamedLWLockTrancheRequests;
 /* Number of partitions of the shared buffer mapping hashtable */
 #define NUM_BUFFER_PARTITIONS  128
 
+/* Number of partitions of the shared subtrans slru buffer mapping hashtable */
+#define NUM_SLRU_PARTITIONS 32
+
 /* Number of partitions the shared lock tables are divided into */
 #define LOG2_NUM_LOCK_PARTITIONS  4
 #define NUM_LOCK_PARTITIONS  (1 << LOG2_NUM_LOCK_PARTITIONS)
@@ -108,8 +111,10 @@ extern PGDLLIMPORT int NamedLWLockTrancheRequests;
 	(BUFFER_MAPPING_LWLOCK_OFFSET + NUM_BUFFER_PARTITIONS)
 #define PREDICATELOCK_MANAGER_LWLOCK_OFFSET \
 	(LOCK_MANAGER_LWLOCK_OFFSET + NUM_LOCK_PARTITIONS)
-#define NUM_FIXED_LWLOCKS \
+#define SUBTRANS_BUF_MAPPING_LWLOCK_OFFSET \
 	(PREDICATELOCK_MANAGER_LWLOCK_OFFSET + NUM_PREDICATELOCK_PARTITIONS)
+#define NUM_FIXED_LWLOCKS \
+	(SUBTRANS_BUF_MAPPING_LWLOCK_OFFSET + NUM_SLRU_PARTITIONS)
 
 typedef enum LWLockMode
 {
@@ -207,6 +212,7 @@ typedef enum BuiltinTrancheIds
 	LWTRANCHE_PGSTATS_DATA,
 	LWTRANCHE_LAUNCHER_DSA,
 	LWTRANCHE_LAUNCHER_HASH,
+	LWTRANCHE_SUBTRANS_BUF_MAPPING,
 	LWTRANCHE_FIRST_USER_DEFINED
 }			BuiltinTrancheIds;
 

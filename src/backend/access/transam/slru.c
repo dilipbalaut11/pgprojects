@@ -158,7 +158,7 @@ static void SlruInternalDeleteSegment(SlruCtl ctl, int segno);
  * Helper function for SimpleLruShmemSize().
  */
 static inline Size
-SlruShmemStructSize(int nslots, int nlsns)
+SlruShmemStructSize(int nslots, int nlsns, int npartitions)
 {
 	Size		sz;
 
@@ -170,6 +170,7 @@ SlruShmemStructSize(int nslots, int nlsns)
 	sz += MAXALIGN(nslots * sizeof(int));	/* page_number[] */
 	sz += MAXALIGN(nslots * sizeof(int));	/* page_lru_count[] */
 	sz += MAXALIGN(nslots * sizeof(LWLockPadded));	/* buffer_locks[] */
+	sz += MAXALIGN(npartitions * sizeof(LWLockPadded));	/* partition locks[] */	
 
 	if (nlsns > 0)
 		sz += MAXALIGN(nslots * nlsns * sizeof(XLogRecPtr));	/* group_lsn[] */
@@ -181,15 +182,15 @@ SlruShmemStructSize(int nslots, int nlsns)
  * Initialization of shared memory
  */
 Size
-SimpleLruShmemSize(int nslots, int nlsns, bool use_buffmaping_hash)
+SimpleLruShmemSize(int nslots, int nlsns, int npartitions)
 {
-	Size		sz = SlruShmemStructSize(nslots, nlsns);
+	Size		sz = SlruShmemStructSize(nslots, nlsns, npartitions);
 
 	/* 
 	 * If the caller has asked to use the buffer mapping hash table over the
 	 * slru buffer pool then add the size of the hash as well.
 	 */	
-	if (use_buffmaping_hash)
+	if (npartitions > 0)
 		sz += hash_estimate_size(nslots, sizeof(SlruBufLookupEnt));
 
 	return sz;
@@ -199,25 +200,11 @@ SimpleLruShmemSize(int nslots, int nlsns, bool use_buffmaping_hash)
  * The slru buffer mapping table is partitioned to reduce contention. To
  * determine which partition lock a given pageno requires, compute the pageno's
  * hash code with SlruBufTableHashCode(), then apply SlruPartitionLock().
- * NB: NUM_SLRU_PARTITIONS must be a power of 2!
  */
 static inline int
-SlruHashPartition(uint32 hashcode)
+SlruHashPartition(SlruShared shared, uint32 hashcode)
 {
-	return hashcode % NUM_SLRU_PARTITIONS;
-}
-
-/* Return partition lock for given pageno */
-static inline LWLock *
-SlruPartitionLock(SlruCtl ctl, int partno)
-{
-	return &MainLWLockArray[ctl->shared->slru_lock_offset + partno].lock;
-}
-
-static inline LWLock *
-SlruPartitionLockByIndex(SlruCtl ctl, uint32 index)
-{
-	return &MainLWLockArray[ctl->shared->slru_lock_offset + index].lock;
+	return hashcode % shared->num_partitions;
 }
 
 /*
@@ -298,15 +285,21 @@ SlruBufTableDelete(SlruCtl ctl, int pageno)
  * If buffer mapping hash is used then lock all the partitions of the hash
  * table otherwise lock the control lock.
  */
-static void
+void
 SimpleLruAcquireControlLock(SlruCtl ctl, LWLockMode mode)
 {
 	if (ctl->buf_mapping)
 	{
 		int		i;
 
-		for (i = 0; i < NUM_SLRU_PARTITIONS; i++)
-			LWLockAcquire(SlruPartitionLockByIndex(ctl, i), mode);
+		for (i = 0; i < ctl->shared->num_partitions; i++)
+			LWLockAcquire(&ctl->shared->partition_locks[i].lock, mode);
+
+		/* 
+		 * set locked_partition_no to the num_partitions to indicate that we
+		 * that we have locked all the partitions.
+		 */
+		ctl->locked_partition_no = ctl->shared->num_partitions;
 	}
 	else
 		LWLockAcquire(ctl->shared->ControlLock, mode);
@@ -316,15 +309,20 @@ SimpleLruAcquireControlLock(SlruCtl ctl, LWLockMode mode)
  * If buffer mapping hash is used then release lock of all the partitions of
  * the hash table otherwise just release the control lock.
  */
-static void
+void
 SimpleLruReleaseControlLock(SlruCtl ctl)
 {
 	if (ctl->buf_mapping)
 	{
 		int		i;
 
-		for (i = 0; i < NUM_SLRU_PARTITIONS; i++)
-			LWLockRelease(SlruPartitionLockByIndex(ctl, i));
+		Assert(ctl->locked_partition_no == ctl->shared->num_partitions);
+
+		for (i = 0; i < ctl->shared->num_partitions; i++)
+			LWLockRelease(&ctl->shared->partition_locks[i].lock);
+
+		/* clear the flag */
+		ctl->locked_partition_no = -1;
 	}
 	else
 		LWLockRelease(ctl->shared->ControlLock);
@@ -343,15 +341,17 @@ SimpleLruReleaseControlLock(SlruCtl ctl)
  * sync_handler: which set of functions to use to handle sync requests
  */
 void
-SimpleLruInit(SlruCtl ctl, const char *name, bool use_buffmaping_hash,
-			  int nslots, int nlsns, LWLock *ctllock, const char *subdir,
-			  int tranche_id, int lock_offset, SyncRequestHandler sync_handler)
+SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
+			  int npartitions, LWLock *ctllock, const char *subdir,
+			  int tranche_id, int partition_tranche_id,
+			  SyncRequestHandler sync_handler)
 {
 	SlruShared	shared;
 	bool		found;
 	int			size;
 	shared = (SlruShared) ShmemInitStruct(name,
-										  SimpleLruShmemStructSize(nslots, nlsns),
+										  SlruShmemStructSize(nslots, nlsns,
+															  npartitions),
 										  &found);
 
 	if (!IsUnderPostmaster)
@@ -392,6 +392,8 @@ SimpleLruInit(SlruCtl ctl, const char *name, bool use_buffmaping_hash,
 		/* Initialize LWLocks */
 		shared->buffer_locks = (LWLockPadded *) (ptr + offset);
 		offset += MAXALIGN(nslots * sizeof(LWLockPadded));
+		shared->partition_locks = (LWLockPadded *) (ptr + offset);
+		offset += MAXALIGN(npartitions * sizeof(LWLockPadded));
 
 		if (nlsns > 0)
 		{
@@ -413,7 +415,8 @@ SimpleLruInit(SlruCtl ctl, const char *name, bool use_buffmaping_hash,
 		}
 
 		/* Should fit to estimated shmem size */
-		Assert(ptr - (char *) shared <= SimpleLruShmemStructSize(nslots, nlsns));
+		Assert(ptr - (char *) shared <=
+			   SlruShmemStructSize(nslots, nlsns, npartitions));
 	}
 	else
 		Assert(found);
@@ -422,10 +425,11 @@ SimpleLruInit(SlruCtl ctl, const char *name, bool use_buffmaping_hash,
 	 * If the caller has asked to use the buffer mapping hash table over the
 	 * slru buffer pool then initialize the hash as well.
 	 */
-	if (use_buffmaping_hash)
+	if (npartitions > 0)
 	{
 		StringInfoData	buf;
-		HASHCTL			info;
+		HASHCTL	info;
+		int		partno;
 
 		initStringInfo(&buf);
 		appendStringInfoString(&buf, name);
@@ -435,16 +439,24 @@ SimpleLruInit(SlruCtl ctl, const char *name, bool use_buffmaping_hash,
 		memset(&info, 0, sizeof(info));
 		info.keysize = sizeof(int);
 		info.entrysize = sizeof(SlruBufLookupEnt);	
-		info.num_partitions = NUM_SLRU_PARTITIONS;
+		info.num_partitions = npartitions;
 
-		size = nslots + NUM_SLRU_PARTITIONS;
+		size = nslots + npartitions;
 		ctl->buf_mapping = ShmemInitHash(buf.data,
 										 size, size,
 										 &info,
 										 HASH_ELEM | HASH_BLOBS |
 										 HASH_PARTITION);
 
-		shared->slru_lock_offset = lock_offset;
+		/* initialize partition locks for buffer mapping hash table */
+		for (partno = 0; partno < npartitions; partno++)
+		{
+			LWLockInitialize(&shared->partition_locks[partno].lock,
+							 partition_tranche_id);
+		}
+
+		shared->num_partitions = npartitions;
+
 		pfree(buf.data);
 	}
 
@@ -470,7 +482,6 @@ SimpleLruZeroPage(SlruCtl ctl, int pageno)
 {
 	SlruShared	shared = ctl->shared;
 	int			slotno;
-	int			oldpageno;
 
 	/* Find a suitable buffer slot for the page */
 	slotno = SlruSelectLRUPage(ctl, pageno);
@@ -479,10 +490,10 @@ SimpleLruZeroPage(SlruCtl ctl, int pageno)
 			!shared->page_dirty[slotno]) ||
 		   shared->page_number[slotno] == pageno);
 
-	oldpageno = shared->page_number[slotno];
-	if (oldpageno != pageno && ctl->buf_mapping != NULL)
+	if (ctl->buf_mapping != NULL)
 	{
-		SlruBufTableDelete(ctl, oldpageno);
+		if (shared->page_status[slotno] != SLRU_PAGE_EMPTY)
+			SlruBufTableDelete(ctl, shared->page_number[slotno]);
 		SlruBufTableInsert(ctl, pageno, slotno);
 	}
 
@@ -598,7 +609,6 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 	for (;;)
 	{
 		int			slotno;
-		int			oldpageno;
 		bool		ok;
 
 		/* See if page already is in memory; if not, pick victim slot */
@@ -634,8 +644,19 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 			   (shared->page_status[slotno] == SLRU_PAGE_VALID &&
 				!shared->page_dirty[slotno]));
 
+		/*
+		 * If the SLRU has enabled the buffer mapping hash then we need to
+		 * delete the entry of the oldpageno and add the entry for new pageno
+		 * for this slot.
+		 */
+		if (ctl->buf_mapping != NULL)
+		{
+			if (shared->page_status[slotno] != SLRU_PAGE_EMPTY)
+				SlruBufTableDelete(ctl, shared->page_number[slotno]);
+			SlruBufTableInsert(ctl, pageno, slotno);
+		}
+
 		/* Mark the slot read-busy */
-		oldpageno = shared->page_number[slotno];
 		shared->page_number[slotno] = pageno;
 		shared->page_status[slotno] = SLRU_PAGE_READ_IN_PROGRESS;
 		shared->page_dirty[slotno] = false;
@@ -654,17 +675,6 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 
 		/* Re-acquire control lock and update page state */
 		SimpleLruAcquireControlLock(ctl, LW_EXCLUSIVE);
-
-		/*
-		 * If the SLRU has enabled the buffer mapping hash then we need to
-		 * delete the entry of the oldpageno and add the entry for new pageno
-		 * for this slot.
-		 */
-		if (ctl->buf_mapping != NULL)
-		{
-			SlruBufTableDelete(ctl, oldpageno);
-			SlruBufTableInsert(ctl, pageno, slotno);
-		}
 
 		Assert(shared->page_number[slotno] == pageno &&
 			   shared->page_status[slotno] == SLRU_PAGE_READ_IN_PROGRESS &&
@@ -691,38 +701,40 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
  * This is simmilar to 'SimpleLruReadPage_ReadOnly' except 1) this is called
  * only by slru which has enabled support for buffer mapping hash table over
  * the slru buffer pool 2) this can be called for getting the buffer for both
- * reading or writing.  Pass 'read_only' as true if called is not intending to
+ * reading or writing.  Pass 'readonly' as true if called is not intending to
  * modify anything in the page.
  *
  * Return value is the shared-buffer slot number now holding the page.  On
  * return it will hold either single hash partition lock or all hash partition
  * lock, so after reading or writing from the page the caller has to call
- * 'SimpleLruLockRelease' in order to release the required lock.  'partno' will
- * be updated with the exact partition number if it is holding one partition
- * lock and SimpleLruLockRelease will release the lock accordingly.
+ * 'SimpleLruLockRelease' in order to release the required lock.  In SlruCtl
+ * 'locked_partition_no' be updated with the exact partition number if it is
+ * holding one partition lock or it will be set to num_partitions if it is
+ * holding all parition lock and SimpleLruLockRelease will release the
+ * lock accordingly.
  */
 int
-SimpleLruReadPage_BufferHash(SlruCtl ctl, int pageno, TransactionId xid,
-							bool read_only, int *partno)
+SimpleLruReadPageBufferMapping(SlruCtl ctl, int pageno, TransactionId xid,
+							   bool readonly)
 {
 	SlruShared	shared = ctl->shared;
 	uint32		hashcode;
 	int			slotno;
-	LWLock	   *partitionLock;
+	int			partno;
 
 	/*
 	 * This function must be called by slru which have enabled buffer mapping
 	 * support.
 	 */
-	Assert(ctl->buf_mapping != NULL && partno != NULL);
+	Assert(ctl->buf_mapping != NULL);
 
 	/* determine its hash code and partition lock */
 	hashcode = SlruBufTableHashCode(ctl, pageno);
-	*partno = SlruHashPartition(hashcode);
-	partitionLock = SlruPartitionLock(ctl, *partno);
+	partno = SlruHashPartition(shared, hashcode);
 
 	/* see if the block is in the buffer pool already */
-	LWLockAcquire(partitionLock, read_only ? LW_SHARED : LW_EXCLUSIVE);
+	LWLockAcquire(&shared->partition_locks[partno].lock,
+				  readonly ? LW_SHARED : LW_EXCLUSIVE);
 	slotno = SlruBufTableLookup(ctl, pageno, hashcode);
 
 	/*
@@ -740,7 +752,7 @@ SimpleLruReadPage_BufferHash(SlruCtl ctl, int pageno, TransactionId xid,
 
 		/* update the stats counter of pages found in the SLRU */
 		pgstat_count_slru_page_hit(shared->slru_stats_idx);
-
+		ctl->locked_partition_no = partno;
 		return slotno;
 	}
 
@@ -749,8 +761,7 @@ SimpleLruReadPage_BufferHash(SlruCtl ctl, int pageno, TransactionId xid,
 	 * that release the individual partition lock and lock all the partitions
 	 * as we are going to search the entire buffer pool.
 	 */
-	LWLockRelease(partitionLock);
-	*partno = -1;
+	LWLockRelease(&shared->partition_locks[partno].lock);
 	SimpleLruAcquireControlLock(ctl, LW_EXCLUSIVE);
 
 	return SimpleLruReadPage(ctl, pageno, true, xid);
@@ -804,17 +815,20 @@ SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno, TransactionId xid)
 }
 
 void
-SimpleLruLockRelease(SlruCtl ctl, int partno)
+SimpleLruLockRelease(SlruCtl ctl)
 {
+	int partno = ctl->locked_partition_no;
+
 	/*
 	 * If a valid partition lock is passed then release that lock otherwise
 	 * release all the partition.  For slru which doesn't support partition
 	 * mapping hash it will internally release the centralized control lock.
 	 */
-	if (partno >= 0)
-		LWLockRelease(SlruPartitionLock(ctl, partno));
-	else
+	if (partno  == ctl->shared->num_partitions)
 		SimpleLruReleaseControlLock(ctl);
+	else
+		LWLockRelease(&ctl->shared->partition_locks[partno].lock);
+		
 }
 
 /*

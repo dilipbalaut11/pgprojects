@@ -520,7 +520,7 @@ CommitTsShmemInit(void)
 	bool		found;
 
 	CommitTsCtl->PagePrecedes = CommitTsPagePrecedes;
-	SimpleLruInit(CommitTsCtl, "CommitTs", false, CommitTsShmemBuffers(), 0,
+	SimpleLruInit(CommitTsCtl, "CommitTs", CommitTsShmemBuffers(), 0, 0,
 				  CommitTsSLRULock, "pg_commit_ts",
 				  LWTRANCHE_COMMITTS_BUFFER,
 				  -1, SYNC_HANDLER_COMMIT_TS);

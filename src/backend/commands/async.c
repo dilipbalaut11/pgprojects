@@ -569,7 +569,7 @@ AsyncShmemInit(void)
 	 * Set up SLRU management of the pg_notify data.
 	 */
 	NotifyCtl->PagePrecedes = asyncQueuePagePrecedes;
-	SimpleLruInit(NotifyCtl, "Notify", false, NUM_NOTIFY_BUFFERS, 0,
+	SimpleLruInit(NotifyCtl, "Notify", NUM_NOTIFY_BUFFERS, 0, 0,
 				  NotifySLRULock, "pg_notify", LWTRANCHE_NOTIFY_BUFFER,
 				  -1, SYNC_HANDLER_NONE);
 

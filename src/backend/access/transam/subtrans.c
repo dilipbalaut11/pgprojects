@@ -75,15 +75,13 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 	int			pageno = TransactionIdToPage(xid);
 	int			entryno = TransactionIdToEntry(xid);
 	int			slotno;
-	int			partno;
 	TransactionId *ptr;
 
 	Assert(TransactionIdIsValid(parent));
 	Assert(TransactionIdFollows(xid, parent));
 
-	/* lock is acquired by SimpleLruReadPage_BufferHash */
-	slotno = SimpleLruReadPage_BufferHash(SubTransCtl, pageno, xid, false,
-										  &partno);
+	/* lock is acquired by SimpleLruReadPageBufferMapping */
+	slotno = SimpleLruReadPageBufferMapping(SubTransCtl, pageno, xid, false);
 	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
 	ptr += entryno;
 
@@ -99,7 +97,7 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 		SubTransCtl->shared->page_dirty[slotno] = true;
 	}
 
-	SimpleLruLockRelease(SubTransCtl, partno);
+	SimpleLruLockRelease(SubTransCtl);
 }
 
 /*
@@ -111,7 +109,6 @@ SubTransGetParent(TransactionId xid)
 	int			pageno = TransactionIdToPage(xid);
 	int			entryno = TransactionIdToEntry(xid);
 	int			slotno;
-	int			partno = -1;
 	TransactionId *ptr;
 	TransactionId parent;
 
@@ -122,15 +119,14 @@ SubTransGetParent(TransactionId xid)
 	if (!TransactionIdIsNormal(xid))
 		return InvalidTransactionId;
 
-	/* lock is acquired by SimpleLruReadPage_BufferHash */
-	slotno = SimpleLruReadPage_BufferHash(SubTransCtl, pageno, xid, true,
-										  &partno);
+	/* lock is acquired by SimpleLruReadPageBufferMapping */
+	slotno = SimpleLruReadPageBufferMapping(SubTransCtl, pageno, xid, true);
 	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
 	ptr += entryno;
 
 	parent = *ptr;
 
-	SimpleLruLockRelease(SubTransCtl, partno);
+	SimpleLruLockRelease(SubTransCtl);
 
 	return parent;
 }
@@ -192,11 +188,11 @@ void
 SUBTRANSShmemInit(void)
 {
 	SubTransCtl->PagePrecedes = SubTransPagePrecedes;
-	SimpleLruInit(SubTransCtl, "Subtrans", true,
-				  NUM_SUBTRANS_BUFFERS, 0,
+	SimpleLruInit(SubTransCtl, "Subtrans",
+				  NUM_SUBTRANS_BUFFERS, 0, 8,
 				  NULL, "pg_subtrans",
 				  LWTRANCHE_SUBTRANS_BUFFER,
-				  SUBTRANS_BUF_MAPPING_LWLOCK_OFFSET,
+				  LWTRANCHE_SUBTRANS_BUFFER_MAPPING,
 				  SYNC_HANDLER_NONE);
 	SlruPagePrecedesUnitTests(SubTransCtl, SUBTRANS_XACTS_PER_PAGE);
 }

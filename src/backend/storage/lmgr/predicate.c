@@ -807,8 +807,8 @@ SerialInit(void)
 	 * Set up SLRU management of the pg_serial data.
 	 */
 	SerialSlruCtl->PagePrecedes = SerialPagePrecedesLogically;
-	SimpleLruInit(SerialSlruCtl, "Serial", false,
-				  NUM_SERIAL_BUFFERS, 0, SerialSLRULock, "pg_serial",
+	SimpleLruInit(SerialSlruCtl, "Serial",
+				  NUM_SERIAL_BUFFERS, 0, 0, SerialSLRULock, "pg_serial",
 				  LWTRANCHE_SERIAL_BUFFER, -1, SYNC_HANDLER_NONE);
 #ifdef USE_ASSERT_CHECKING
 	SerialPagePrecedesLogicallyUnitTests();

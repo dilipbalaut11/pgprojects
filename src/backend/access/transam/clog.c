@@ -695,9 +695,9 @@ void
 CLOGShmemInit(void)
 {
 	XactCtl->PagePrecedes = CLOGPagePrecedes;
-	SimpleLruInit(XactCtl, "Xact", false, CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE,
-				  XactSLRULock, "pg_xact", LWTRANCHE_XACT_BUFFER,
-				  -1, SYNC_HANDLER_CLOG);
+	SimpleLruInit(XactCtl, "Xact", CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE, 0,
+				  XactSLRULock, "pg_xact", LWTRANCHE_XACT_BUFFER, -1,
+				  SYNC_HANDLER_CLOG);
 	SlruPagePrecedesUnitTests(XactCtl, CLOG_XACTS_PER_PAGE);
 }
 

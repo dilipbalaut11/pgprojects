@@ -191,8 +191,8 @@ static const char *const BuiltinTrancheNames[] = {
 	"LogicalRepLauncherDSA",
 	/* LWTRANCHE_LAUNCHER_HASH: */
 	"LogicalRepLauncherHash",
-	/*LWTRANCHE_SUBTRANS_BUF_MAPPING: */
-	"SubtransBufMapping",
+	/*LWTRANCHE_SUBTRANS_BUFFER_MAPPING: */
+	"SubtransBufferMapping",
 };
 
 StaticAssertDecl(lengthof(BuiltinTrancheNames) ==
@@ -540,11 +540,6 @@ InitializeLWLocks(void)
 	lock = MainLWLockArray + PREDICATELOCK_MANAGER_LWLOCK_OFFSET;
 	for (id = 0; id < NUM_PREDICATELOCK_PARTITIONS; id++, lock++)
 		LWLockInitialize(&lock->lock, LWTRANCHE_PREDICATE_LOCK_MANAGER);
-
-	/* Initialize subtrans slru lmgrs' LWLocks in main array */
-	lock = MainLWLockArray + SUBTRANS_BUF_MAPPING_LWLOCK_OFFSET;
-	for (id = 0; id < NUM_SLRU_PARTITIONS; id++, lock++)
-		LWLockInitialize(&lock->lock, LWTRANCHE_SUBTRANS_BUF_MAPPING);
 
 	/*
 	 * Copy the info about any named tranches into shared memory (so that

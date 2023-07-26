@@ -1554,6 +1554,8 @@ SlruSelectLFUPage(SlruCtl ctl, int pageno)
 
 		this_freq = pg_atomic_read_u64(&shared->page_lfu_count[slotno]);
 		this_page_number = shared->page_number[slotno];
+		if (this_page_number == shared->latest_page_number)
+			continue;
 
 		SlruLFUCounterDecay(shared, slotno, this_freq);
 

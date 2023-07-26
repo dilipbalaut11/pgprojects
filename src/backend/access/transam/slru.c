@@ -48,6 +48,7 @@
 #include "postgres.h"
 
 #include <fcntl.h>
+#include <math.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -117,7 +118,7 @@ typedef struct SlruBufLookupEnt
  * worst possible consequence is a nonoptimal choice of page to evict.  The
  * gain from allowing concurrent reads of SLRU pages seems worth it.
  */
-#define SlruRecentlyUsed(shared, slotno)	\
+#define SlruRecentlyUsedOld(shared, slotno)	\
 	do { \
 		int		new_lru_count = (shared)->cur_lru_count; \
 		if (new_lru_count != (shared)->page_lru_count[slotno]) { \
@@ -125,6 +126,46 @@ typedef struct SlruBufLookupEnt
 			(shared)->page_lru_count[slotno] = new_lru_count; \
 		} \
 	} while (0)
+
+#define SLRU_MAX_USAGE_COUNT	5
+
+static inline void
+SlruRecentlyUsed(SlruSharedData *shared, int slotno)
+{
+	while(1)
+	{
+		uint32 oldval = pg_atomic_read_u32(&(shared->page_lru_count[slotno]));
+
+		if (oldval < SLRU_MAX_USAGE_COUNT)
+		{
+			uint32 newval = oldval + 1;
+
+			if (pg_atomic_compare_exchange_u32(&(shared->page_lru_count[slotno]), &oldval, newval))
+				break;
+		}
+		else
+			break;
+	}
+}
+
+static inline void
+SlruReduceUsageCount(SlruSharedData *shared, int slotno)
+{
+	while(1)
+	{
+		uint32 oldval = pg_atomic_read_u32(&(shared->page_lru_count[slotno]));
+
+		if (oldval > 0)
+		{
+			uint32 newval = oldval - 1;
+
+			if (pg_atomic_compare_exchange_u32(&(shared->page_lru_count[slotno]), &oldval, newval))
+				break;
+		}
+		else
+			break;
+	}
+}
 
 /* Saved info for SlruReportIOError */
 typedef enum
@@ -386,8 +427,8 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		offset += MAXALIGN(nslots * sizeof(bool));
 		shared->page_number = (int *) (ptr + offset);
 		offset += MAXALIGN(nslots * sizeof(int));
-		shared->page_lru_count = (int *) (ptr + offset);
-		offset += MAXALIGN(nslots * sizeof(int));
+		shared->page_lru_count = (pg_atomic_uint32 *) (ptr + offset);
+		offset += MAXALIGN(nslots * sizeof(pg_atomic_uint32));
 
 		/* Initialize LWLocks */
 		shared->buffer_locks = (LWLockPadded *) (ptr + offset);
@@ -410,7 +451,7 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 			shared->page_buffer[slotno] = ptr;
 			shared->page_status[slotno] = SLRU_PAGE_EMPTY;
 			shared->page_dirty[slotno] = false;
-			shared->page_lru_count[slotno] = 0;
+			pg_atomic_init_u32(&shared->page_lru_count[slotno], 0);
 			ptr += BLCKSZ;
 		}
 
@@ -1328,12 +1369,9 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 	for (;;)
 	{
 		int			slotno;
-		int			cur_count;
-		int			bestvalidslot = 0;	/* keep compiler quiet */
-		int			best_valid_delta = -1;
-		int			best_valid_page_number = 0; /* keep compiler quiet */
+		int			bestvalidslot = -1;	/* keep compiler quiet */
 		int			bestinvalidslot = 0;	/* keep compiler quiet */
-		int			best_invalid_delta = -1;
+		int			best_invalid_count = -1;
 		int			best_invalid_page_number = 0;	/* keep compiler quiet */
 
 		/*
@@ -1389,51 +1427,40 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		 * That gets us back on the path to having good data when there are
 		 * multiple pages with the same lru_count.
 		 */
-		cur_count = (shared->cur_lru_count)++;
+		//cur_count = (shared->cur_lru_count)++;
 		for (slotno = 0; slotno < shared->num_slots; slotno++)
 		{
-			int			this_delta;
 			int			this_page_number;
+			int			this_lru_count;
 
 			if (shared->page_status[slotno] == SLRU_PAGE_EMPTY)
 				return slotno;
-			this_delta = cur_count - shared->page_lru_count[slotno];
-			if (this_delta < 0)
-			{
-				/*
-				 * Clean up in case shared updates have caused cur_count
-				 * increments to get "lost".  We back off the page counts,
-				 * rather than trying to increase cur_count, to avoid any
-				 * question of infinite loops or failure in the presence of
-				 * wrapped-around counts.
-				 */
-				shared->page_lru_count[slotno] = cur_count;
-				this_delta = 0;
-			}
+
 			this_page_number = shared->page_number[slotno];
 			if (this_page_number == shared->latest_page_number)
 				continue;
+
+			this_lru_count = pg_atomic_read_u32(&shared->page_lru_count[slotno]);
+
 			if (shared->page_status[slotno] == SLRU_PAGE_VALID)
 			{
-				if (this_delta > best_valid_delta ||
-					(this_delta == best_valid_delta &&
-					 ctl->PagePrecedes(this_page_number,
-									   best_valid_page_number)))
+				if (this_lru_count == 0)
 				{
 					bestvalidslot = slotno;
-					best_valid_delta = this_delta;
-					best_valid_page_number = this_page_number;
+					break;
 				}
+				else
+					SlruReduceUsageCount(shared, slotno);
 			}
 			else
 			{
-				if (this_delta > best_invalid_delta ||
-					(this_delta == best_invalid_delta &&
+				if (this_lru_count < best_invalid_count ||
+					(this_lru_count == best_invalid_count &&
 					 ctl->PagePrecedes(this_page_number,
 									   best_invalid_page_number)))
 				{
 					bestinvalidslot = slotno;
-					best_invalid_delta = this_delta;
+					best_invalid_count = this_lru_count;
 					best_invalid_page_number = this_page_number;
 				}
 			}
@@ -1446,7 +1473,7 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		 * used slot, on the assumption that it was likely initiated first of
 		 * all the I/Os in progress and may therefore finish first.
 		 */
-		if (best_valid_delta < 0)
+		if (bestvalidslot < 0)
 		{
 			SimpleLruWaitIO(ctl, bestinvalidslot);
 			continue;

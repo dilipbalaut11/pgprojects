@@ -127,6 +127,7 @@ typedef struct SlruBufLookupEnt
 		} \
 	} while (0)
 
+#define SLRU_LFU_INIT_COUNT		20
 #define SlruFrequentlyUsed(shared, slotno, freq)	\
 	pg_atomic_add_fetch_u64(&((shared)->page_lfu_count[slotno]), freq)
 
@@ -523,7 +524,7 @@ SimpleLruZeroPage(SlruCtl ctl, int pageno)
 	shared->page_dirty[slotno] = true;
 
 	if (ctl->buf_mapping != NULL)
-		SlruFrequentlyUsed(shared, slotno, 10);
+		SlruFrequentlyUsed(shared, slotno, SLRU_LFU_INIT_COUNT);
 	else
 		SlruRecentlyUsed(shared, slotno);
 
@@ -716,7 +717,7 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 			SlruReportIOError(ctl, pageno, xid);
 
 		if (ctl->buf_mapping != NULL)
-			SlruFrequentlyUsed(shared, slotno, 10);
+			SlruFrequentlyUsed(shared, slotno, SLRU_LFU_INIT_COUNT);
 		else
 			SlruRecentlyUsed(shared, slotno);
 

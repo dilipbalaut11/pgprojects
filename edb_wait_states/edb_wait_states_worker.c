@@ -38,7 +38,7 @@
 #include "utils/timestamp.h"
 
 /* Default location of the directory containing edb_wait_states log files. */
-#define EDB_WAIT_STATES_DEFAULT_DIRECTORY "edb_wait_states"
+//#define EDB_WAIT_STATES_DEFAULT_DIRECTORY "edb_wait_states"
 
 /* Constants for timestamp calculations. */
 #define SECS_PER_WEEK (7 * SECS_PER_DAY)

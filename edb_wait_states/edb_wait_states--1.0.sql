@@ -25,6 +25,18 @@ AS 'MODULE_PATHNAME'
 LANGUAGE C;
 REVOKE ALL ON FUNCTION edb_wait_states_samples(timestamptz, timestamptz) FROM PUBLIC;
 
+CREATE FUNCTION edb_wait_states_header(
+	OUT host_name text,
+	OUT db_uptime text,
+	OUT cpu_info text,
+	OUT mem_info text,
+	OUT db_info text
+)
+RETURNS SETOF record
+AS 'MODULE_PATHNAME'
+LANGUAGE C;
+REVOKE ALL ON FUNCTION edb_wait_states_header() FROM PUBLIC;
+
 CREATE FUNCTION edb_wait_states_queries(
 	IN start_ts timestamptz default '-infinity'::timestamptz,
 	IN end_ts timestamptz default 'infinity'::timestamptz,

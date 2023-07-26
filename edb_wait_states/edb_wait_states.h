@@ -21,6 +21,9 @@
 #define EDB_WAIT_STATES_SAMPLES_FILE_PREFIX "edb_ws_samples_"
 #define EDB_WAIT_STATES_QUERIES_FILE_PREFIX "edb_ws_queries_"
 #define EDB_WAIT_STATES_SESSIONS_FILE_PREFIX "edb_ws_sessions_"
+#define EDB_WAIT_STATES_HEADER_FILE_PREFIX "edb_ws_header_"
+
+#define EDB_WAIT_STATES_DEFAULT_DIRECTORY "edb_wait_states"
 
 /*
  * Structure to hold one edb_wait_states sample data.
@@ -42,6 +45,16 @@ typedef struct EDBWaitStatesSample
 	TimestampTz query_start_ts; /* timestamp when the query began it's
 								 * execution */
 } EDBWaitStatesSample;
+
+typedef struct EDBWaitStatesHeader
+{
+	char hostname[256];
+	char dbuptime[64];
+	char cpuinfo[512];
+	char meminfo[512];
+	char dbinfo[512];
+} EDBWaitStatesHeader;
+
 
 extern char *get_edb_wait_states_directory(void);
 extern void delete_edb_wait_states_files(TimestampTz start_ts,

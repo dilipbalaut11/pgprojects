@@ -35,11 +35,15 @@
 
 PG_MODULE_MAGIC;
 
+PG_FUNCTION_INFO_V1(edb_wait_states_header);
 PG_FUNCTION_INFO_V1(edb_wait_states_samples);
 PG_FUNCTION_INFO_V1(edb_wait_states_queries);
 PG_FUNCTION_INFO_V1(edb_wait_states_sessions);
 PG_FUNCTION_INFO_V1(edb_wait_states_purge);
 
+static void
+generate_edb_wait_states_header(Tuplestorestate *tupstore,
+								TupleDesc   tupdesc);
 static void read_edb_wait_states_samples(Tuplestorestate *tupstore,
 							 TupleDesc tupdesc, TimestampTz start_ts,
 							 TimestampTz end_ts);
@@ -62,7 +66,19 @@ static void read_edb_wait_states_one_session_file(char *session_file_name,
 									  TupleDesc tupdesc,
 									  TimestampTz file_start_ts,
 									  TimestampTz file_end_ts);
+/* Commands for generating header information */
+#define HOSTNAME_CMD "hostname"
+#define DBUPTIME_CMD "psql -d postgres -c 'select current_timestamp - pg_postmaster_start_time() as DB_UpTime'|  grep '^ [0-9]'"
+#define CPUINFO_CMD "lscpu | head -n5 | tr -s '  '"
+#define MEMINFO_CMD "vmstat -s| head -n5 | tr -s '  ' |sed 's/^ //g''  '"
+#define DBINFO_CMD "psql -d postgres -c '\\l' | tr -s '+' '|' |cut -d '|' -f1,2 | head -n -2 | grep -v '^  \\+|' | sed 's/^   \\+//g'"
 
+#define Natts_header 5
+#define Anum_header_hostname 0
+#define Anum_header_dbuptime 1
+#define Anum_header_cpuinfo 2
+#define Anum_header_meminfo 3
+#define Anum_header_dbinfo 4
 
 #define Natts_sample 7
 #define Anum_sample_queryid 0
@@ -90,6 +106,131 @@ static void read_edb_wait_states_one_session_file(char *session_file_name,
 #define START_TS_ARGNO 0
 #define END_TS_ARGNO 1
 
+
+/*
+ * edb_wait_states_header
+ *
+ * C interface to SQL callable function to generate the edb_wait_states header
+ * file and also returns the header infomation in the tuple format.
+ *
+ * This function only implements the C interface to SQL callable UDF, but the
+ * real work is carried out in generate_edb_wait_states_header(). See prologue
+ * of that function for more details.
+ */
+Datum
+edb_wait_states_header(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+
+	/* Check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not allowed in this context")));
+
+	/* Switch into long-lived context to construct returned data structures */
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	Assert(tupdesc->natts == Natts_header);
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	generate_edb_wait_states_header(tupstore, tupdesc);
+
+	tuplestore_donestoring(tupstore);
+
+	return (Datum) 0;
+}
+
+static void
+populateHeaderField( char *headerField, char *cmd, FILE *header_file)
+{
+	FILE *cmd_output;
+	long lSize;
+
+	cmd_output = (FILE *) popen(cmd, "r");
+    lSize = fread( headerField, 1, 255, cmd_output);
+    headerField[lSize]='\0';
+    if (header_file)
+    {
+        fwrite (headerField, 1, lSize ,header_file);
+        fputc('\n', header_file);
+    }
+    fclose(cmd_output);
+}
+/*
+ * generate_edb_wait_states_header
+ *
+ * Function generates file that contains header information and inserts the
+ * record in the given tuple store. This information is assumed to be written
+ * as EDBWaitStatesHeader structure.
+ */
+static void
+generate_edb_wait_states_header(Tuplestorestate *tupstore,
+								TupleDesc   tupdesc)
+{
+	Datum		values[Natts_header];
+	bool		nulls[Natts_header];
+	FILE	   *header_file;
+	EDBWaitStatesHeader header;
+	//long lSize;
+	//FILE *cmd_output;
+	char        file_name[MAXPGPATH];
+
+	/* initialize nulls as if we have none of them */	
+	memset(nulls, 0, sizeof(nulls));
+
+	snprintf(file_name, MAXPGPATH, "%s/%s" INT64_FORMAT , EDB_WAIT_STATES_DEFAULT_DIRECTORY, EDB_WAIT_STATES_HEADER_FILE_PREFIX, GetCurrentTimestamp());
+	header_file = fopen(file_name, "a");
+	if (header_file == NULL)
+	{
+		/*
+		 * Couldn't open the file. The caller is expecting to receive the data
+		 * in a tuple format, so do not throw an error, which would cause the
+		 * transaction to abort. Instead give a warning and move on.
+		 */
+		ereport(WARNING,
+				(errcode_for_file_access(),
+				 errmsg("can not open file %s for writing Header Information: %m",
+						file_name)));
+	}
+	
+	/* Collect header information */
+	populateHeaderField(header.hostname, HOSTNAME_CMD, header_file);
+	populateHeaderField(header.dbuptime, DBUPTIME_CMD, header_file);
+	populateHeaderField(header.cpuinfo, CPUINFO_CMD, header_file);
+	populateHeaderField(header.meminfo, MEMINFO_CMD, header_file);
+	populateHeaderField(header.dbinfo, DBINFO_CMD, header_file);
+
+	values[Anum_header_hostname] = CStringGetTextDatum(header.hostname);
+	values[Anum_header_dbuptime] = CStringGetTextDatum(header.dbuptime);
+	values[Anum_header_cpuinfo] = CStringGetTextDatum(header.cpuinfo);
+	values[Anum_header_meminfo] = CStringGetTextDatum(header.meminfo);
+	values[Anum_header_dbinfo] = CStringGetTextDatum(header.dbinfo);
+
+	tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+
+	if (header_file)
+		fclose(header_file);
+}
 
 /*
  * edb_wait_states_samples

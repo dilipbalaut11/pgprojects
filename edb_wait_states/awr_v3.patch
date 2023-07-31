@@ -1,0 +1,502 @@
+diff --git a/edb_wait_states/edb_wait_states--1.0.sql b/edb_wait_states/edb_wait_states--1.0.sql
+index 081d8bd..e22be7b 100644
+--- a/edb_wait_states/edb_wait_states--1.0.sql
++++ b/edb_wait_states/edb_wait_states--1.0.sql
+@@ -17,13 +17,26 @@ CREATE FUNCTION edb_wait_states_samples(
+     OUT query_start_time timestamptz,
+     OUT sample_time timestamptz,
+ 	OUT wait_event_type text,
+-	OUT wait_event text
++	OUT wait_event text,
++	OUT sampling_interval int4
+ )
+ RETURNS SETOF record
+ AS 'MODULE_PATHNAME'
+ LANGUAGE C;
+ REVOKE ALL ON FUNCTION edb_wait_states_samples(timestamptz, timestamptz) FROM PUBLIC;
+ 
++CREATE FUNCTION edb_wait_states_header(
++	OUT host_name text,
++	OUT db_uptime text,
++	OUT cpu_info text,
++	OUT mem_info text,
++	OUT db_info text
++)
++RETURNS SETOF record
++AS 'MODULE_PATHNAME'
++LANGUAGE C;
++REVOKE ALL ON FUNCTION edb_wait_states_header() FROM PUBLIC;
++
+ CREATE FUNCTION edb_wait_states_queries(
+ 	IN start_ts timestamptz default '-infinity'::timestamptz,
+ 	IN end_ts timestamptz default 'infinity'::timestamptz,
+@@ -81,3 +94,188 @@ RETURNS void
+ AS 'MODULE_PATHNAME'
+ LANGUAGE C;
+ REVOKE ALL ON FUNCTION edb_wait_states_purge(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_dbtime(
++	IN start_ts timestamptz default '-infinity'::timestamptz,
++	IN end_ts timestamptz default 'infinity'::timestamptz,
++	OUT query_id int8,
++    OUT dbtime int4
++) RETURNS SETOF record
++AS $$
++SELECT query_id, SUM(sampling_interval) AS dbtime FROM edb_wait_states_samples() GROUP BY query_id;
++$$
++LANGUAGE SQL;
++REVOKE ALL ON FUNCTION edb_wait_states_dbtime(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_cputime(
++	IN start_ts timestamptz default '-infinity'::timestamptz,
++	IN end_ts timestamptz default 'infinity'::timestamptz,
++	OUT query_id int8,
++    OUT cputime int4
++) RETURNS SETOF record
++AS $$
++SELECT query_id, SUM(sampling_interval) AS cputime FROM edb_wait_states_samples() WHERE wait_event IS NULL GROUP BY query_id;
++$$
++LANGUAGE SQL;
++REVOKE ALL ON FUNCTION edb_wait_states_cputime(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_waittime(
++	IN start_ts timestamptz default '-infinity'::timestamptz,
++	IN end_ts timestamptz default 'infinity'::timestamptz,
++	OUT query_id int8,
++    OUT waittime int4
++) RETURNS SETOF record
++AS $$
++SELECT query_id, SUM(sampling_interval) AS waittime FROM edb_wait_states_samples() WHERE wait_event IS NOT NULL GROUP BY query_id;
++$$
++LANGUAGE SQL;
++REVOKE ALL ON FUNCTION edb_wait_states_waittime(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_waitevent(
++	IN start_ts timestamptz default '-infinity'::timestamptz,
++	IN end_ts timestamptz default 'infinity'::timestamptz,
++	OUT query_id int8,
++    OUT wait_event text,
++	OUT wait_time int4
++) RETURNS SETOF record
++AS $$
++SELECT query_id, wait_event, SUM(sampling_interval) AS waittime FROM edb_wait_states_samples() WHERE wait_event IS NOT NULL GROUP BY query_id, wait_event;
++$$
++LANGUAGE SQL;
++REVOKE ALL ON FUNCTION edb_wait_states_waittime(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_waitevents(
++	IN start_ts timestamptz default '-infinity'::timestamptz,
++	IN end_ts timestamptz default 'infinity'::timestamptz,
++	OUT wait_event text,
++    OUT waittime int4
++) RETURNS SETOF record
++AS $$
++SELECT wait_event, SUM(sampling_interval) AS waittime FROM edb_wait_states_samples() WHERE wait_event IS NOT NULL GROUP BY wait_event;
++$$
++LANGUAGE SQL;
++REVOKE ALL ON FUNCTION edb_wait_states_waittime(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE TYPE waitevents AS (wait_event text, waittime int, pct_dbtime int);
++CREATE TYPE statements_event AS (queryid int8, dbtime int, waittime int, cputime int, top_waitevent text);
++
++CREATE FUNCTION edb_wait_states_top_wait_events_json(
++	IN start_ts timestamptz default '-infinity'::timestamptz,
++	IN end_ts timestamptz default 'infinity'::timestamptz
++) RETURNS SETOF json
++AS $$
++ SELECT row_to_json(row(wait_event, waittime, (waittime*100/d.dbtime))::waitevents)
++ FROM edb_wait_states_waitevents(),
++ (select SUM(dbtime) AS dbtime FROM edb_wait_states_dbtime) AS d;
++$$
++LANGUAGE SQL;
++
++REVOKE ALL ON FUNCTION edb_wait_states_top_wait_events_json(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_sql_statements_json(
++	IN start_ts timestamptz default '-infinity'::timestamptz,
++	IN end_ts timestamptz default 'infinity'::timestamptz
++) RETURNS SETOF json
++AS $$
++SELECT row_to_json(row(we.query_id, dt.dbtime, wt.waittime, ct.cputime, we.wait_event)::statements_event)
++FROM edb_wait_states_dbtime(start_ts, end_ts) dt, edb_wait_states_waittime(start_ts, end_ts) wt, edb_wait_states_cputime(start_ts, end_ts) ct, edb_wait_states_waitevent(start_ts, end_ts) we,
++(SELECT MAX(wait_time) top_wait_time
++ FROM edb_wait_states_waitevent()
++ GROUP BY query_id) AS maxwt
++ WHERE dt.query_id=wt.query_id AND wt.query_id=ct.query_id AND ct.query_id=we.query_id AND we.wait_time=maxwt.top_wait_time;
++$$
++LANGUAGE SQL;
++REVOKE ALL ON FUNCTION edb_wait_states_sql_statements_json(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_top_wait_events(
++        IN start_ts timestamptz default '-infinity'::timestamptz,
++        IN end_ts timestamptz default 'infinity'::timestamptz,
++		OUT waitevent TEXT,
++		OUT waittime int,
++		OUT pct_dbtime int
++) RETURNS SETOF RECORD
++AS $$
++ SELECT wait_event, waittime, (waittime*100/d.dbtime) AS pct_dbtime
++ FROM edb_wait_states_waitevents(),
++ (select SUM(dbtime) AS dbtime FROM edb_wait_states_dbtime) AS d;
++$$
++LANGUAGE SQL;
++
++REVOKE ALL ON FUNCTION edb_wait_states_top_wait_events(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_sql_statements(
++        IN start_ts timestamptz default '-infinity'::timestamptz,
++        IN end_ts timestamptz default 'infinity'::timestamptz,
++		OUT dbtime int,
++		OUT waittime int,
++		OUT cputime int,
++		OUT top_waitevent text,
++		OUT query text
++) RETURNS SETOF RECORD
++AS $$
++SELECT dt.dbtime dbtime, wt.waittime waittime , ct.cputime cputime, we.wait_event top_waitevent, q.query query
++FROM edb_wait_states_dbtime(start_ts, end_ts) dt, edb_wait_states_waittime(start_ts, end_ts) wt, edb_wait_states_cputime(start_ts, end_ts) ct, edb_wait_states_waitevent(start_ts, end_ts) we,
++(SELECT MAX(wait_time) top_wait_time
++ FROM edb_wait_states_waitevent()
++ GROUP BY query_id) AS maxwt, edb_wait_states_queries() q
++ WHERE dt.query_id=wt.query_id AND wt.query_id=ct.query_id AND ct.query_id=we.query_id AND we.wait_time=maxwt.top_wait_time AND we.query_id = q.query_id;
++$$
++LANGUAGE SQL;
++REVOKE ALL ON FUNCTION edb_wait_states_sql_statements(timestamptz, timestamptz) FROM PUBLIC;
++
++--FIXME: handle infinity in snaptime instead of using now()
++CREATE FUNCTION edb_wait_states_header_info(
++        IN start_ts timestamptz default '-infinity'::timestamptz,
++        IN end_ts timestamptz default 'infinity'::timestamptz,  
++        OUT host_name text,
++        OUT cpu_info text,
++        OUT mem_info text,
++        OUT dbname text,
++        OUT dbtime int,
++        OUT snaptime interval
++)
++RETURNS SETOF RECORD
++AS $$
++SELECT h.host_name, h.cpu_info, h.mem_info, c  dbname, sum(dt.dbtime) dbtime, (now()+5 - now())::interval snaptime
++FROM edb_wait_states_header() h, edb_wait_states_dbtime(start_ts , end_ts) dt, current_database() As c group by h.host_name, h.cpu_info, h.mem_info, dbname, snaptime ;
++$$
++LANGUAGE SQL;
++
++REVOKE ALL ON FUNCTION edb_wait_states_sql_statements(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_generate_report(
++    IN filename text,
++	IN header1 text,
++	IN header2 text,
++	IN header3 text
++)
++RETURNS void
++AS 'MODULE_PATHNAME'
++LANGUAGE C;
++REVOKE ALL ON FUNCTION edb_wait_states_generate_report(text, text, text, text) FROM PUBLIC;
++
++/*
++TO BE REMOVED - queries for generating html output
++--Q1
++SELECT wait_event, waittime, (waittime*100/d.dbtime) AS pct_dbtime
++FROM edb_wait_states_waitevents(),
++(select SUM(dbtime) AS dbtime FROM edb_wait_states_dbtime) AS d;
++  wait_event   | waittime | pct_dbtime 
++---------------+----------+------------
++ tuple         |       10 |         14
++ transactionid |       40 |         57
++
++--Q2
++SELECT we.query_id, dt.dbtime dbtime, wt.waittime waittime, ct.cputime cputime, we.wait_event top_wait_event
++FROM edb_wait_states_dbtime() dt, edb_wait_states_waittime() wt, edb_wait_states_cputime() ct, edb_wait_states_waitevent() we,
++(SELECT MAX(wait_time) top_wait_time
++ FROM edb_wait_states_waitevent()
++ GROUP BY query_id) AS maxwt
++ WHERE dt.query_id=wt.query_id AND wt.query_id=ct.query_id AND ct.query_id=we.query_id AND we.wait_time=maxwt.top_wait_time;
++
++       query_id       | dbtime | waittime | cputime | top_wait_event 
++----------------------+--------+----------+---------+----------------
++ -2331406789928976424 |     12 |        5 |       7 | transactionid
++  1341496867771568417 |     50 |       45 |       5 | transactionid
++
++*/
+diff --git a/edb_wait_states/edb_wait_states.h b/edb_wait_states/edb_wait_states.h
+index b79bb13..0347617 100644
+--- a/edb_wait_states/edb_wait_states.h
++++ b/edb_wait_states/edb_wait_states.h
+@@ -21,6 +21,9 @@
+ #define EDB_WAIT_STATES_SAMPLES_FILE_PREFIX "edb_ws_samples_"
+ #define EDB_WAIT_STATES_QUERIES_FILE_PREFIX "edb_ws_queries_"
+ #define EDB_WAIT_STATES_SESSIONS_FILE_PREFIX "edb_ws_sessions_"
++#define EDB_WAIT_STATES_HEADER_FILE_PREFIX "edb_ws_header_"
++
++#define EDB_WAIT_STATES_DEFAULT_DIRECTORY "edb_wait_states"
+ 
+ /*
+  * Structure to hold one edb_wait_states sample data.
+@@ -37,10 +40,22 @@ typedef struct EDBWaitStatesSample
+ 								 * was collected */
+ 	int32		session_id;		/* backend process id on which the query was
+ 								 * running */
++	int32		sample_interval; /* sampling interval when this sample was taken */
++
+ 	TimestampTz query_start_ts; /* timestamp when the query began it's
+ 								 * execution */
+ } EDBWaitStatesSample;
+ 
++typedef struct EDBWaitStatesHeader
++{
++	char hostname[256];
++	char dbuptime[64];
++	char cpuinfo[512];
++	char meminfo[512];
++	char dbinfo[512];
++} EDBWaitStatesHeader;
++
++
+ extern char *get_edb_wait_states_directory(void);
+ extern void delete_edb_wait_states_files(TimestampTz start_ts,
+ 							 TimestampTz end_ts);
+diff --git a/edb_wait_states/edb_wait_states_reader.c b/edb_wait_states/edb_wait_states_reader.c
+index 58c8f68..6cb9b7c 100644
+--- a/edb_wait_states/edb_wait_states_reader.c
++++ b/edb_wait_states/edb_wait_states_reader.c
+@@ -35,11 +35,16 @@
+ 
+ PG_MODULE_MAGIC;
+ 
++PG_FUNCTION_INFO_V1(edb_wait_states_header);
+ PG_FUNCTION_INFO_V1(edb_wait_states_samples);
+ PG_FUNCTION_INFO_V1(edb_wait_states_queries);
+ PG_FUNCTION_INFO_V1(edb_wait_states_sessions);
+ PG_FUNCTION_INFO_V1(edb_wait_states_purge);
++PG_FUNCTION_INFO_V1(edb_wait_states_generate_report);
+ 
++static void
++generate_edb_wait_states_samples(Tuplestorestate *tupstore,
++								TupleDesc   tupdesc);
+ static void read_edb_wait_states_samples(Tuplestorestate *tupstore,
+ 							 TupleDesc tupdesc, TimestampTz start_ts,
+ 							 TimestampTz end_ts);
+@@ -62,15 +67,31 @@ static void read_edb_wait_states_one_session_file(char *session_file_name,
+ 									  TupleDesc tupdesc,
+ 									  TimestampTz file_start_ts,
+ 									  TimestampTz file_end_ts);
+-
+-
+-#define Natts_sample 6
++static void generate_edb_wait_states_header(Tuplestorestate *tupstore,
++								TupleDesc   tupdesc);
++/* Commands for generating header information */
++#define HOSTNAME_CMD "hostname"
++#define DBUPTIME_CMD "psql -d postgres -c 'select current_timestamp - pg_postmaster_start_time() as DB_UpTime'|  grep '^ [0-9]'"
++#define CPUINFO_CMD "lscpu | head -n5 | tr -s '  '"
++#define MEMINFO_CMD "vmstat -s| head -n5 | tr -s '  ' |sed 's/^ //g''  '"
++#define DBINFO_CMD "psql -d postgres -c '\\l' | tr -s '+' '|' |cut -d '|' -f1,2 | head -n -2 | grep -v '^  \\+|' | sed 's/^   \\+//g'"
++
++#define Natts_header 5
++#define Anum_header_hostname 0
++#define Anum_header_dbuptime 1
++#define Anum_header_cpuinfo 2
++#define Anum_header_meminfo 3
++#define Anum_header_dbinfo 4
++
++#define Natts_sample 7
+ #define Anum_sample_queryid 0
+ #define Anum_sample_sessionid 1
+ #define Anum_sample_query_start_ts 2
+ #define Anum_sample_ts 3
+ #define Anum_sample_wait_event_type 4
+ #define Anum_sample_wait_event 5
++#define Anum_sample_interval 6
++
+ 
+ #define Natts_query 4
+ #define Anum_query_id 0
+@@ -89,6 +110,131 @@ static void read_edb_wait_states_one_session_file(char *session_file_name,
+ #define END_TS_ARGNO 1
+ 
+ 
++/*
++ * edb_wait_states_header
++ *
++ * C interface to SQL callable function to generate the edb_wait_states header
++ * file and also returns the header infomation in the tuple format.
++ *
++ * This function only implements the C interface to SQL callable UDF, but the
++ * real work is carried out in generate_edb_wait_states_header(). See prologue
++ * of that function for more details.
++ */
++Datum
++edb_wait_states_header(PG_FUNCTION_ARGS)
++{
++	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
++	TupleDesc	tupdesc;
++	Tuplestorestate *tupstore;
++	MemoryContext per_query_ctx;
++	MemoryContext oldcontext;
++
++	/* Check to see if caller supports us returning a tuplestore */
++	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
++		ereport(ERROR,
++				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
++				 errmsg("set-valued function called in context that cannot accept a set")));
++	if (!(rsinfo->allowedModes & SFRM_Materialize))
++		ereport(ERROR,
++				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
++				 errmsg("materialize mode required, but it is not allowed in this context")));
++
++	/* Switch into long-lived context to construct returned data structures */
++	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
++	oldcontext = MemoryContextSwitchTo(per_query_ctx);
++
++	/* Build a tuple descriptor for our result type */
++	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
++		elog(ERROR, "return type must be a row type");
++
++	Assert(tupdesc->natts == Natts_header);
++
++	tupstore = tuplestore_begin_heap(true, false, work_mem);
++	rsinfo->returnMode = SFRM_Materialize;
++	rsinfo->setResult = tupstore;
++	rsinfo->setDesc = tupdesc;
++
++	MemoryContextSwitchTo(oldcontext);
++
++	generate_edb_wait_states_header(tupstore, tupdesc);
++
++	tuplestore_donestoring(tupstore);
++
++	return (Datum) 0;
++}
++
++static void
++populateHeaderField( char *headerField, char *cmd, FILE *header_file)
++{
++	FILE *cmd_output;
++	long lSize;
++
++	cmd_output = (FILE *) popen(cmd, "r");
++    lSize = fread( headerField, 1, 255, cmd_output);
++    headerField[lSize]='\0';
++    if (header_file)
++    {
++        fwrite (headerField, 1, lSize ,header_file);
++        fputc('\n', header_file);
++    }
++    fclose(cmd_output);
++}
++/*
++ * generate_edb_wait_states_header
++ *
++ * Function generates file that contains header information and inserts the
++ * record in the given tuple store. This information is assumed to be written
++ * as EDBWaitStatesHeader structure.
++ */
++static void
++generate_edb_wait_states_header(Tuplestorestate *tupstore,
++								TupleDesc   tupdesc)
++{
++	Datum		values[Natts_header];
++	bool		nulls[Natts_header];
++	FILE	   *header_file;
++	EDBWaitStatesHeader header;
++	//long lSize;
++	//FILE *cmd_output;
++	char        file_name[MAXPGPATH];
++
++	/* initialize nulls as if we have none of them */	
++	memset(nulls, 0, sizeof(nulls));
++
++	snprintf(file_name, MAXPGPATH, "%s/%s" INT64_FORMAT , EDB_WAIT_STATES_DEFAULT_DIRECTORY, EDB_WAIT_STATES_HEADER_FILE_PREFIX, GetCurrentTimestamp());
++	header_file = fopen(file_name, "a");
++	if (header_file == NULL)
++	{
++		/*
++		 * Couldn't open the file. The caller is expecting to receive the data
++		 * in a tuple format, so do not throw an error, which would cause the
++		 * transaction to abort. Instead give a warning and move on.
++		 */
++		ereport(WARNING,
++				(errcode_for_file_access(),
++				 errmsg("can not open file %s for writing Header Information: %m",
++						file_name)));
++	}
++	
++	/* Collect header information */
++	populateHeaderField(header.hostname, HOSTNAME_CMD, header_file);
++	populateHeaderField(header.dbuptime, DBUPTIME_CMD, header_file);
++	populateHeaderField(header.cpuinfo, CPUINFO_CMD, header_file);
++	populateHeaderField(header.meminfo, MEMINFO_CMD, header_file);
++	populateHeaderField(header.dbinfo, DBINFO_CMD, header_file);
++
++	values[Anum_header_hostname] = CStringGetTextDatum(header.hostname);
++	values[Anum_header_dbuptime] = CStringGetTextDatum(header.dbuptime);
++	values[Anum_header_cpuinfo] = CStringGetTextDatum(header.cpuinfo);
++	values[Anum_header_meminfo] = CStringGetTextDatum(header.meminfo);
++	values[Anum_header_dbinfo] = CStringGetTextDatum(header.dbinfo);
++
++	tuplestore_putvalues(tupstore, tupdesc, values, nulls);
++
++	if (header_file)
++		fclose(header_file);
++}
++
+ /*
+  * edb_wait_states_samples
+  *
+@@ -289,6 +435,26 @@ edb_wait_states_purge(PG_FUNCTION_ARGS)
+ 	PG_RETURN_VOID();
+ }
+ 
++Datum
++edb_wait_states_generate_report(PG_FUNCTION_ARGS)
++{
++	char	   *filename = text_to_cstring(PG_GETARG_TEXT_PP(0));
++	char	   *header1 = text_to_cstring(PG_GETARG_TEXT_PP(1));
++	char	   *header2 = text_to_cstring(PG_GETARG_TEXT_PP(2));
++	char	   *header3 = text_to_cstring(PG_GETARG_TEXT_PP(3));
++	FILE	   *f;
++
++	f = AllocateFile(filename, "wb");
++
++	fwrite(header1, sizeof(header1), 1, f);
++	fwrite(header2, sizeof(header2), 1, f);
++	fwrite(header3, sizeof(header3), 1, f);
++
++	FreeFile(f);
++
++	PG_RETURN_VOID();
++}
++
+ /*
+  * is_edb_wait_states_file
+  *
+@@ -452,6 +618,7 @@ read_edb_wait_states_one_sample_file(char *sample_file_name,
+ 		values[Anum_sample_sessionid] = Int32GetDatum(sample.session_id);
+ 		values[Anum_sample_ts] = TimestampTzGetDatum(sample.sample_ts);
+ 		values[Anum_sample_query_start_ts] = TimestampTzGetDatum(sample.query_start_ts);
++		values[Anum_sample_interval] = Int32GetDatum(sample.sample_interval);
+ 
+ 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+ 
+diff --git a/edb_wait_states/edb_wait_states_worker.c b/edb_wait_states/edb_wait_states_worker.c
+index 3764470..7f4f04d 100644
+--- a/edb_wait_states/edb_wait_states_worker.c
++++ b/edb_wait_states/edb_wait_states_worker.c
+@@ -38,7 +38,7 @@
+ #include "utils/timestamp.h"
+ 
+ /* Default location of the directory containing edb_wait_states log files. */
+-#define EDB_WAIT_STATES_DEFAULT_DIRECTORY "edb_wait_states"
++//#define EDB_WAIT_STATES_DEFAULT_DIRECTORY "edb_wait_states"
+ 
+ /* Constants for timestamp calculations. */
+ #define SECS_PER_WEEK (7 * SECS_PER_DAY)
+@@ -1333,6 +1333,7 @@ ews_log_events(TimestampTz ts, EdbWaitStatesLogFile *session_file,
+ 		samplingItem->session_id = procpid;
+ 		samplingItem->sample_ts = ts;
+ 		samplingItem->wait_event_id = proc->wait_event_info;
++		samplingItem->sample_interval = edb_wait_states_sampling_interval;
+ 		samplingItem->query_start_ts = query_start_ts;
+ 	}
+ 	/* Throw away the current stats snapshot. */

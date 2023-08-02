@@ -23,7 +23,7 @@ select * from edb_wait_states_header();
 \H
 \qecho '<h2>DBTime</h2>'
 \pset format html
-select sum(dbtime) AS total_dbtime from edb_wait_states_dbtime(now()-100, now());
+select sum(dbtime) AS total_dbtime from edb_wait_states_dbtime(:start, :end);
 \H
 \qecho '<h2>Session Informations</h2>'
 \pset format html
@@ -35,11 +35,11 @@ SELECT date_trunc('second', current_timestamp - pg_postmaster_start_time()) as u
 \H
 \qecho '<h2>Top wait events</h2>'
 \pset format html
-select * from edb_wait_states_top_wait_events(now()-100, now());
+select * from edb_wait_states_top_wait_events(:start, :end);
 \H
 \qecho '<h2>Top SQL statements</h2>'
 \pset format html
-select * from edb_wait_states_sql_statements(now()-100, now());
+select * from edb_wait_states_sql_statements(:start, :end);
 
 \qecho '</td></tr></table>'
 \qecho '</body></html>'

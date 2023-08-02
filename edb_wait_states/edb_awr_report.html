@@ -1,0 +1,199 @@
+<html><head><style>H2{background:#e6e6e6}</style>
+<title>PostgreSQL Report</title></head><body>
+<table><tr valign='top'><td>
+<h2>Report Date</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">report_timestamp</th>
+  </tr>
+  <tr valign="top">
+    <td align="left">02-AUG-23 10:04:13.236091 +05:30</td>
+  </tr>
+</table>
+<p>(1 row)<br />
+</p>
+<h2>PostgreSQL Basic Information</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">postgresql_version</th>
+  </tr>
+  <tr valign="top">
+    <td align="left">PostgreSQL 16.0 (EnterpriseDB Advanced Server 16.0.0) on aarch64-unknown-linux-gnu, compiled by gcc (GCC) 11.4.1 20230605 (Red Hat 11.4.1-2), 64-bit</td>
+  </tr>
+</table>
+<p>(1 row)<br />
+</p>
+<h2>System Information</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">host_name</th>
+    <th align="center">cpu_info</th>
+    <th align="center">mem_info</th>
+  </tr>
+  <tr valign="top">
+    <td align="left">localhost.localdomain<br />
+</td>
+    <td align="left">Architecture: aarch64<br />
+CPU op-mode(s): 64-bit<br />
+Byte Order: Little Endian<br />
+CPU(s): 4<br />
+On-line CPU(s) list: 0-3<br />
+</td>
+    <td align="left">7786668 K total memory<br />
+4217424 K used memory<br />
+3406916 K active memory<br />
+2988608 K inactive memory<br />
+112500 K free memory<br />
+</td>
+  </tr>
+</table>
+<p>(1 row)<br />
+</p>
+<h2>DBTime</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">total_dbtime</th>
+  </tr>
+  <tr valign="top">
+    <td align="right">493</td>
+  </tr>
+</table>
+<p>(1 row)<br />
+</p>
+<h2>Session Informations</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">session_user</th>
+    <th align="center">current_database</th>
+  </tr>
+  <tr valign="top">
+    <td align="left">dilip</td>
+    <td align="left">postgres</td>
+  </tr>
+</table>
+<p>(1 row)<br />
+</p>
+<h2>Server Uptime</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">uptime</th>
+  </tr>
+  <tr valign="top">
+    <td align="left">18:11:45</td>
+  </tr>
+</table>
+<p>(1 row)<br />
+</p>
+<h2>Top wait events</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">waitevent</th>
+    <th align="center">waittime</th>
+    <th align="center">pct_dbtime</th>
+  </tr>
+  <tr valign="top">
+    <td align="left">DataFileRead</td>
+    <td align="right">41</td>
+    <td align="right">8</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">WALWrite</td>
+    <td align="right">69</td>
+    <td align="right">13</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">WALBufMapping</td>
+    <td align="right">1</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">DataFileWrite</td>
+    <td align="right">13</td>
+    <td align="right">2</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">DataFileImmediateSync</td>
+    <td align="right">2</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">DataFileExtend</td>
+    <td align="right">4</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">WALInitSync</td>
+    <td align="right">1</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">transactionid</td>
+    <td align="right">64</td>
+    <td align="right">12</td>
+  </tr>
+</table>
+<p>(8 rows)<br />
+</p>
+<h2>Top SQL statements</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">dbtime</th>
+    <th align="center">waittime</th>
+    <th align="center">cputime</th>
+    <th align="center">top_waitevent</th>
+    <th align="center">query</th>
+  </tr>
+  <tr valign="top">
+    <td align="right">8</td>
+    <td align="right">5</td>
+    <td align="right">3</td>
+    <td align="left">WALWrite</td>
+    <td align="left">alter table pgbench_accounts add primary key (aid)</td>
+  </tr>
+  <tr valign="top">
+    <td align="right">452</td>
+    <td align="right">188</td>
+    <td align="right">264</td>
+    <td align="left">WALWrite</td>
+    <td align="left">UPDATE pgbench_accounts SET abalance =abalance+$1</td>
+  </tr>
+  <tr valign="top">
+    <td align="right">452</td>
+    <td align="right">188</td>
+    <td align="right">264</td>
+    <td align="left">WALBufMapping</td>
+    <td align="left">UPDATE pgbench_accounts SET abalance =abalance+$1</td>
+  </tr>
+  <tr valign="top">
+    <td align="right">452</td>
+    <td align="right">188</td>
+    <td align="right">264</td>
+    <td align="left">WALBufMapping</td>
+    <td align="left">UPDATE pgbench_accounts SET abalance =abalance+$1</td>
+  </tr>
+  <tr valign="top">
+    <td align="right">452</td>
+    <td align="right">188</td>
+    <td align="right">264</td>
+    <td align="left">transactionid</td>
+    <td align="left">UPDATE pgbench_accounts SET abalance =abalance+$1</td>
+  </tr>
+  <tr valign="top">
+    <td align="right">452</td>
+    <td align="right">188</td>
+    <td align="right">264</td>
+    <td align="left">WALInitSync</td>
+    <td align="left">UPDATE pgbench_accounts SET abalance =abalance+$1</td>
+  </tr>
+  <tr valign="top">
+    <td align="right">452</td>
+    <td align="right">188</td>
+    <td align="right">264</td>
+    <td align="left">WALInitSync</td>
+    <td align="left">UPDATE pgbench_accounts SET abalance =abalance+$1</td>
+  </tr>
+</table>
+<p>(7 rows)<br />
+</p>
+</td></tr></table>
+</body></html>

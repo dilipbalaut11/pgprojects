@@ -5,13 +5,28 @@
 \qecho '<title>PostgreSQL Report</title></head><body>'
 \qecho '<table><tr valign=''top''><td>'
 
-\qecho '<h2>Report Date</h2>'
+\qecho '<h2>Report generation time</h2>'
 \pset format html
 SELECT current_timestamp AS report_timestamp;
+
+\qecho '<h2>Report snapshot duration</h2>'
+\pset format html
+SELECT :start AS snap_start, :end AS snap_end;
 
 \qecho '<h2>PostgreSQL Basic Information</h2>'
 \pset format html
 SELECT version() AS PostgreSQL_Version;
+
+\H
+\qecho '<h2>PostgreSQL Database Settings</h2>'
+\x on
+\t on
+\pset format html
+SELECT category, string_agg(name || '=' || setting, E'\n' ORDER BY name) As settings
+FROM pg_settings
+WHERE 1 = 1
+GROUP BY category
+ORDER BY category;
 
 \x off
 \t off
@@ -23,7 +38,7 @@ select * from edb_wait_states_header();
 \H
 \qecho '<h2>DBTime</h2>'
 \pset format html
-select sum(dbtime) AS total_dbtime from edb_wait_states_dbtime(:start, :end);
+select sum(dbtime) AS total_dbtime_sec from edb_wait_states_dbtime(:start, :end);
 \H
 \qecho '<h2>Session Informations</h2>'
 \pset format html

@@ -1,13 +1,26 @@
 <html><head><style>H2{background:#e6e6e6}</style>
 <title>PostgreSQL Report</title></head><body>
 <table><tr valign='top'><td>
-<h2>Report Date</h2>
+<h2>Report generation time</h2>
 <table border="1" cellspacing=0 cellpadding=0>
   <tr>
     <th align="center">report_timestamp</th>
   </tr>
   <tr valign="top">
-    <td align="left">02-AUG-23 10:04:13.236091 +05:30</td>
+    <td align="left">03-AUG-23 16:37:29.689867 +05:30</td>
+  </tr>
+</table>
+<p>(1 row)<br />
+</p>
+<h2>Report snapshot duration</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">snap_start</th>
+    <th align="center">snap_end</th>
+  </tr>
+  <tr valign="top">
+    <td align="left">30-APR-23 17:20:30.45226</td>
+    <td align="left">30-JUL-24 17:20:20.45226</td>
   </tr>
 </table>
 <p>(1 row)<br />
@@ -23,6 +36,869 @@
 </table>
 <p>(1 row)<br />
 </p>
+<h2>PostgreSQL Database Settings</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Autovacuum</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">autovacuum=on<br />
+autovacuum_analyze_scale_factor=0.1<br />
+autovacuum_analyze_threshold=50<br />
+autovacuum_freeze_max_age=200000000<br />
+autovacuum_max_workers=3<br />
+autovacuum_multixact_freeze_max_age=400000000<br />
+autovacuum_naptime=60<br />
+autovacuum_vacuum_cost_delay=2<br />
+autovacuum_vacuum_cost_limit=-1<br />
+autovacuum_vacuum_insert_scale_factor=0.2<br />
+autovacuum_vacuum_insert_threshold=1000<br />
+autovacuum_vacuum_scale_factor=0.2<br />
+autovacuum_vacuum_threshold=50</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Client Connection Defaults / Locale and Formatting</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">client_encoding=UTF8<br />
+DateStyle=Redwood, SHOW_TIME<br />
+default_text_search_config=pg_catalog.english<br />
+extra_float_digits=1<br />
+icu_short_form=<br />
+icu_validation_level=warning<br />
+IntervalStyle=postgres<br />
+lc_messages=en_US.UTF-8<br />
+lc_monetary=en_US.UTF-8<br />
+lc_numeric=en_US.UTF-8<br />
+lc_time=en_US.UTF-8<br />
+TimeZone=Asia/Kolkata<br />
+timezone_abbreviations=Default</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Client Connection Defaults / Other Defaults</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">dynamic_library_path=$libdir<br />
+gin_fuzzy_search_limit=0<br />
+odbc_lib_path=<br />
+oracle_home=</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Client Connection Defaults / Shared Library Preloading</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">jit_provider=llvmjit<br />
+local_preload_libraries=<br />
+session_preload_libraries=<br />
+shared_preload_libraries=$libdir/edb_wait_states, $libdir/pg_stat_statements</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Client Connection Defaults / Statement Behavior</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">bytea_output=hex<br />
+check_function_bodies=on<br />
+client_min_messages=notice<br />
+createrole_self_grant=<br />
+default_heap_fillfactor=100<br />
+default_table_access_method=heap<br />
+default_tablespace=<br />
+default_toast_compression=pglz<br />
+default_transaction_deferrable=off<br />
+default_transaction_isolation=read committed<br />
+default_transaction_read_only=off<br />
+edb_data_redaction=on<br />
+gin_pending_list_limit=4096<br />
+idle_in_transaction_session_timeout=0<br />
+idle_session_timeout=0<br />
+lock_timeout=0<br />
+row_security=on<br />
+search_path=&quot;$user&quot;, public<br />
+session_replication_role=origin<br />
+statement_timeout=0<br />
+temp_tablespaces=<br />
+transaction_deferrable=off<br />
+transaction_isolation=read committed<br />
+transaction_read_only=off<br />
+vacuum_failsafe_age=1600000000<br />
+vacuum_freeze_min_age=50000000<br />
+vacuum_freeze_table_age=150000000<br />
+vacuum_multixact_failsafe_age=1600000000<br />
+vacuum_multixact_freeze_min_age=5000000<br />
+vacuum_multixact_freeze_table_age=150000000<br />
+xmlbinary=base64<br />
+xmloption=content</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Connections and Authentication / Authentication</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">authentication_timeout=60<br />
+db_user_namespace=off<br />
+gss_accept_delegation=off<br />
+krb_caseins_users=off<br />
+krb_server_keyfile=<br />
+password_encryption=scram-sha-256<br />
+scram_iterations=4096</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Connections and Authentication / Connection Settings</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">bonjour=off<br />
+bonjour_name=<br />
+listen_addresses=localhost<br />
+max_connections=100<br />
+port=5444<br />
+reserved_connections=0<br />
+superuser_reserved_connections=3<br />
+unix_socket_directories=/tmp<br />
+unix_socket_group=<br />
+unix_socket_permissions=0777</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Connections and Authentication / SSL</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">ssl=off<br />
+ssl_ca_file=<br />
+ssl_cert_file=server.crt<br />
+ssl_ciphers=HIGH:MEDIUM:+3DES:!aNULL<br />
+ssl_crl_dir=<br />
+ssl_crl_file=<br />
+ssl_dh_params_file=<br />
+ssl_ecdh_curve=prime256v1<br />
+ssl_key_file=server.key<br />
+ssl_max_protocol_version=<br />
+ssl_min_protocol_version=TLSv1.2<br />
+ssl_passphrase_command=<br />
+ssl_passphrase_command_supports_reload=off<br />
+ssl_prefer_server_ciphers=on</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Connections and Authentication / TCP Settings</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">client_connection_check_interval=0<br />
+tcp_keepalives_count=0<br />
+tcp_keepalives_idle=0<br />
+tcp_keepalives_interval=0<br />
+tcp_user_timeout=0</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Customized Options</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">custom_variable_classes=<br />
+edb_wait_states.directory=edb_wait_states<br />
+edb_wait_states.enable_collection=on<br />
+edb_wait_states.retention_period=604800<br />
+edb_wait_states.sampling_interval=1<br />
+pg_stat_statements.max=5000<br />
+pg_stat_statements.save=on<br />
+pg_stat_statements.track=top<br />
+pg_stat_statements.track_planning=off<br />
+pg_stat_statements.track_utility=on</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Developer Options</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">allow_in_place_tablespaces=off<br />
+allow_system_table_mods=off<br />
+backtrace_functions=<br />
+bdrpg_probe_action=log<br />
+bdrpg_probe_backend_pid=0<br />
+bdrpg_probe_counter=1<br />
+bdrpg_probe_name=<br />
+bdrpg_probe_sleep=0<br />
+debug_discard_caches=0<br />
+debug_io_direct=<br />
+debug_parallel_query=off<br />
+ignore_checksum_failure=off<br />
+ignore_invalid_pages=off<br />
+ignore_system_indexes=off<br />
+jit_debugging_support=off<br />
+jit_dump_bitcode=off<br />
+jit_expressions=on<br />
+jit_profiling_support=off<br />
+jit_tuple_deforming=on<br />
+logical_replication_mode=buffered<br />
+post_auth_delay=0<br />
+pre_auth_delay=0<br />
+remove_temp_files_after_crash=on<br />
+running_edb_bootstrap_scripts=off<br />
+send_abort_for_crash=off<br />
+send_abort_for_kill=off<br />
+snapshot_timestamp=<br />
+snapshot_timestamp_timeout=0<br />
+trace_notify=off<br />
+trace_recovery_messages=log<br />
+trace_sort=off<br />
+wal_consistency_checking=<br />
+zero_damaged_pages=off</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">EnterpriseDB Audit Archiver Settings</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">edb_audit_archiver=off<br />
+edb_audit_archiver_compress_command=gzip %p<br />
+edb_audit_archiver_compress_size_limit=-1<br />
+edb_audit_archiver_compress_suffix=.gz<br />
+edb_audit_archiver_compress_time_limit=-1<br />
+edb_audit_archiver_expire_command=<br />
+edb_audit_archiver_expire_size_limit=-1<br />
+edb_audit_archiver_expire_time_limit=-1<br />
+edb_audit_archiver_filename_prefix=audit-<br />
+edb_audit_archiver_sort_file=mtime<br />
+edb_audit_archiver_timeout=300</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">EnterpriseDB Auditing Settings</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">edb_audit=<br />
+edb_audit_connect=failed<br />
+edb_audit_destination=file<br />
+edb_audit_directory=edb_audit<br />
+edb_audit_disconnect=none<br />
+edb_audit_filename=audit-%Y%m%d_%H%M%S<br />
+edb_audit_rotation_day=every<br />
+edb_audit_rotation_seconds=0<br />
+edb_audit_rotation_size=0<br />
+edb_audit_statement=ddl, error<br />
+edb_audit_tag=</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Error Handling</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">data_sync_retry=off<br />
+exit_on_error=off<br />
+recovery_init_sync_method=fsync<br />
+restart_after_crash=on</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">File Locations</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">config_file=/home/dilip/work/PPAS/install/bin/data/postgresql.conf<br />
+data_directory=/home/dilip/work/PPAS/install/bin/data<br />
+data_encryption_key_unwrap_command=<br />
+external_pid_file=<br />
+hba_file=/home/dilip/work/PPAS/install/bin/data/pg_hba.conf<br />
+ident_file=/home/dilip/work/PPAS/install/bin/data/pg_ident.conf</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Lock Management</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">deadlock_timeout=1000<br />
+max_locks_per_transaction=64<br />
+max_pred_locks_per_page=2<br />
+max_pred_locks_per_relation=-2<br />
+max_pred_locks_per_transaction=64</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Preset Options</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">block_size=8192<br />
+data_checksums=off<br />
+data_directory_mode=0700<br />
+debug_assertions=on<br />
+in_hot_standby=off<br />
+integer_datetimes=on<br />
+max_function_args=256<br />
+max_identifier_length=63<br />
+max_index_keys=32<br />
+segment_size=131072<br />
+server_encoding=UTF8<br />
+server_version=16.0.0<br />
+server_version_num=160000<br />
+shared_memory_size=145<br />
+shared_memory_size_in_huge_pages=73<br />
+ssl_library=OpenSSL<br />
+wal_block_size=8192<br />
+wal_segment_size=16777216</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Query Tuning / Genetic Query Optimizer</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">geqo=on<br />
+geqo_effort=5<br />
+geqo_generations=0<br />
+geqo_pool_size=0<br />
+geqo_seed=0<br />
+geqo_selection_bias=2<br />
+geqo_threshold=12</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Query Tuning / Other Planner Options</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">constraint_exclusion=partition<br />
+cursor_tuple_fraction=0.1<br />
+default_statistics_target=100<br />
+edb_max_spins_per_delay=1000<br />
+from_collapse_limit=8<br />
+jit=on<br />
+join_collapse_limit=8<br />
+plan_cache_mode=auto<br />
+recursive_worktable_factor=10</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Query Tuning / Planner Cost Constants</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">cpu_index_tuple_cost=0.005<br />
+cpu_operator_cost=0.0025<br />
+cpu_tuple_cost=0.01<br />
+effective_cache_size=524288<br />
+jit_above_cost=100000<br />
+jit_inline_above_cost=500000<br />
+jit_optimize_above_cost=500000<br />
+min_parallel_index_scan_size=64<br />
+min_parallel_table_scan_size=1024<br />
+parallel_setup_cost=1000<br />
+parallel_tuple_cost=0.1<br />
+random_page_cost=4<br />
+seq_page_cost=1</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Query Tuning / Planner Method Configuration</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">enable_async_append=on<br />
+enable_bitmapscan=on<br />
+enable_gathermerge=on<br />
+enable_hashagg=on<br />
+enable_hashjoin=on<br />
+enable_incremental_sort=on<br />
+enable_indexonlyscan=on<br />
+enable_indexscan=on<br />
+enable_material=on<br />
+enable_memoize=on<br />
+enable_mergejoin=on<br />
+enable_nestloop=on<br />
+enable_parallel_append=on<br />
+enable_parallel_hash=on<br />
+enable_partition_pruning=on<br />
+enable_partitionwise_aggregate=off<br />
+enable_partitionwise_join=off<br />
+enable_presorted_aggregate=on<br />
+enable_seqscan=on<br />
+enable_sort=on<br />
+enable_tidscan=on</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Replication / Primary Server</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">synchronous_replication_availability=wait<br />
+synchronous_standby_names=</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Replication / Sending Servers</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">max_replication_slots=10<br />
+max_slot_wal_keep_size=-1<br />
+max_wal_senders=10<br />
+track_commit_timestamp=off<br />
+wal_keep_size=0<br />
+wal_sender_timeout=60000</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Replication / Standby Servers</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">hot_standby=on<br />
+hot_standby_feedback=off<br />
+max_standby_archive_delay=30000<br />
+max_standby_streaming_delay=30000<br />
+primary_conninfo=<br />
+primary_slot_name=<br />
+recovery_min_apply_delay=0<br />
+wal_receiver_create_temp_slot=off<br />
+wal_receiver_status_interval=10<br />
+wal_receiver_timeout=60000<br />
+wal_retrieve_retry_interval=5000</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Replication / Subscribers</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">max_logical_replication_workers=4<br />
+max_parallel_apply_workers_per_subscription=2<br />
+max_sync_workers_per_subscription=2</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Reporting and Logging / Process Title</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">cluster_name=<br />
+update_process_title=on</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Reporting and Logging / What to Log</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">application_name=psql<br />
+debug_pretty_print=on<br />
+debug_print_parse=off<br />
+debug_print_plan=off<br />
+debug_print_rewritten=off<br />
+edb_log_every_bulk_value=off<br />
+log_autovacuum_min_duration=600000<br />
+log_checkpoints=on<br />
+log_connections=off<br />
+log_disconnections=off<br />
+log_duration=off<br />
+log_error_verbosity=default<br />
+log_hostname=off<br />
+log_line_prefix=%t <br />
+log_lock_waits=off<br />
+log_parameter_max_length=-1<br />
+log_parameter_max_length_on_error=0<br />
+log_recovery_conflict_waits=off<br />
+log_replication_commands=off<br />
+log_statement=none<br />
+log_temp_files=-1<br />
+log_timezone=Asia/Kolkata<br />
+trace_hints=off</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Reporting and Logging / When to Log</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">log_min_duration_sample=-1<br />
+log_min_duration_statement=-1<br />
+log_min_error_statement=error<br />
+log_min_messages=warning<br />
+log_startup_progress_interval=10000<br />
+log_statement_sample_rate=1<br />
+log_transaction_sample_rate=0</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Reporting and Logging / Where to Log</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">event_source=EnterpriseDB<br />
+log_destination=stderr<br />
+log_directory=log<br />
+log_file_mode=0600<br />
+log_filename=enterprisedb-%Y-%m-%d_%H%M%S.log<br />
+logging_collector=off<br />
+log_rotation_age=1440<br />
+log_rotation_size=10240<br />
+log_truncate_on_rotation=off<br />
+syslog_facility=local0<br />
+syslog_ident=postgres<br />
+syslog_sequence_numbers=on<br />
+syslog_split_messages=on</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Resource Usage / Asynchronous Behavior</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">backend_flush_after=0<br />
+effective_io_concurrency=1<br />
+maintenance_io_concurrency=10<br />
+max_parallel_maintenance_workers=2<br />
+max_parallel_workers=8<br />
+max_parallel_workers_per_gather=2<br />
+max_worker_processes=8<br />
+old_snapshot_threshold=-1<br />
+parallel_leader_participation=on</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Resource Usage / Background Writer</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">bgwriter_delay=200<br />
+bgwriter_flush_after=64<br />
+bgwriter_lru_maxpages=100<br />
+bgwriter_lru_multiplier=2</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Resource Usage / Cost-Based Vacuum Delay</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">vacuum_cost_delay=0<br />
+vacuum_cost_limit=200<br />
+vacuum_cost_page_dirty=20<br />
+vacuum_cost_page_hit=1<br />
+vacuum_cost_page_miss=2</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Resource Usage / Disk</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">temp_file_limit=-1</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Resource Usage / EDB Resource Manager</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">edb_max_resource_groups=16<br />
+edb_resource_group=</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Resource Usage / Kernel Resources</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">max_files_per_process=1000</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Resource Usage / Memory</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">autovacuum_work_mem=-1<br />
+dynamic_shared_memory_type=posix<br />
+edb_dynatune=66<br />
+edb_dynatune_profile=oltp<br />
+hash_mem_multiplier=2<br />
+huge_pages=try<br />
+huge_page_size=0<br />
+logical_decoding_work_mem=64<br />
+maintenance_work_mem=65536<br />
+max_prepared_transactions=0<br />
+max_stack_depth=2048<br />
+min_dynamic_shared_memory=0<br />
+shared_buffers=16384<br />
+shared_memory_type=mmap<br />
+temp_buffers=1024<br />
+vacuum_buffer_usage_limit=256<br />
+work_mem=4096</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Statistics / Cumulative Query and Index Statistics</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">stats_fetch_consistency=cache<br />
+track_activities=on<br />
+track_activity_query_size=1024<br />
+track_counts=on<br />
+track_functions=none<br />
+track_io_timing=off<br />
+track_wal_io_timing=off</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Statistics / Monitoring</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">compute_query_id=auto<br />
+log_executor_stats=off<br />
+log_parser_stats=off<br />
+log_planner_stats=off<br />
+log_statement_stats=off</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Ungrouped</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">qreplace_function=<br />
+timed_statistics=off</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Version and Platform Compatibility / Oracle Compatibility</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">db_dialect=redwood<br />
+default_with_rowids=off<br />
+edb_connectby_order=on<br />
+edb_early_lock_release=off<br />
+edb_redwood_date=on<br />
+edb_redwood_greatest_least=on<br />
+edb_redwood_raw_names=off<br />
+edb_redwood_strings=on<br />
+edb_stmt_level_tx=off<br />
+enable_hints=on<br />
+optimizer_mode=choose</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Version and Platform Compatibility / Other Platforms and Clients</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">transform_null_equals=off</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Version and Platform Compatibility / Previous PostgreSQL Versions</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">array_nulls=on<br />
+backslash_quote=safe_encoding<br />
+escape_string_warning=on<br />
+lo_compat_privileges=off<br />
+quote_all_identifiers=off<br />
+standard_conforming_strings=on<br />
+synchronize_seqscans=on</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Write-Ahead Log / Archive Recovery</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">archive_cleanup_command=<br />
+recovery_end_command=<br />
+restore_command=</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Write-Ahead Log / Archiving</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">archive_command=(disabled)<br />
+archive_library=<br />
+archive_mode=off<br />
+archive_timeout=0</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Write-Ahead Log / Checkpoints</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">checkpoint_completion_target=0.9<br />
+checkpoint_flush_after=32<br />
+checkpoint_timeout=300<br />
+checkpoint_warning=30<br />
+max_wal_size=1024<br />
+min_wal_size=80</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Write-Ahead Log / Recovery</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">recovery_prefetch=try<br />
+wal_decode_buffer_size=524288</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Write-Ahead Log / Recovery Target</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">recovery_target=<br />
+recovery_target_action=pause<br />
+recovery_target_inclusive=on<br />
+recovery_target_lsn=<br />
+recovery_target_name=<br />
+recovery_target_time=<br />
+recovery_target_timeline=latest<br />
+recovery_target_xid=</td>
+  </tr>
+
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr valign="top">
+    <th>category</th>
+    <td align="left">Write-Ahead Log / Settings</td>
+  </tr>
+  <tr valign="top">
+    <th>settings</th>
+    <td align="left">commit_delay=0<br />
+commit_siblings=5<br />
+fsync=on<br />
+full_page_writes=on<br />
+synchronous_commit=on<br />
+wal_buffers=512<br />
+wal_compression=off<br />
+wal_init_zero=on<br />
+wal_level=logical<br />
+wal_log_hints=off<br />
+wal_recycle=on<br />
+wal_skip_threshold=2048<br />
+wal_sync_method=fdatasync<br />
+wal_writer_delay=200<br />
+wal_writer_flush_after=128</td>
+  </tr>
+</table>
+
 <h2>System Information</h2>
 <table border="1" cellspacing=0 cellpadding=0>
   <tr>
@@ -40,10 +916,10 @@ CPU(s): 4<br />
 On-line CPU(s) list: 0-3<br />
 </td>
     <td align="left">7786668 K total memory<br />
-4217424 K used memory<br />
-3406916 K active memory<br />
-2988608 K inactive memory<br />
-112500 K free memory<br />
+5241988 K used memory<br />
+3178932 K active memory<br />
+2997784 K inactive memory<br />
+165840 K free memory<br />
 </td>
   </tr>
 </table>
@@ -52,7 +928,7 @@ On-line CPU(s) list: 0-3<br />
 <h2>DBTime</h2>
 <table border="1" cellspacing=0 cellpadding=0>
   <tr>
-    <th align="center">total_dbtime</th>
+    <th align="center">total_dbtime_sec</th>
   </tr>
   <tr valign="top">
     <td align="right">493</td>
@@ -79,7 +955,7 @@ On-line CPU(s) list: 0-3<br />
     <th align="center">uptime</th>
   </tr>
   <tr valign="top">
-    <td align="left">18:11:45</td>
+    <td align="left">2 days 00:45:02</td>
   </tr>
 </table>
 <p>(1 row)<br />

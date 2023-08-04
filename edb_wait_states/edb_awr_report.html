@@ -7,7 +7,7 @@
     <th align="center">report_timestamp</th>
   </tr>
   <tr valign="top">
-    <td align="left">03-AUG-23 16:37:29.689867 +05:30</td>
+    <td align="left">04-AUG-23 09:17:30.636926 +05:30</td>
   </tr>
 </table>
 <p>(1 row)<br />
@@ -35,6 +35,219 @@
   </tr>
 </table>
 <p>(1 row)<br />
+</p>
+<h2>System Information</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">host_name</th>
+    <th align="center">cpu_info</th>
+    <th align="center">mem_info</th>
+  </tr>
+  <tr valign="top">
+    <td align="left">localhost.localdomain<br />
+</td>
+    <td align="left">Architecture: aarch64<br />
+CPU op-mode(s): 64-bit<br />
+Byte Order: Little Endian<br />
+CPU(s): 4<br />
+On-line CPU(s) list: 0-3<br />
+</td>
+    <td align="left">7786668 K total memory<br />
+5571452 K used memory<br />
+2642336 K active memory<br />
+3304696 K inactive memory<br />
+314480 K free memory<br />
+</td>
+  </tr>
+</table>
+<p>(1 row)<br />
+</p>
+<h2>DBTime</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">total_dbtime_sec</th>
+  </tr>
+  <tr valign="top">
+    <td align="right">1458</td>
+  </tr>
+</table>
+<p>(1 row)<br />
+</p>
+<h2>Session Informations</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">session_user</th>
+    <th align="center">current_database</th>
+  </tr>
+  <tr valign="top">
+    <td align="left">dilip</td>
+    <td align="left">postgres</td>
+  </tr>
+</table>
+<p>(1 row)<br />
+</p>
+<h2>Server Uptime</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">uptime</th>
+  </tr>
+  <tr valign="top">
+    <td align="left">00:36:24</td>
+  </tr>
+</table>
+<p>(1 row)<br />
+</p>
+<h2>Top wait events</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">waitevent</th>
+    <th align="center">waittime</th>
+    <th align="center">pct_dbtime</th>
+  </tr>
+  <tr valign="top">
+    <td align="left">transactionid</td>
+    <td align="right">1156</td>
+    <td align="right">79</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">tuple</td>
+    <td align="right">251</td>
+    <td align="right">17</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">BufferContent</td>
+    <td align="right">7</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">LockManager</td>
+    <td align="right">4</td>
+    <td align="right">0</td>
+  </tr>
+</table>
+<p>(4 rows)<br />
+</p>
+<h2>Top SQL statements</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">query_id</th>
+    <th align="center">dbtime</th>
+    <th align="center">waittime</th>
+    <th align="center">cputime</th>
+    <th align="center">top_waitevent</th>
+    <th align="center">query</th>
+  </tr>
+  <tr valign="top">
+    <td align="right">3894461092445739957</td>
+    <td align="right">1106</td>
+    <td align="right">1096</td>
+    <td align="right">10</td>
+    <td align="left">transactionid</td>
+    <td align="left">UPDATE pgbench_tellers SET tbalance = tbalance + $1 WHERE tid = $2</td>
+  </tr>
+  <tr valign="top">
+    <td align="right">1526826939224125319</td>
+    <td align="right">336</td>
+    <td align="right">322</td>
+    <td align="right">14</td>
+    <td align="left">transactionid</td>
+    <td align="left">UPDATE pgbench_branches SET bbalance = bbalance + $1 WHERE bid = $2</td>
+  </tr>
+</table>
+<p>(2 rows)<br />
+</p>
+<h2>Longest active session</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">session_id</th>
+    <th align="center">dbname</th>
+    <th align="center">username</th>
+    <th align="center">ref_start_ts</th>
+    <th align="center">ref_end_ts</th>
+    <th align="center">conection_duration</th>
+  </tr>
+  <tr valign="top">
+    <td align="right">139592</td>
+    <td align="left">postgres</td>
+    <td align="left">dilip</td>
+    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">1 day</td>
+  </tr>
+  <tr valign="top">
+    <td align="right">139591</td>
+    <td align="left">postgres</td>
+    <td align="left">dilip</td>
+    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">1 day</td>
+  </tr>
+  <tr valign="top">
+    <td align="right">139596</td>
+    <td align="left">postgres</td>
+    <td align="left">dilip</td>
+    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">1 day</td>
+  </tr>
+  <tr valign="top">
+    <td align="right">139594</td>
+    <td align="left">postgres</td>
+    <td align="left">dilip</td>
+    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">1 day</td>
+  </tr>
+  <tr valign="top">
+    <td align="right">139597</td>
+    <td align="left">postgres</td>
+    <td align="left">dilip</td>
+    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">1 day</td>
+  </tr>
+  <tr valign="top">
+    <td align="right">139603</td>
+    <td align="left">postgres</td>
+    <td align="left">dilip</td>
+    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">1 day</td>
+  </tr>
+  <tr valign="top">
+    <td align="right">139599</td>
+    <td align="left">postgres</td>
+    <td align="left">dilip</td>
+    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">1 day</td>
+  </tr>
+  <tr valign="top">
+    <td align="right">139593</td>
+    <td align="left">postgres</td>
+    <td align="left">dilip</td>
+    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">1 day</td>
+  </tr>
+  <tr valign="top">
+    <td align="right">139616</td>
+    <td align="left">postgres</td>
+    <td align="left">dilip</td>
+    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">1 day</td>
+  </tr>
+  <tr valign="top">
+    <td align="right">139590</td>
+    <td align="left">postgres</td>
+    <td align="left">dilip</td>
+    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">1 day</td>
+  </tr>
+</table>
+<p>(10 rows)<br />
 </p>
 <h2>PostgreSQL Database Settings</h2>
 <table border="1" cellspacing=0 cellpadding=0>
@@ -899,177 +1112,5 @@ wal_writer_flush_after=128</td>
   </tr>
 </table>
 
-<h2>System Information</h2>
-<table border="1" cellspacing=0 cellpadding=0>
-  <tr>
-    <th align="center">host_name</th>
-    <th align="center">cpu_info</th>
-    <th align="center">mem_info</th>
-  </tr>
-  <tr valign="top">
-    <td align="left">localhost.localdomain<br />
-</td>
-    <td align="left">Architecture: aarch64<br />
-CPU op-mode(s): 64-bit<br />
-Byte Order: Little Endian<br />
-CPU(s): 4<br />
-On-line CPU(s) list: 0-3<br />
-</td>
-    <td align="left">7786668 K total memory<br />
-5241988 K used memory<br />
-3178932 K active memory<br />
-2997784 K inactive memory<br />
-165840 K free memory<br />
-</td>
-  </tr>
-</table>
-<p>(1 row)<br />
-</p>
-<h2>DBTime</h2>
-<table border="1" cellspacing=0 cellpadding=0>
-  <tr>
-    <th align="center">total_dbtime_sec</th>
-  </tr>
-  <tr valign="top">
-    <td align="right">493</td>
-  </tr>
-</table>
-<p>(1 row)<br />
-</p>
-<h2>Session Informations</h2>
-<table border="1" cellspacing=0 cellpadding=0>
-  <tr>
-    <th align="center">session_user</th>
-    <th align="center">current_database</th>
-  </tr>
-  <tr valign="top">
-    <td align="left">dilip</td>
-    <td align="left">postgres</td>
-  </tr>
-</table>
-<p>(1 row)<br />
-</p>
-<h2>Server Uptime</h2>
-<table border="1" cellspacing=0 cellpadding=0>
-  <tr>
-    <th align="center">uptime</th>
-  </tr>
-  <tr valign="top">
-    <td align="left">2 days 00:45:02</td>
-  </tr>
-</table>
-<p>(1 row)<br />
-</p>
-<h2>Top wait events</h2>
-<table border="1" cellspacing=0 cellpadding=0>
-  <tr>
-    <th align="center">waitevent</th>
-    <th align="center">waittime</th>
-    <th align="center">pct_dbtime</th>
-  </tr>
-  <tr valign="top">
-    <td align="left">DataFileRead</td>
-    <td align="right">41</td>
-    <td align="right">8</td>
-  </tr>
-  <tr valign="top">
-    <td align="left">WALWrite</td>
-    <td align="right">69</td>
-    <td align="right">13</td>
-  </tr>
-  <tr valign="top">
-    <td align="left">WALBufMapping</td>
-    <td align="right">1</td>
-    <td align="right">0</td>
-  </tr>
-  <tr valign="top">
-    <td align="left">DataFileWrite</td>
-    <td align="right">13</td>
-    <td align="right">2</td>
-  </tr>
-  <tr valign="top">
-    <td align="left">DataFileImmediateSync</td>
-    <td align="right">2</td>
-    <td align="right">0</td>
-  </tr>
-  <tr valign="top">
-    <td align="left">DataFileExtend</td>
-    <td align="right">4</td>
-    <td align="right">0</td>
-  </tr>
-  <tr valign="top">
-    <td align="left">WALInitSync</td>
-    <td align="right">1</td>
-    <td align="right">0</td>
-  </tr>
-  <tr valign="top">
-    <td align="left">transactionid</td>
-    <td align="right">64</td>
-    <td align="right">12</td>
-  </tr>
-</table>
-<p>(8 rows)<br />
-</p>
-<h2>Top SQL statements</h2>
-<table border="1" cellspacing=0 cellpadding=0>
-  <tr>
-    <th align="center">dbtime</th>
-    <th align="center">waittime</th>
-    <th align="center">cputime</th>
-    <th align="center">top_waitevent</th>
-    <th align="center">query</th>
-  </tr>
-  <tr valign="top">
-    <td align="right">8</td>
-    <td align="right">5</td>
-    <td align="right">3</td>
-    <td align="left">WALWrite</td>
-    <td align="left">alter table pgbench_accounts add primary key (aid)</td>
-  </tr>
-  <tr valign="top">
-    <td align="right">452</td>
-    <td align="right">188</td>
-    <td align="right">264</td>
-    <td align="left">WALWrite</td>
-    <td align="left">UPDATE pgbench_accounts SET abalance =abalance+$1</td>
-  </tr>
-  <tr valign="top">
-    <td align="right">452</td>
-    <td align="right">188</td>
-    <td align="right">264</td>
-    <td align="left">WALBufMapping</td>
-    <td align="left">UPDATE pgbench_accounts SET abalance =abalance+$1</td>
-  </tr>
-  <tr valign="top">
-    <td align="right">452</td>
-    <td align="right">188</td>
-    <td align="right">264</td>
-    <td align="left">WALBufMapping</td>
-    <td align="left">UPDATE pgbench_accounts SET abalance =abalance+$1</td>
-  </tr>
-  <tr valign="top">
-    <td align="right">452</td>
-    <td align="right">188</td>
-    <td align="right">264</td>
-    <td align="left">transactionid</td>
-    <td align="left">UPDATE pgbench_accounts SET abalance =abalance+$1</td>
-  </tr>
-  <tr valign="top">
-    <td align="right">452</td>
-    <td align="right">188</td>
-    <td align="right">264</td>
-    <td align="left">WALInitSync</td>
-    <td align="left">UPDATE pgbench_accounts SET abalance =abalance+$1</td>
-  </tr>
-  <tr valign="top">
-    <td align="right">452</td>
-    <td align="right">188</td>
-    <td align="right">264</td>
-    <td align="left">WALInitSync</td>
-    <td align="left">UPDATE pgbench_accounts SET abalance =abalance+$1</td>
-  </tr>
-</table>
-<p>(7 rows)<br />
-</p>
 </td></tr></table>
 </body></html>

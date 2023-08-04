@@ -48,6 +48,16 @@ select * from edb_wait_states_sql_statements(:start, :end) ORDER BY dbtime DESC 
 select *, (ref_end_ts - ref_start_ts) AS conection_duration from edb_wait_states_sessions() ORDER BY conection_duration DESC LIMIT 10;
 
 \H
+\qecho '<h2>Session info</h2>'
+\pset format html
+select start_session session_at_snap_start, end_session session_at_snap_end from edb_wait_states_servers();
+
+\H
+\qecho '<h2>WAL stats during snapshot duration</h2>'
+\pset format html
+select wal_records, wal_fpi, wal_bytes, wal_write, wal_sync from edb_wait_states_servers();
+
+\H
 \qecho '<h2>PostgreSQL Database Settings</h2>'
 \x on
 \t on

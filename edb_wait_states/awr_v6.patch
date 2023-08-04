@@ -1,0 +1,875 @@
+diff --git a/edb_wait_states/edb_wait_states--1.0.sql b/edb_wait_states/edb_wait_states--1.0.sql
+index 081d8bd..19adad1 100644
+--- a/edb_wait_states/edb_wait_states--1.0.sql
++++ b/edb_wait_states/edb_wait_states--1.0.sql
+@@ -17,7 +17,8 @@ CREATE FUNCTION edb_wait_states_samples(
+     OUT query_start_time timestamptz,
+     OUT sample_time timestamptz,
+ 	OUT wait_event_type text,
+-	OUT wait_event text
++	OUT wait_event text,
++	OUT sampling_interval int4
+ )
+ RETURNS SETOF record
+ AS 'MODULE_PATHNAME'
+@@ -81,3 +82,158 @@ RETURNS void
+ AS 'MODULE_PATHNAME'
+ LANGUAGE C;
+ REVOKE ALL ON FUNCTION edb_wait_states_purge(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_dbtime(
++	IN start_ts timestamptz default '-infinity'::timestamptz,
++	IN end_ts timestamptz default 'infinity'::timestamptz,
++	OUT query_id int8,
++    OUT dbtime int4
++) RETURNS SETOF record
++AS $$
++SELECT query_id, SUM(sampling_interval) AS dbtime FROM edb_wait_states_samples(start_ts, end_ts) GROUP BY query_id;
++$$
++LANGUAGE SQL;
++REVOKE ALL ON FUNCTION edb_wait_states_dbtime(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_cputime(
++	IN start_ts timestamptz default '-infinity'::timestamptz,
++	IN end_ts timestamptz default 'infinity'::timestamptz,
++	OUT query_id int8,
++    OUT cputime int4
++) RETURNS SETOF record
++AS $$
++SELECT query_id, SUM(sampling_interval) AS cputime FROM edb_wait_states_samples(start_ts, end_ts) WHERE wait_event IS NULL GROUP BY query_id;
++$$
++LANGUAGE SQL;
++REVOKE ALL ON FUNCTION edb_wait_states_cputime(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_waittime(
++	IN start_ts timestamptz default '-infinity'::timestamptz,
++	IN end_ts timestamptz default 'infinity'::timestamptz,
++	OUT query_id int8,
++    OUT waittime int4
++) RETURNS SETOF record
++AS $$
++SELECT query_id, SUM(sampling_interval) AS waittime FROM edb_wait_states_samples(start_ts, end_ts) WHERE wait_event IS NOT NULL GROUP BY query_id;
++$$
++LANGUAGE SQL;
++REVOKE ALL ON FUNCTION edb_wait_states_waittime(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_waitevent(
++	IN start_ts timestamptz default '-infinity'::timestamptz,
++	IN end_ts timestamptz default 'infinity'::timestamptz,
++	OUT query_id int8,
++    OUT wait_event text,
++	OUT wait_time int4
++) RETURNS SETOF record
++AS $$
++SELECT query_id, wait_event, SUM(sampling_interval) AS waittime FROM edb_wait_states_samples(start_ts, end_ts) WHERE wait_event IS NOT NULL GROUP BY query_id, wait_event;
++$$
++LANGUAGE SQL;
++REVOKE ALL ON FUNCTION edb_wait_states_waittime(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_waitevents(
++	IN start_ts timestamptz default '-infinity'::timestamptz,
++	IN end_ts timestamptz default 'infinity'::timestamptz,
++	OUT wait_event text,
++    OUT waittime int4
++) RETURNS SETOF record
++AS $$
++SELECT wait_event, SUM(sampling_interval) AS waittime FROM edb_wait_states_samples(start_ts, end_ts) WHERE wait_event IS NOT NULL GROUP BY wait_event;
++$$
++LANGUAGE SQL;
++REVOKE ALL ON FUNCTION edb_wait_states_waittime(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE TYPE waitevents AS (wait_event text, waittime int, pct_dbtime int);
++CREATE TYPE statements_event AS (queryid int8, dbtime int, waittime int, cputime int, top_waitevent text);
++
++CREATE FUNCTION edb_wait_states_top_wait_events_json(
++	IN start_ts timestamptz default '-infinity'::timestamptz,
++	IN end_ts timestamptz default 'infinity'::timestamptz
++) RETURNS SETOF json
++AS $$
++ SELECT row_to_json(row(wait_event, waittime, (waittime*100/d.dbtime))::waitevents)
++ FROM edb_wait_states_waitevents(start_ts, end_ts),
++ (select SUM(dbtime) AS dbtime FROM edb_wait_states_dbtime) AS d;
++$$
++LANGUAGE SQL;
++
++REVOKE ALL ON FUNCTION edb_wait_states_top_wait_events_json(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_sql_statements_json(
++	IN start_ts timestamptz default '-infinity'::timestamptz,
++	IN end_ts timestamptz default 'infinity'::timestamptz
++) RETURNS SETOF json
++AS $$
++SELECT row_to_json(row(we.query_id, dt.dbtime, wt.waittime, ct.cputime, we.wait_event)::statements_event)
++FROM edb_wait_states_dbtime(start_ts, end_ts) dt, edb_wait_states_waittime(start_ts, end_ts) wt, edb_wait_states_cputime(start_ts, end_ts) ct, edb_wait_states_waitevent(start_ts, end_ts) we,
++(SELECT MAX(wait_time) top_wait_time
++ FROM edb_wait_states_waitevent()
++ GROUP BY query_id) AS maxwt
++ WHERE dt.query_id=wt.query_id AND wt.query_id=ct.query_id AND ct.query_id=we.query_id AND we.wait_time=maxwt.top_wait_time;
++$$
++LANGUAGE SQL;
++REVOKE ALL ON FUNCTION edb_wait_states_sql_statements_json(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_header(
++	OUT host_name text,
++	OUT cpu_info text,
++	OUT mem_info text
++)
++RETURNS SETOF record
++AS 'MODULE_PATHNAME'
++LANGUAGE C;
++REVOKE ALL ON FUNCTION edb_wait_states_header() FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_top_wait_events(
++        IN start_ts timestamptz default '-infinity'::timestamptz,
++        IN end_ts timestamptz default 'infinity'::timestamptz,
++		OUT waitevent TEXT,
++		OUT waittime int,
++		OUT pct_dbtime int
++) RETURNS SETOF RECORD
++AS $$
++ SELECT wait_event, waittime, (waittime*100/d.dbtime) AS pct_dbtime
++ FROM edb_wait_states_waitevents(start_ts, end_ts),
++ (select SUM(dbtime) AS dbtime FROM edb_wait_states_dbtime) AS d;
++$$
++LANGUAGE SQL;
++
++REVOKE ALL ON FUNCTION edb_wait_states_top_wait_events(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_sql_statements(
++        IN start_ts timestamptz default '-infinity'::timestamptz,
++        IN end_ts timestamptz default 'infinity'::timestamptz,
++		OUT query_id int8,
++		OUT dbtime int,
++		OUT waittime int,
++		OUT cputime int,
++		OUT top_waitevent text,
++		OUT query text
++) RETURNS SETOF RECORD
++AS $$
++SELECT q.query_id query_id, dt.dbtime dbtime, wt.waittime waittime , ct.cputime cputime, we.wait_event top_waitevent, q.query query
++FROM edb_wait_states_dbtime(start_ts, end_ts) dt, edb_wait_states_waittime(start_ts, end_ts) wt, edb_wait_states_cputime(start_ts, end_ts) ct, edb_wait_states_waitevent(start_ts, end_ts) we,
++(SELECT MAX(wait_time) top_wait_time
++ FROM edb_wait_states_waitevent()
++ GROUP BY query_id) AS maxwt, edb_wait_states_queries() q
++ WHERE dt.query_id=wt.query_id AND wt.query_id=ct.query_id AND ct.query_id=we.query_id AND we.wait_time=maxwt.top_wait_time AND we.query_id = q.query_id;
++$$
++LANGUAGE SQL;
++REVOKE ALL ON FUNCTION edb_wait_states_sql_statements(timestamptz, timestamptz) FROM PUBLIC;
++
++CREATE FUNCTION edb_wait_states_servers(
++	IN start_ts timestamptz default '-infinity'::timestamptz,
++	IN end_ts timestamptz default 'infinity'::timestamptz,
++    OUT start_session int4,
++	OUT end_session int4,
++    OUT wal_records int8,
++    OUT wal_fpi int8,
++	OUT wal_bytes int8,
++    OUT wal_write int8,
++	OUT wal_sync int8
++)
++RETURNS SETOF record
++AS 'MODULE_PATHNAME'
++LANGUAGE C;
++REVOKE ALL ON FUNCTION edb_wait_states_servers(timestamptz, timestamptz) FROM PUBLIC;
+diff --git a/edb_wait_states/edb_wait_states.h b/edb_wait_states/edb_wait_states.h
+index b79bb13..20f53db 100644
+--- a/edb_wait_states/edb_wait_states.h
++++ b/edb_wait_states/edb_wait_states.h
+@@ -16,11 +16,15 @@
+ #define EDB_WAIT_STATES_H
+ 
+ #include "postgres.h"
++#include "pgstat.h"
+ 
+ /* File name prefixes for various edb_wait_states log files. */
+ #define EDB_WAIT_STATES_SAMPLES_FILE_PREFIX "edb_ws_samples_"
+ #define EDB_WAIT_STATES_QUERIES_FILE_PREFIX "edb_ws_queries_"
+ #define EDB_WAIT_STATES_SESSIONS_FILE_PREFIX "edb_ws_sessions_"
++#define EDB_WAIT_STATES_SERVER_FILE_PREFIX "edb_ws_server_"
++
++#define EDB_WAIT_STATES_DEFAULT_DIRECTORY "edb_wait_states"
+ 
+ /*
+  * Structure to hold one edb_wait_states sample data.
+@@ -37,10 +41,26 @@ typedef struct EDBWaitStatesSample
+ 								 * was collected */
+ 	int32		session_id;		/* backend process id on which the query was
+ 								 * running */
++	int32		sample_interval; /* sampling interval when this sample was taken */
+ 	TimestampTz query_start_ts; /* timestamp when the query began it's
+ 								 * execution */
+ } EDBWaitStatesSample;
+ 
++typedef struct EDBWaitStatesServer
++{
++	int	num_sessions;
++	TimestampTz sample_ts;
++	PgStat_WalStats wal_stats;
++} EDBWaitStatesServer;
++
++typedef struct EDBWaitStatesHeader
++{
++	char hostname[256];
++	char cpuinfo[512];
++	char meminfo[512];
++} EDBWaitStatesHeader;
++
++
+ extern char *get_edb_wait_states_directory(void);
+ extern void delete_edb_wait_states_files(TimestampTz start_ts,
+ 							 TimestampTz end_ts);
+diff --git a/edb_wait_states/edb_wait_states_reader.c b/edb_wait_states/edb_wait_states_reader.c
+index 58c8f68..e843832 100644
+--- a/edb_wait_states/edb_wait_states_reader.c
++++ b/edb_wait_states/edb_wait_states_reader.c
+@@ -35,9 +35,11 @@
+ 
+ PG_MODULE_MAGIC;
+ 
++PG_FUNCTION_INFO_V1(edb_wait_states_header);
+ PG_FUNCTION_INFO_V1(edb_wait_states_samples);
+ PG_FUNCTION_INFO_V1(edb_wait_states_queries);
+ PG_FUNCTION_INFO_V1(edb_wait_states_sessions);
++PG_FUNCTION_INFO_V1(edb_wait_states_servers);
+ PG_FUNCTION_INFO_V1(edb_wait_states_purge);
+ 
+ static void read_edb_wait_states_samples(Tuplestorestate *tupstore,
+@@ -62,15 +64,38 @@ static void read_edb_wait_states_one_session_file(char *session_file_name,
+ 									  TupleDesc tupdesc,
+ 									  TimestampTz file_start_ts,
+ 									  TimestampTz file_end_ts);
+-
+-
+-#define Natts_sample 6
++static void read_edb_wait_states_servers(Tuplestorestate *tupstore,
++							 TupleDesc tupdesc, TimestampTz start_ts,
++							 TimestampTz end_ts);
++static void read_edb_wait_states_one_server_file(char *server_file_name,
++									 Tuplestorestate *tupstore,
++									 TupleDesc tupdesc, TimestampTz start_ts,
++									 TimestampTz end_ts,
++									 bool *first,
++									 EDBWaitStatesServer *first_entry,
++									 EDBWaitStatesServer *last_entry);									  
++static void generate_edb_wait_states_header(Tuplestorestate *tupstore,
++											TupleDesc tupdesc);
++
++/* Commands for generating header information FIXME: need to make plateform independent */
++#define HOSTNAME_CMD "hostname"
++#define CPUINFO_CMD "lscpu | head -n5 | tr -s '  '"
++#define MEMINFO_CMD "vmstat -s| head -n5 | tr -s '  ' |sed 's/^ //g''  '"
++
++#define Natts_header 3
++#define Anum_header_hostname 0
++#define Anum_header_cpuinfo 1
++#define Anum_header_meminfo 2
++
++#define Natts_sample 7
+ #define Anum_sample_queryid 0
+ #define Anum_sample_sessionid 1
+ #define Anum_sample_query_start_ts 2
+ #define Anum_sample_ts 3
+ #define Anum_sample_wait_event_type 4
+ #define Anum_sample_wait_event 5
++#define Anum_sample_interval 6
++
+ 
+ #define Natts_query 4
+ #define Anum_query_id 0
+@@ -85,10 +110,114 @@ static void read_edb_wait_states_one_session_file(char *session_file_name,
+ #define Anum_session_ref_start_ts 3
+ #define Anum_session_ref_end_ts 4
+ 
++#define Natts_server 7
++#define Anum_server_session_start 0
++#define Anum_server_session_end 1
++#define Anum_server_wal_records 2
++#define Anum_server_wal_fpi 3
++#define Anum_server_wal_bytes 4
++#define Anum_server_wal_writes 5
++#define Anum_server_wal_sync 6
++
+ #define START_TS_ARGNO 0
+ #define END_TS_ARGNO 1
+ 
+ 
++/*
++ * edb_wait_states_header
++ *
++ * C interface to SQL callable function to generate the edb_wait_states header
++ * file and also returns the header infomation in the tuple format.
++ *
++ * This function only implements the C interface to SQL callable UDF, but the
++ * real work is carried out in generate_edb_wait_states_header(). See prologue
++ * of that function for more details.
++ */
++Datum
++edb_wait_states_header(PG_FUNCTION_ARGS)
++{
++	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
++	TupleDesc	tupdesc;
++	Tuplestorestate *tupstore;
++	MemoryContext per_query_ctx;
++	MemoryContext oldcontext;
++
++	/* Check to see if caller supports us returning a tuplestore */
++	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
++		ereport(ERROR,
++				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
++				 errmsg("set-valued function called in context that cannot accept a set")));
++	if (!(rsinfo->allowedModes & SFRM_Materialize))
++		ereport(ERROR,
++				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
++				 errmsg("materialize mode required, but it is not allowed in this context")));
++
++	/* Switch into long-lived context to construct returned data structures */
++	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
++	oldcontext = MemoryContextSwitchTo(per_query_ctx);
++
++	/* Build a tuple descriptor for our result type */
++	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
++		elog(ERROR, "return type must be a row type");
++
++	Assert(tupdesc->natts == Natts_header);
++
++	tupstore = tuplestore_begin_heap(true, false, work_mem);
++	rsinfo->returnMode = SFRM_Materialize;
++	rsinfo->setResult = tupstore;
++	rsinfo->setDesc = tupdesc;
++
++	MemoryContextSwitchTo(oldcontext);
++
++	generate_edb_wait_states_header(tupstore, tupdesc);
++
++	tuplestore_donestoring(tupstore);
++
++	return (Datum) 0;
++}
++
++static void
++populateHeaderField(char *headerField, char *cmd)
++{
++	FILE *cmd_output;
++	long lSize;
++
++	cmd_output = (FILE *) popen(cmd, "r");
++    lSize = fread( headerField, 1, 255, cmd_output);
++    headerField[lSize]='\0';
++    pclose(cmd_output);
++}
++
++/*
++ * generate_edb_wait_states_header
++ *
++ * Function generates file that contains header information and inserts the
++ * record in the given tuple store. This information is assumed to be written
++ * as EDBWaitStatesHeader structure.
++ */
++static void
++generate_edb_wait_states_header(Tuplestorestate *tupstore,
++								TupleDesc   tupdesc)
++{
++	Datum		values[Natts_header];
++	bool		nulls[Natts_header];
++	EDBWaitStatesHeader header;
++
++	/* initialize nulls as if we have none of them */	
++	memset(nulls, 0, sizeof(nulls));
++
++	/* Collect header information */
++	populateHeaderField(header.hostname, HOSTNAME_CMD);
++	populateHeaderField(header.cpuinfo, CPUINFO_CMD);
++	populateHeaderField(header.meminfo, MEMINFO_CMD);
++
++	values[Anum_header_hostname] = CStringGetTextDatum(header.hostname);
++	values[Anum_header_cpuinfo] = CStringGetTextDatum(header.cpuinfo);
++	values[Anum_header_meminfo] = CStringGetTextDatum(header.meminfo);
++
++	tuplestore_putvalues(tupstore, tupdesc, values, nulls);
++}
++
+ /*
+  * edb_wait_states_samples
+  *
+@@ -260,6 +389,63 @@ edb_wait_states_sessions(PG_FUNCTION_ARGS)
+ 	return (Datum) 0;
+ }
+ 
++/*
++ * edb_wait_states_servers
++ *
++ * C interface to SQL callable function to access the information in
++ * edb_wait_states server files.
++ *
++ * The function outputs the records in sessions files which correspond to the
++ * given time interval. This function only implements the C interface to SQL
++ * callable UDF, but the real work is carried out in
++ * read_edb_wait_states_sessions(). See prologue of that function for more
++ * details.
++ */
++Datum
++edb_wait_states_servers(PG_FUNCTION_ARGS)
++{
++	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
++	TupleDesc	tupdesc;
++	Tuplestorestate *tupstore;
++	MemoryContext per_query_ctx;
++	MemoryContext oldcontext;
++	TimestampTz start_ts = PG_GETARG_TIMESTAMPTZ(START_TS_ARGNO);
++	TimestampTz end_ts = PG_GETARG_TIMESTAMPTZ(END_TS_ARGNO);
++
++	/* check to see if caller supports us returning a tuplestore */
++	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
++		ereport(ERROR,
++				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
++				 errmsg("set-valued function called in context that cannot accept a set")));
++	if (!(rsinfo->allowedModes & SFRM_Materialize))
++		ereport(ERROR,
++				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
++				 errmsg("materialize mode required, but it is not allowed in this context")));
++
++	/* Switch into long-lived context to construct returned data structures */
++	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
++	oldcontext = MemoryContextSwitchTo(per_query_ctx);
++
++	/* Build a tuple descriptor for our result type */
++	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
++		elog(ERROR, "return type must be a row type");
++
++	Assert(tupdesc->natts == Natts_server);
++
++	tupstore = tuplestore_begin_heap(true, false, work_mem);
++	rsinfo->returnMode = SFRM_Materialize;
++	rsinfo->setResult = tupstore;
++	rsinfo->setDesc = tupdesc;
++
++	MemoryContextSwitchTo(oldcontext);
++
++	read_edb_wait_states_servers(tupstore, tupdesc, start_ts, end_ts);
++
++	tuplestore_donestoring(tupstore);
++
++	return (Datum) 0;
++}
++
+ /*
+  * edb_wait_states_purge
+  *
+@@ -452,6 +638,7 @@ read_edb_wait_states_one_sample_file(char *sample_file_name,
+ 		values[Anum_sample_sessionid] = Int32GetDatum(sample.session_id);
+ 		values[Anum_sample_ts] = TimestampTzGetDatum(sample.sample_ts);
+ 		values[Anum_sample_query_start_ts] = TimestampTzGetDatum(sample.query_start_ts);
++		values[Anum_sample_interval] = Int32GetDatum(sample.sample_interval);
+ 
+ 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+ 
+@@ -751,6 +938,160 @@ read_edb_wait_states_one_session_file(char *session_file_name,
+ 	FreeFile(session_file);
+ }
+ 
++/*
++ * read_edb_wait_states_server
++ *
++ * Work-horse function implementing the guts of edb_wait_states_servers().
++ */
++static void
++read_edb_wait_states_servers(Tuplestorestate *tupstore,
++							 TupleDesc tupdesc, TimestampTz start_ts,
++							 TimestampTz end_ts)
++{
++	DIR		   *servers_dir;
++	struct dirent *servers_ent;
++	TimestampTz file_start_ts;
++	TimestampTz file_end_ts;
++	bool	first = false;
++	EDBWaitStatesServer first_entry;
++	EDBWaitStatesServer last_entry;
++	PgStat_WalStats wal_stats;
++	Datum		values[Natts_server];
++	bool		nulls[Natts_server];	
++
++	servers_dir = AllocateDir(get_edb_wait_states_directory());
++	while ((servers_ent = ReadDir(servers_dir,
++								  get_edb_wait_states_directory())) != NULL)
++	{
++		char		server_file_name[MAXPGPATH];
++
++		/* Ignore current and previous directories. */
++		if (strcmp(servers_ent->d_name, ".") == 0 ||
++			strcmp (servers_ent->d_name, "..") == 0)
++			continue;
++
++		/*
++		 * Ignore the deleted files, refer comments in
++		 * delete_edb_wait_states_files().
++		 */
++#ifdef WIN32
++		if (strstr(servers_ent->d_name, ".deleted") != NULL)
++			continue;
++#endif
++
++		if (!is_edb_wait_states_file(servers_ent->d_name,
++									 EDB_WAIT_STATES_SERVER_FILE_PREFIX,
++									 &file_start_ts, &file_end_ts))
++		{
++			elog(DEBUG3, "skipping a non-server file %s", servers_ent->d_name);
++			continue;
++		}
++
++		/* Ignore any file whose timestamps are beyond the requested range. */
++		if ((timestamptz_cmp_internal(file_start_ts, end_ts) > 0) ||
++			(timestamptz_cmp_internal(file_end_ts, start_ts) <= 0))
++		{
++			elog(DEBUG3, "skipping a server file %s outside given time interval",
++				 servers_ent->d_name);
++			continue;
++		}
++
++		snprintf(server_file_name, MAXPGPATH, "%s/%s",
++				 get_edb_wait_states_directory(), servers_ent->d_name);
++
++		read_edb_wait_states_one_server_file(server_file_name, tupstore,
++											 tupdesc, start_ts, end_ts, &first,
++											 &first_entry, &last_entry);
++	}
++
++	wal_stats.wal_records =
++		last_entry.wal_stats.wal_records - first_entry.wal_stats.wal_records;
++	wal_stats.wal_fpi =
++		last_entry.wal_stats.wal_fpi - first_entry.wal_stats.wal_fpi;;
++	wal_stats.wal_bytes =
++		last_entry.wal_stats.wal_bytes - first_entry.wal_stats.wal_bytes;;
++	wal_stats.wal_write =
++		last_entry.wal_stats.wal_write - first_entry.wal_stats.wal_write;;
++	wal_stats.wal_sync =
++		last_entry.wal_stats.wal_sync - first_entry.wal_stats.wal_sync;;
++
++	memset(nulls, 0, sizeof(nulls));
++	values[Anum_server_session_start] = Int32GetDatum(first_entry.num_sessions);
++	values[Anum_server_session_end] = Int32GetDatum(last_entry.num_sessions);
++	values[Anum_server_wal_records] = Int64GetDatum(wal_stats.wal_records);
++	values[Anum_server_wal_fpi] = Int64GetDatum(wal_stats.wal_fpi);
++	values[Anum_server_wal_bytes] = Int64GetDatum(wal_stats.wal_bytes);
++	values[Anum_server_wal_writes] = Int64GetDatum(wal_stats.wal_write);
++	values[Anum_server_wal_sync] = Int64GetDatum(wal_stats.wal_sync);
++
++	tuplestore_putvalues(tupstore, tupdesc, values, nulls);
++
++	FreeDir(servers_dir);
++}
++
++/*
++ * read_edb_wait_states_one_server_file
++ *
++ * The function reads given file containing wait event servers and inserts the
++ * records in it in the given tuple store. Each server is assumed to be written
++ * as EDBWaitStatesserver structure. The function ignores any servers which do
++ * not belong to the given time interval.
++ */
++static void
++read_edb_wait_states_one_server_file(char *server_file_name,
++									 Tuplestorestate *tupstore,
++									 TupleDesc tupdesc, TimestampTz start_ts,
++									 TimestampTz end_ts,
++									 bool *first,
++									 EDBWaitStatesServer *first_entry,
++									 EDBWaitStatesServer *last_entry)
++{
++	EDBWaitStatesServer server;
++	FILE	   *servers_file;
++
++	servers_file = AllocateFile(server_file_name, PG_BINARY_R);
++	if (servers_file == NULL)
++	{
++		/*
++		 * Couldn't open the file. The reader is supposed to provide as much
++		 * data as possible, so do not throw an error, which would cause the
++		 * transaction to abort. Instead give a warning and move on.
++		 */
++		ereport(WARNING,
++				(errcode_for_file_access(),
++				 errmsg("can not open file %s for reading servers: %m",
++						server_file_name)));
++		return;
++	}
++
++	/*
++	 * Read one server and add it to the tuple store.  We might do better by
++	 * reading a bunch of servers e.g. whatever fits in 1KB memory and add
++	 * them to the tuple store one at a time. But probably fread() already
++	 * does the buffering so efficiency we will get may not be worth two
++	 * loops, one to read the file in chunks and other to add one tuple at a
++	 * time to the tuple store.
++	 */
++	while (fread(&server, sizeof(server), 1, servers_file) == 1)
++	{
++		/* Ignore servers which are not within the given range. */
++		if (timestamptz_cmp_internal(server.sample_ts, start_ts) < 0 ||
++			timestamptz_cmp_internal(server.sample_ts, end_ts) >= 0)
++			continue;
++
++		if (*first == false)
++		{
++			memcpy(first_entry, &server, sizeof(EDBWaitStatesServer));
++			*first = true;
++		}
++		else
++		{
++			memcpy(last_entry, &server, sizeof(EDBWaitStatesServer));
++		}
++	}
++
++	FreeFile(servers_file);
++}
+ /*
+  * delete_edb_wait_states_files
+  *
+diff --git a/edb_wait_states/edb_wait_states_worker.c b/edb_wait_states/edb_wait_states_worker.c
+index 3764470..798a0de 100644
+--- a/edb_wait_states/edb_wait_states_worker.c
++++ b/edb_wait_states/edb_wait_states_worker.c
+@@ -38,7 +38,7 @@
+ #include "utils/timestamp.h"
+ 
+ /* Default location of the directory containing edb_wait_states log files. */
+-#define EDB_WAIT_STATES_DEFAULT_DIRECTORY "edb_wait_states"
++//#define EDB_WAIT_STATES_DEFAULT_DIRECTORY "edb_wait_states"
+ 
+ /* Constants for timestamp calculations. */
+ #define SECS_PER_WEEK (7 * SECS_PER_DAY)
+@@ -63,6 +63,7 @@ static bool edb_wait_states_enable_collection = true;
+ #define SAMPLE_LOG_ROTATION_AGE (SECS_PER_HOUR * MILLISECONDS_PER_SEC)
+ #define QUERY_LOG_ROTATION_AGE (SECS_PER_DAY * MILLISECONDS_PER_SEC)
+ #define SESSION_LOG_ROTATION_AGE (SECS_PER_DAY * MILLISECONDS_PER_SEC)
++#define SERVER_LOG_ROTATION_AGE (SECS_PER_DAY * MILLISECONDS_PER_SEC)
+ 
+ /* Structure holding metadata about log files. */
+ typedef struct EdbWaitStatesLogFile
+@@ -213,12 +214,14 @@ static void ews_sigterm_handler(SIGNAL_ARGS);
+ static void ews_sighup_handler(SIGNAL_ARGS);
+ static void ews_log_events(TimestampTz ts, EdbWaitStatesLogFile *session_file,
+ 			   EdbWaitStatesLogFile *query_file, EdbWaitStatesLogFile *sample_file,
+-			   char *session_info_buffer, char *query_info_buffer,
+-			   EDBWaitStatesSample *sample_info_items);
++			   EdbWaitStatesLogFile *server_file, char *session_info_buffer,
++			   char *query_info_buffer, EDBWaitStatesSample *sample_info_items,
++			   EDBWaitStatesServer *server_info_items);
+ static void ews_init_directory(void);
+ static void ews_init_log_files(EdbWaitStatesLogFile *session_file,
+ 				   EdbWaitStatesLogFile *query_file,
+-				   EdbWaitStatesLogFile *sample_file);
++				   EdbWaitStatesLogFile *sample_file,
++				   EdbWaitStatesLogFile *server_file);
+ static void create_log_file(TimestampTz start_ts, EdbWaitStatesLogFile *log_file,
+ 				char *file_prefix);
+ static void ews_get_latest_log_files(TimestampTz startup_log_ts,
+@@ -232,7 +235,8 @@ static void ews_open_latest_log_file(EdbWaitStatesLogFile *log_file,
+ 						 TimestampTz rotation_age);
+ static TimestampTz ews_rotate_files(EdbWaitStatesLogFile *session_file,
+ 				 EdbWaitStatesLogFile *query_file,
+-				 EdbWaitStatesLogFile *sample_file);
++				 EdbWaitStatesLogFile *sample_file,
++				 EdbWaitStatesLogFile *server_file);
+ static HTAB *ews_create_hash(char *table_name, size_t keysize,
+ 				size_t entrysize);
+ static void ews_populate_query_hash(EdbWaitStatesLogFile *query_file);
+@@ -830,6 +834,7 @@ edb_wait_states_main(Datum main_arg)
+ 	EdbWaitStatesLogFile sample_file;
+ 	EdbWaitStatesLogFile session_file;
+ 	EdbWaitStatesLogFile query_file;
++	EdbWaitStatesLogFile server_file;
+ 
+ 	/* Timestamp when the next set of samples will be collected. */
+ 	TimestampTz sampling_dump_time = 0;
+@@ -842,6 +847,7 @@ edb_wait_states_main(Datum main_arg)
+ 	 * can be written onto their respective files.
+ 	 */
+ 	EDBWaitStatesSample *sample_info_items;
++	EDBWaitStatesServer	*server_info_items;
+ 	char	   *session_info_buffer;
+ 	char	   *query_info_buffer;
+ 
+@@ -885,7 +891,7 @@ edb_wait_states_main(Datum main_arg)
+ #endif
+ 
+ 	/* Get the log file handles ready for writing logs. */
+-	ews_init_log_files(&session_file, &query_file, &sample_file);
++	ews_init_log_files(&session_file, &query_file, &sample_file, &server_file);
+ 
+ 	/*
+ 	 * Allocate buffers sufficient for holding the logs for all backends
+@@ -910,6 +916,8 @@ edb_wait_states_main(Datum main_arg)
+ 	sample_info_items = (EDBWaitStatesSample *)
+ 		palloc(sizeof(EDBWaitStatesSample) * MaxBackends);
+ 
++	server_info_items = (EDBWaitStatesServer *) palloc(sizeof(EDBWaitStatesServer));
++
+ 	/* Initialize sampling time to first edb_wait_states.sampling_interval. */
+ 	sampling_dump_time = TimestampTzPlusMilliseconds(GetCurrentTimestamp(),
+ 													 edb_wait_states_sampling_interval * MILLISECONDS_PER_SEC);
+@@ -960,15 +968,16 @@ edb_wait_states_main(Datum main_arg)
+ 
+ 		/* Rotate the files if needed. */
+ 		current_time = ews_rotate_files(&session_file, &query_file,
+-										&sample_file);
++										&sample_file, &server_file);
+ 
+ 		/* Is it the time to dump samples? */
+ 		if (timestamptz_cmp_internal(sampling_dump_time, current_time) <= 0)
+ 		{
+ 
+ 			ews_log_events(current_time, &session_file, &query_file,
+-						   &sample_file, session_info_buffer,
+-						   query_info_buffer, sample_info_items);
++						   &sample_file, &server_file, session_info_buffer,
++						   query_info_buffer, sample_info_items,
++						   server_info_items);
+ 
+ 			/* Update dump time for the next cycle. */
+ 			sampling_dump_time = TimestampTzPlusMilliseconds(sampling_dump_time,
+@@ -1122,15 +1131,18 @@ ews_sighup_handler(SIGNAL_ARGS)
+ static void
+ ews_log_events(TimestampTz ts, EdbWaitStatesLogFile *session_file,
+ 			   EdbWaitStatesLogFile *query_file, EdbWaitStatesLogFile *sample_file,
+-			   char *session_info_buffer, char *query_info_buffer,
+-			   EDBWaitStatesSample *sample_info_items)
++			   EdbWaitStatesLogFile *server_file, char *session_info_buffer,
++			   char *query_info_buffer, EDBWaitStatesSample *sample_info_items,
++			   EDBWaitStatesServer *server_info_items)
+ {
+ 	int			num_backends = pgstat_fetch_stat_numbackends();
+ 	int			curr_backend;
++	int			num_session = 0;
+ 	int			cnt_sampling_items = 0;
+ 	int			query_info_index = 0;
+ 	int			session_info_index = 0;
+ 	char	   *query_text;
++	PgStat_WalStats	*wal_stats;
+ 
+ 	/* Allocate a buffer for query text */
+ 	query_text = (char *) palloc(pgstat_track_activity_query_size);
+@@ -1220,6 +1232,7 @@ ews_log_events(TimestampTz ts, EdbWaitStatesLogFile *session_file,
+ 			continue;
+ #endif
+ 
++		num_session++;
+ 		for (;;)
+ 		{
+ 			/*
+@@ -1333,6 +1346,7 @@ ews_log_events(TimestampTz ts, EdbWaitStatesLogFile *session_file,
+ 		samplingItem->session_id = procpid;
+ 		samplingItem->sample_ts = ts;
+ 		samplingItem->wait_event_id = proc->wait_event_info;
++		samplingItem->sample_interval = edb_wait_states_sampling_interval;
+ 		samplingItem->query_start_ts = query_start_ts;
+ 	}
+ 	/* Throw away the current stats snapshot. */
+@@ -1381,6 +1395,20 @@ ews_log_events(TimestampTz ts, EdbWaitStatesLogFile *session_file,
+ 		fflush(sample_file->fp);
+ 	}
+ 
++	/* Write server info, as of now only wal stats and number of sessions */
++	wal_stats = pgstat_fetch_stat_wal();
++	server_info_items->num_sessions = num_session;
++	server_info_items->sample_ts = ts;
++	memcpy(&server_info_items->wal_stats, wal_stats, sizeof(PgStat_WalStats));
++
++	if (fwrite(server_info_items, sizeof(EDBWaitStatesServer),
++			   1, server_file->fp) != 1)
++		ereport(ERROR, (errcode_for_file_access(),
++						errmsg("can not write server info record to server info log file \"%s\": %m",
++								server_file->file_name)));
++
++	fflush(server_file->fp);
++
+ 	pfree(query_text);
+ }
+ 
+@@ -1436,7 +1464,8 @@ get_edb_wait_states_directory(void)
+ static void
+ ews_init_log_files(EdbWaitStatesLogFile *session_file,
+ 				   EdbWaitStatesLogFile *query_file,
+-				   EdbWaitStatesLogFile *sample_file)
++				   EdbWaitStatesLogFile *sample_file,
++				   EdbWaitStatesLogFile *server_file)
+ {
+ 	TimestampTz startup_ts = GetCurrentTimestamp();
+ 
+@@ -1542,6 +1571,48 @@ ews_init_log_files(EdbWaitStatesLogFile *session_file,
+ 		create_log_file(startup_ts, sample_file,
+ 						EDB_WAIT_STATES_SAMPLES_FILE_PREFIX);
+ 	}
++
++	/*
++	 * If an existing server log file is being used, make sure that the last
++	 * record was completely written, if not then move the file pointer
++	 * at the end of the last completely written record.
++	 */
++	if (server_file->fp)
++	{
++		long		filesize;
++		long		incomplete_record_size;
++		bool		result = true;
++
++		if (fseek(server_file->fp, 0, SEEK_END) != 0)
++			result = false;
++
++		if (result && ((filesize = ftell(server_file->fp)) == -1))
++			result = false;
++
++		if (result)
++		{
++			incomplete_record_size = filesize % sizeof(EDBWaitStatesServer);
++			if (fseek(server_file->fp, filesize - incomplete_record_size,
++					  SEEK_SET) != 0)
++				result = false;
++		}
++
++		if (!result)
++			ereport(ERROR, (errcode_for_file_access(),
++							errmsg("can not open server file \"%s\" for appending logs: %m",
++								   server_file->file_name)));
++	}
++	else
++	{
++		/*
++		 * No existing sample file was found, create a new one. For details
++		 * refer comment for session file creation.
++		 */
++		server_file->rotation_time = TimestampTzPlusMilliseconds(startup_ts,
++																 SERVER_LOG_ROTATION_AGE);
++		create_log_file(startup_ts, server_file,
++						EDB_WAIT_STATES_SERVER_FILE_PREFIX);
++	}
+ }
+ 
+ /*
+@@ -1754,7 +1825,8 @@ ews_open_latest_log_file(EdbWaitStatesLogFile *log_file,
+ static TimestampTz
+ ews_rotate_files(EdbWaitStatesLogFile *session_file,
+ 				 EdbWaitStatesLogFile *query_file,
+-				 EdbWaitStatesLogFile *sample_file)
++				 EdbWaitStatesLogFile *sample_file,
++				 EdbWaitStatesLogFile *server_file)
+ {
+ 	TimestampTz current_time = GetCurrentTimestamp();
+ 
+@@ -1812,6 +1884,18 @@ ews_rotate_files(EdbWaitStatesLogFile *session_file,
+ 		current_time = GetCurrentTimestamp();
+ 	}
+ 
++	/* Is it time to rotate server info file? */
++	if (timestamptz_cmp_internal(server_file->rotation_time, current_time) <= 0)
++	{
++		server_file->rotation_time = TimestampTzPlusMilliseconds(server_file->rotation_time,
++																 SERVER_LOG_ROTATION_AGE);
++
++		create_log_file(current_time, server_file,
++						EDB_WAIT_STATES_SERVER_FILE_PREFIX);
++
++		current_time = GetCurrentTimestamp();
++	}
++
+ 	return current_time;
+ }
+ 

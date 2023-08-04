@@ -7,7 +7,7 @@
     <th align="center">report_timestamp</th>
   </tr>
   <tr valign="top">
-    <td align="left">04-AUG-23 09:17:30.636926 +05:30</td>
+    <td align="left">04-AUG-23 16:29:40.724583 +05:30</td>
   </tr>
 </table>
 <p>(1 row)<br />
@@ -19,7 +19,7 @@
     <th align="center">snap_end</th>
   </tr>
   <tr valign="top">
-    <td align="left">30-APR-23 17:20:30.45226</td>
+    <td align="left">4-AUG-22 16:27:30.45226</td>
     <td align="left">30-JUL-24 17:20:20.45226</td>
   </tr>
 </table>
@@ -53,10 +53,10 @@ CPU(s): 4<br />
 On-line CPU(s) list: 0-3<br />
 </td>
     <td align="left">7786668 K total memory<br />
-5571452 K used memory<br />
-2642336 K active memory<br />
-3304696 K inactive memory<br />
-314480 K free memory<br />
+5868720 K used memory<br />
+2874840 K active memory<br />
+3207284 K inactive memory<br />
+88908 K free memory<br />
 </td>
   </tr>
 </table>
@@ -68,7 +68,7 @@ On-line CPU(s) list: 0-3<br />
     <th align="center">total_dbtime_sec</th>
   </tr>
   <tr valign="top">
-    <td align="right">1458</td>
+    <td align="right">8925</td>
   </tr>
 </table>
 <p>(1 row)<br />
@@ -92,7 +92,7 @@ On-line CPU(s) list: 0-3<br />
     <th align="center">uptime</th>
   </tr>
   <tr valign="top">
-    <td align="left">00:36:24</td>
+    <td align="left">00:09:51</td>
   </tr>
 </table>
 <p>(1 row)<br />
@@ -106,22 +106,22 @@ On-line CPU(s) list: 0-3<br />
   </tr>
   <tr valign="top">
     <td align="left">transactionid</td>
-    <td align="right">1156</td>
+    <td align="right">7075</td>
     <td align="right">79</td>
   </tr>
   <tr valign="top">
     <td align="left">tuple</td>
-    <td align="right">251</td>
+    <td align="right">1524</td>
     <td align="right">17</td>
   </tr>
   <tr valign="top">
-    <td align="left">BufferContent</td>
-    <td align="right">7</td>
-    <td align="right">0</td>
+    <td align="left">LockManager</td>
+    <td align="right">91</td>
+    <td align="right">1</td>
   </tr>
   <tr valign="top">
-    <td align="left">LockManager</td>
-    <td align="right">4</td>
+    <td align="left">BufferContent</td>
+    <td align="right">17</td>
     <td align="right">0</td>
   </tr>
 </table>
@@ -138,23 +138,31 @@ On-line CPU(s) list: 0-3<br />
     <th align="center">query</th>
   </tr>
   <tr valign="top">
-    <td align="right">3894461092445739957</td>
-    <td align="right">1106</td>
-    <td align="right">1096</td>
-    <td align="right">10</td>
+    <td align="right">-4112965604412243159</td>
+    <td align="right">6743</td>
+    <td align="right">6685</td>
+    <td align="right">58</td>
     <td align="left">transactionid</td>
     <td align="left">UPDATE pgbench_tellers SET tbalance = tbalance + $1 WHERE tid = $2</td>
   </tr>
   <tr valign="top">
-    <td align="right">1526826939224125319</td>
-    <td align="right">336</td>
-    <td align="right">322</td>
-    <td align="right">14</td>
+    <td align="right">-6465600191796732197</td>
+    <td align="right">2097</td>
+    <td align="right">2006</td>
+    <td align="right">91</td>
     <td align="left">transactionid</td>
     <td align="left">UPDATE pgbench_branches SET bbalance = bbalance + $1 WHERE bid = $2</td>
   </tr>
+  <tr valign="top">
+    <td align="right">-8518298338757331722</td>
+    <td align="right">48</td>
+    <td align="right">16</td>
+    <td align="right">32</td>
+    <td align="left">LockManager</td>
+    <td align="left">UPDATE pgbench_accounts SET abalance = abalance + $1 WHERE aid = $2</td>
+  </tr>
 </table>
-<p>(2 rows)<br />
+<p>(3 rows)<br />
 </p>
 <h2>Longest active session</h2>
 <table border="1" cellspacing=0 cellpadding=0>
@@ -167,87 +175,119 @@ On-line CPU(s) list: 0-3<br />
     <th align="center">conection_duration</th>
   </tr>
   <tr valign="top">
-    <td align="right">139592</td>
+    <td align="right">147766</td>
     <td align="left">postgres</td>
     <td align="left">dilip</td>
-    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
-    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">04-AUG-23 16:19:49.382011 +05:30</td>
+    <td align="left">05-AUG-23 16:19:49.382011 +05:30</td>
     <td align="left">1 day</td>
   </tr>
   <tr valign="top">
-    <td align="right">139591</td>
+    <td align="right">147778</td>
     <td align="left">postgres</td>
     <td align="left">dilip</td>
-    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
-    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">04-AUG-23 16:19:49.382011 +05:30</td>
+    <td align="left">05-AUG-23 16:19:49.382011 +05:30</td>
     <td align="left">1 day</td>
   </tr>
   <tr valign="top">
-    <td align="right">139596</td>
+    <td align="right">147776</td>
     <td align="left">postgres</td>
     <td align="left">dilip</td>
-    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
-    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">04-AUG-23 16:19:49.382011 +05:30</td>
+    <td align="left">05-AUG-23 16:19:49.382011 +05:30</td>
     <td align="left">1 day</td>
   </tr>
   <tr valign="top">
-    <td align="right">139594</td>
+    <td align="right">147780</td>
     <td align="left">postgres</td>
     <td align="left">dilip</td>
-    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
-    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">04-AUG-23 16:19:49.382011 +05:30</td>
+    <td align="left">05-AUG-23 16:19:49.382011 +05:30</td>
     <td align="left">1 day</td>
   </tr>
   <tr valign="top">
-    <td align="right">139597</td>
+    <td align="right">147769</td>
     <td align="left">postgres</td>
     <td align="left">dilip</td>
-    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
-    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">04-AUG-23 16:19:49.382011 +05:30</td>
+    <td align="left">05-AUG-23 16:19:49.382011 +05:30</td>
     <td align="left">1 day</td>
   </tr>
   <tr valign="top">
-    <td align="right">139603</td>
+    <td align="right">147781</td>
     <td align="left">postgres</td>
     <td align="left">dilip</td>
-    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
-    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">04-AUG-23 16:19:49.382011 +05:30</td>
+    <td align="left">05-AUG-23 16:19:49.382011 +05:30</td>
     <td align="left">1 day</td>
   </tr>
   <tr valign="top">
-    <td align="right">139599</td>
+    <td align="right">147782</td>
     <td align="left">postgres</td>
     <td align="left">dilip</td>
-    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
-    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">04-AUG-23 16:19:49.382011 +05:30</td>
+    <td align="left">05-AUG-23 16:19:49.382011 +05:30</td>
     <td align="left">1 day</td>
   </tr>
   <tr valign="top">
-    <td align="right">139593</td>
+    <td align="right">147764</td>
     <td align="left">postgres</td>
     <td align="left">dilip</td>
-    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
-    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">04-AUG-23 16:19:49.382011 +05:30</td>
+    <td align="left">05-AUG-23 16:19:49.382011 +05:30</td>
     <td align="left">1 day</td>
   </tr>
   <tr valign="top">
-    <td align="right">139616</td>
+    <td align="right">147786</td>
     <td align="left">postgres</td>
     <td align="left">dilip</td>
-    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
-    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">04-AUG-23 16:19:49.382011 +05:30</td>
+    <td align="left">05-AUG-23 16:19:49.382011 +05:30</td>
     <td align="left">1 day</td>
   </tr>
   <tr valign="top">
-    <td align="right">139590</td>
+    <td align="right">147762</td>
     <td align="left">postgres</td>
     <td align="left">dilip</td>
-    <td align="left">04-AUG-23 08:41:06.420692 +05:30</td>
-    <td align="left">05-AUG-23 08:41:06.420692 +05:30</td>
+    <td align="left">04-AUG-23 16:19:49.382011 +05:30</td>
+    <td align="left">05-AUG-23 16:19:49.382011 +05:30</td>
     <td align="left">1 day</td>
   </tr>
 </table>
 <p>(10 rows)<br />
+</p>
+<h2>Session info</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">session_at_snap_start</th>
+    <th align="center">session_at_snap_end</th>
+  </tr>
+  <tr valign="top">
+    <td align="right">0</td>
+    <td align="right">32</td>
+  </tr>
+</table>
+<p>(1 row)<br />
+</p>
+<h2>WAL stats during snapshot duration</h2>
+<table border="1" cellspacing=0 cellpadding=0>
+  <tr>
+    <th align="center">wal_records</th>
+    <th align="center">wal_fpi</th>
+    <th align="center">wal_bytes</th>
+    <th align="center">wal_write</th>
+    <th align="center">wal_sync</th>
+  </tr>
+  <tr valign="top">
+    <td align="right">5888856</td>
+    <td align="right">2512</td>
+    <td align="right">484758247</td>
+    <td align="right">759728</td>
+    <td align="right">758816</td>
+  </tr>
+</table>
+<p>(1 row)<br />
 </p>
 <h2>PostgreSQL Database Settings</h2>
 <table border="1" cellspacing=0 cellpadding=0>

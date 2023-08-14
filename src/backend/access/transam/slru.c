@@ -1372,6 +1372,7 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		int			bestvalidslot = -1;	/* keep compiler quiet */
 		int			bestinvalidslot = 0;	/* keep compiler quiet */
 		int			best_invalid_count = -1;
+		int			best_valid_page_number = 0;	/* keep compiler quiet */
 		int			best_invalid_page_number = 0;	/* keep compiler quiet */
 
 		/*
@@ -1444,10 +1445,13 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 
 			if (shared->page_status[slotno] == SLRU_PAGE_VALID)
 			{
-				if (this_lru_count == 0)
+				if ((bestvalidslot > 0 && this_lru_count == 0 &&
+					ctl->PagePrecedes(this_page_number,
+									  best_valid_page_number)) ||
+					this_lru_count == 0)
 				{
 					bestvalidslot = slotno;
-					break;
+					best_valid_page_number = this_page_number;
 				}
 				else
 					SlruReduceUsageCount(shared, slotno);

@@ -452,6 +452,7 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 			shared->page_status[slotno] = SLRU_PAGE_EMPTY;
 			shared->page_dirty[slotno] = false;
 			pg_atomic_init_u32(&shared->page_lru_count[slotno], 0);
+			shared->next_victim_slot = 0;
 			ptr += BLCKSZ;
 		}
 
@@ -1347,6 +1348,44 @@ SlruReportIOError(SlruCtl ctl, int pageno, TransactionId xid)
 	}
 }
 
+static inline int
+SlruClockSweepTick(SlruShared shared)
+{
+	uint32		victim;
+
+	/*
+	 * Atomically move hand ahead one buffer - if there's several processes
+	 * doing this, this can lead to buffers being returned slightly out of
+	 * apparent order.
+	 */
+	victim = shared->next_victim_slot++;
+
+	if (victim >= shared->num_slots)
+	{
+		uint32		originalVictim = victim;
+
+		/* always wrap what we look up in BufferDescriptors */
+		victim = victim % shared->num_slots;
+
+		/*
+		 * If we're the one that just caused a wraparound, force
+		 * completePasses to be incremented while holding the spinlock. We
+		 * need the spinlock so StrategySyncStart() can return a consistent
+		 * value consisting of nextVictimBuffer and completePasses.
+		 */
+		if (victim == 0)
+		{
+			uint32		expected;
+			uint32		wrapped;
+
+			expected = originalVictim + 1;
+			wrapped = expected % shared->num_slots;
+			shared->next_victim_slot = wrapped;
+		}
+	}
+	return victim;
+}
+
 /*
  * Select the slot to re-use when we need a free slot.
  *
@@ -1372,7 +1411,7 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		int			bestvalidslot = -1;	/* keep compiler quiet */
 		int			bestinvalidslot = 0;	/* keep compiler quiet */
 		int			best_invalid_count = -1;
-		int			best_valid_page_number = 0;	/* keep compiler quiet */
+		//int			best_valid_page_number = 0;	/* keep compiler quiet */
 		int			best_invalid_page_number = 0;	/* keep compiler quiet */
 
 		/*
@@ -1429,6 +1468,47 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		 * multiple pages with the same lru_count.
 		 */
 		//cur_count = (shared->cur_lru_count)++;
+		
+		for (;;)
+		{
+			int			this_page_number;
+			int			this_lru_count;
+			
+			slotno = SlruClockSweepTick(shared);
+
+			if (shared->page_status[slotno] == SLRU_PAGE_EMPTY)
+				return slotno;
+
+			this_page_number = shared->page_number[slotno];
+			if (this_page_number == shared->latest_page_number)
+				continue;
+
+			this_lru_count = pg_atomic_read_u32(&shared->page_lru_count[slotno]);
+			if (shared->page_status[slotno] == SLRU_PAGE_VALID)
+			{
+				if (this_lru_count == 0)
+				{
+					bestvalidslot = slotno;
+					break;
+				}
+				else
+					SlruReduceUsageCount(shared, slotno);
+			}
+			else
+			{
+				if (this_lru_count < best_invalid_count ||
+					(this_lru_count == best_invalid_count &&
+					 ctl->PagePrecedes(this_page_number,
+									   best_invalid_page_number)))
+				{
+					bestinvalidslot = slotno;
+					best_invalid_count = this_lru_count;
+					best_invalid_page_number = this_page_number;
+				}
+
+			}
+		}		
+#if 0		
 		for (slotno = 0; slotno < shared->num_slots; slotno++)
 		{
 			int			this_page_number;
@@ -1469,6 +1549,7 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 				}
 			}
 		}
+#endif		
 
 		/*
 		 * If all pages (except possibly the latest one) are I/O busy, we'll

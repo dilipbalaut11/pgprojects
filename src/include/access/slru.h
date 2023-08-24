@@ -71,6 +71,7 @@ typedef struct SlruSharedData
 	int		   *page_number;
 	//int		   *page_lru_count;
 	pg_atomic_uint32 *page_lru_count;
+	int 		next_victim_slot;
 	LWLockPadded *buffer_locks;
 	LWLockPadded *partition_locks;
 

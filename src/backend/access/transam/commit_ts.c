@@ -221,8 +221,9 @@ SetXidCommitTsInPage(TransactionId xid, int nsubxids,
 {
 	int			slotno;
 	int			i;
+	LWLock	   *lock = SimpleLruGetSLRUBankLock(CommitTsCtl, pageno);
 
-	LWLockAcquire(CommitTsSLRULock, LW_EXCLUSIVE);
+	LWLockAcquire(lock, LW_EXCLUSIVE);
 
 	slotno = SimpleLruReadPage(CommitTsCtl, pageno, true, xid);
 
@@ -232,13 +233,13 @@ SetXidCommitTsInPage(TransactionId xid, int nsubxids,
 
 	CommitTsCtl->shared->page_dirty[slotno] = true;
 
-	LWLockRelease(CommitTsSLRULock);
+	LWLockRelease(lock);
 }
 
 /*
  * Sets the commit timestamp of a single transaction.
  *
- * Must be called with CommitTsSLRULock held
+ * Must be called with slot specific SLRU bank's Lock held
  */
 static void
 TransactionIdSetCommitTs(TransactionId xid, TimestampTz ts,
@@ -339,7 +340,7 @@ TransactionIdGetCommitTsData(TransactionId xid, TimestampTz *ts,
 	if (nodeid)
 		*nodeid = entry.nodeid;
 
-	LWLockRelease(CommitTsSLRULock);
+	LWLockRelease(SimpleLruGetSLRUBankLock(CommitTsCtl, pageno));
 	return *ts != 0;
 }
 
@@ -511,9 +512,8 @@ CommitTsShmemInit(void)
 
 	CommitTsCtl->PagePrecedes = CommitTsPagePrecedes;
 	SimpleLruInit(CommitTsCtl, "CommitTs", NUM_COMMIT_TS_BUFFERS, 0,
-				  CommitTsSLRULock, "pg_commit_ts",
-				  LWTRANCHE_COMMITTS_BUFFER,
-				  SYNC_HANDLER_COMMIT_TS);
+				  "pg_commit_ts", LWTRANCHE_COMMITTS_BUFFER,
+				  LWTRANCHE_COMMITTS_SLRU, SYNC_HANDLER_COMMIT_TS);
 	SlruPagePrecedesUnitTests(CommitTsCtl, COMMIT_TS_XACTS_PER_PAGE);
 
 	commitTsShared = ShmemInitStruct("CommitTs shared",
@@ -669,9 +669,7 @@ ActivateCommitTs(void)
 	/*
 	 * Re-Initialize our idea of the latest page number.
 	 */
-	LWLockAcquire(CommitTsSLRULock, LW_EXCLUSIVE);
-	CommitTsCtl->shared->latest_page_number = pageno;
-	LWLockRelease(CommitTsSLRULock);
+	pg_atomic_write_u32(&CommitTsCtl->shared->latest_page_number, pageno);
 
 	/*
 	 * If CommitTs is enabled, but it wasn't in the previous server run, we
@@ -698,12 +696,13 @@ ActivateCommitTs(void)
 	if (!SimpleLruDoesPhysicalPageExist(CommitTsCtl, pageno))
 	{
 		int			slotno;
+		LWLock	   *lock = SimpleLruGetSLRUBankLock(CommitTsCtl, pageno);
 
-		LWLockAcquire(CommitTsSLRULock, LW_EXCLUSIVE);
+		LWLockAcquire(lock, LW_EXCLUSIVE);
 		slotno = ZeroCommitTsPage(pageno, false);
 		SimpleLruWritePage(CommitTsCtl, slotno);
 		Assert(!CommitTsCtl->shared->page_dirty[slotno]);
-		LWLockRelease(CommitTsSLRULock);
+		LWLockRelease(lock);
 	}
 
 	/* Change the activation status in shared memory. */
@@ -752,9 +751,9 @@ DeactivateCommitTs(void)
 	 * be overwritten anyway when we wrap around, but it seems better to be
 	 * tidy.)
 	 */
-	LWLockAcquire(CommitTsSLRULock, LW_EXCLUSIVE);
+	SimpleLruAcquireAllBankLock(CommitTsCtl, LW_EXCLUSIVE);
 	(void) SlruScanDirectory(CommitTsCtl, SlruScanDirCbDeleteAll, NULL);
-	LWLockRelease(CommitTsSLRULock);
+	SimpleLruReleaseAllBankLock(CommitTsCtl);
 }
 
 /*
@@ -786,6 +785,7 @@ void
 ExtendCommitTs(TransactionId newestXact)
 {
 	int			pageno;
+	LWLock	   *lock;
 
 	/*
 	 * Nothing to do if module not enabled.  Note we do an unlocked read of
@@ -806,12 +806,14 @@ ExtendCommitTs(TransactionId newestXact)
 
 	pageno = TransactionIdToCTsPage(newestXact);
 
-	LWLockAcquire(CommitTsSLRULock, LW_EXCLUSIVE);
+	lock = SimpleLruGetSLRUBankLock(CommitTsCtl, pageno);
+
+	LWLockAcquire(lock, LW_EXCLUSIVE);
 
 	/* Zero the page and make an XLOG entry about it */
 	ZeroCommitTsPage(pageno, !InRecovery);
 
-	LWLockRelease(CommitTsSLRULock);
+	LWLockRelease(lock);
 }
 
 /*
@@ -965,16 +967,18 @@ commit_ts_redo(XLogReaderState *record)
 	{
 		int			pageno;
 		int			slotno;
+		LWLock	   *lock;
 
 		memcpy(&pageno, XLogRecGetData(record), sizeof(int));
+		lock = SimpleLruGetSLRUBankLock(CommitTsCtl, pageno);
 
-		LWLockAcquire(CommitTsSLRULock, LW_EXCLUSIVE);
+		LWLockAcquire(lock, LW_EXCLUSIVE);
 
 		slotno = ZeroCommitTsPage(pageno, false);
 		SimpleLruWritePage(CommitTsCtl, slotno);
 		Assert(!CommitTsCtl->shared->page_dirty[slotno]);
 
-		LWLockRelease(CommitTsSLRULock);
+		LWLockRelease(lock);
 	}
 	else if (info == COMMIT_TS_TRUNCATE)
 	{
@@ -986,7 +990,8 @@ commit_ts_redo(XLogReaderState *record)
 		 * During XLOG replay, latest_page_number isn't set up yet; insert a
 		 * suitable value to bypass the sanity test in SimpleLruTruncate.
 		 */
-		CommitTsCtl->shared->latest_page_number = trunc->pageno;
+		pg_atomic_write_u32(&CommitTsCtl->shared->latest_page_number,
+							trunc->pageno);
 
 		SimpleLruTruncate(CommitTsCtl, trunc->pageno);
 	}

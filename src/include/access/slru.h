@@ -52,8 +52,6 @@ typedef enum
  */
 typedef struct SlruSharedData
 {
-	LWLock	   *ControlLock;
-
 	/* Number of buffers managed by this SLRU structure */
 	int			num_slots;
 
@@ -67,6 +65,13 @@ typedef struct SlruSharedData
 	int		   *page_number;
 	int		   *page_lru_count;
 	LWLockPadded *buffer_locks;
+
+	/*
+	 * Locks to protect the in memory buffer slot access in per SLRU bank.
+	 * The buffer_locks protects the I/O on each buffer slots whereas this lock
+	 * protect the in memory operation on the buffer within one SLRU bank.
+	 */
+	LWLockPadded *bank_locks;
 
 	/*
 	 * Optional array of WAL flush LSNs associated with entries in the SLRU
@@ -95,7 +100,7 @@ typedef struct SlruSharedData
 	 * this is not critical data, since we use it only to avoid swapping out
 	 * the latest page.
 	 */
-	int			latest_page_number;
+	pg_atomic_uint32	latest_page_number;
 
 	/* SLRU's index for statistics purposes (might not be unique) */
 	int			slru_stats_idx;
@@ -143,11 +148,24 @@ typedef struct SlruCtlData
 
 typedef SlruCtlData *SlruCtl;
 
+/*
+ * Get the SLRU bank lock for given SlruCtl and the pageno.
+ *
+ * This lock needs to be acquire in order to access the slru buffer slots in
+ * the respective bank.  For more details refer comments in SlruSharedData.
+ */
+static inline LWLock *
+SimpleLruGetSLRUBankLock(SlruCtl ctl, int pageno)
+{
+	int			bankno = (pageno & ctl->bank_mask);
+
+	return &(ctl->shared->bank_locks[bankno].lock);
+}
 
 extern Size SimpleLruShmemSize(int nslots, int nlsns);
 extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
-						  LWLock *ctllock, const char *subdir, int tranche_id,
-						  SyncRequestHandler sync_handler);
+						  const char *subdir, int buffer_tranche_id,
+						  int bank_tranche_id, SyncRequestHandler sync_handler);
 extern int	SimpleLruZeroPage(SlruCtl ctl, int pageno);
 extern int	SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 							  TransactionId xid);
@@ -175,5 +193,7 @@ extern bool SlruScanDirCbReportPresence(SlruCtl ctl, char *filename,
 										int segpage, void *data);
 extern bool SlruScanDirCbDeleteAll(SlruCtl ctl, char *filename, int segpage,
 								   void *data);
-
+extern LWLock *SimpleLruGetSLRUBankLock(SlruCtl ctl, int pageno);
+extern void SimpleLruAcquireAllBankLock(SlruCtl ctl, LWLockMode mode);
+extern void SimpleLruReleaseAllBankLock(SlruCtl ctl);
 #endif							/* SLRU_H */

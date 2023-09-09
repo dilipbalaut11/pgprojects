@@ -570,8 +570,8 @@ AsyncShmemInit(void)
 	 */
 	NotifyCtl->PagePrecedes = asyncQueuePagePrecedes;
 	SimpleLruInit(NotifyCtl, "Notify", NUM_NOTIFY_BUFFERS, 0,
-				  NotifySLRULock, "pg_notify", LWTRANCHE_NOTIFY_BUFFER,
-				  SYNC_HANDLER_NONE);
+				  "pg_notify", LWTRANCHE_NOTIFY_BUFFER,
+				  LWTRANCHE_NOTIFY_SLRU, SYNC_HANDLER_NONE);
 
 	if (!found)
 	{
@@ -1412,9 +1412,7 @@ asyncQueueAddEntries(ListCell *nextNotify)
 	int			pageno;
 	int			offset;
 	int			slotno;
-
-	/* We hold both NotifyQueueLock and NotifySLRULock during this operation */
-	LWLockAcquire(NotifySLRULock, LW_EXCLUSIVE);
+	LWLock	   *lock;
 
 	/*
 	 * We work with a local copy of QUEUE_HEAD, which we write back to shared
@@ -1438,6 +1436,11 @@ asyncQueueAddEntries(ListCell *nextNotify)
 	 * wrapped around, but re-zeroing the page is harmless in that case.)
 	 */
 	pageno = QUEUE_POS_PAGE(queue_head);
+	lock = SimpleLruPageGetSLRULock(NotifyCtl, pageno);
+
+	/* We hold both NotifyQueueLock and NotifySLRULock during this operation */
+	LWLockAcquire(lock, LW_EXCLUSIVE);
+
 	if (QUEUE_POS_IS_ZERO(queue_head))
 		slotno = SimpleLruZeroPage(NotifyCtl, pageno);
 	else
@@ -1509,7 +1512,7 @@ asyncQueueAddEntries(ListCell *nextNotify)
 	/* Success, so update the global QUEUE_HEAD */
 	QUEUE_HEAD = queue_head;
 
-	LWLockRelease(NotifySLRULock);
+	LWLockRelease(lock);
 
 	return nextNotify;
 }
@@ -2010,7 +2013,7 @@ asyncQueueReadAllNotifications(void)
 				   NotifyCtl->shared->page_buffer[slotno] + curoffset,
 				   copysize);
 			/* Release lock that we got from SimpleLruReadPage_ReadOnly() */
-			LWLockRelease(NotifySLRULock);
+			LWLockRelease(SimpleLruPageGetSLRULock(NotifyCtl, curpage));
 
 			/*
 			 * Process messages up to the stop position, end of page, or an

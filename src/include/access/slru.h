@@ -67,6 +67,7 @@ typedef struct SlruSharedData
 	int		   *page_number;
 	int		   *page_lru_count;
 	LWLockPadded *buffer_locks;
+	LWLockPadded *bank_locks;
 
 	/*
 	 * Optional array of WAL flush LSNs associated with entries in the SLRU
@@ -95,7 +96,7 @@ typedef struct SlruSharedData
 	 * this is not critical data, since we use it only to avoid swapping out
 	 * the latest page.
 	 */
-	int			latest_page_number;
+	pg_atomic_uint32	latest_page_number;
 
 	/* SLRU's index for statistics purposes (might not be unique) */
 	int			slru_stats_idx;
@@ -143,11 +144,19 @@ typedef struct SlruCtlData
 
 typedef SlruCtlData *SlruCtl;
 
+static inline LWLock *
+SimpleLruPageGetSLRULock(SlruCtl ctl, int pageno)
+{
+	int			bankno = (pageno & ctl->bank_mask);
+
+	/* Try to find the page while holding only shared lock */
+	return &(ctl->shared->bank_locks[bankno].lock);
+}
 
 extern Size SimpleLruShmemSize(int nslots, int nlsns);
 extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
-						  LWLock *ctllock, const char *subdir, int tranche_id,
-						  SyncRequestHandler sync_handler);
+						  const char *subdir, int tranche_id,
+						  int slru_tranche_id, SyncRequestHandler sync_handler);
 extern int	SimpleLruZeroPage(SlruCtl ctl, int pageno);
 extern int	SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 							  TransactionId xid);
@@ -175,5 +184,7 @@ extern bool SlruScanDirCbReportPresence(SlruCtl ctl, char *filename,
 										int segpage, void *data);
 extern bool SlruScanDirCbDeleteAll(SlruCtl ctl, char *filename, int segpage,
 								   void *data);
-
+extern LWLock *SimpleLruPageGetSLRULock(SlruCtl ctl, int pageno);
+extern void SimpleLruControlLockAcquire(SlruCtl ctl, LWLockMode mode);
+extern void SimpleLruControlLockRelease(SlruCtl ctl);
 #endif							/* SLRU_H */

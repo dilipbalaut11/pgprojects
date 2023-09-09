@@ -808,8 +808,8 @@ SerialInit(void)
 	 */
 	SerialSlruCtl->PagePrecedes = SerialPagePrecedesLogically;
 	SimpleLruInit(SerialSlruCtl, "Serial",
-				  NUM_SERIAL_BUFFERS, 0, SerialSLRULock, "pg_serial",
-				  LWTRANCHE_SERIAL_BUFFER, SYNC_HANDLER_NONE);
+				  NUM_SERIAL_BUFFERS, 0, "pg_serial", LWTRANCHE_SERIAL_BUFFER,
+				  LWTRANCHE_SERIAL_SLRU, SYNC_HANDLER_NONE);
 #ifdef USE_ASSERT_CHECKING
 	SerialPagePrecedesLogicallyUnitTests();
 #endif
@@ -846,12 +846,14 @@ SerialAdd(TransactionId xid, SerCommitSeqNo minConflictCommitSeqNo)
 	int			slotno;
 	int			firstZeroPage;
 	bool		isNewPage;
+	LWLock	   *lock;
 
 	Assert(TransactionIdIsValid(xid));
 
 	targetPage = SerialPage(xid);
+	lock = SimpleLruPageNoGetLock(SerialSlruCtl, targetPage);
 
-	LWLockAcquire(SerialSLRULock, LW_EXCLUSIVE);
+	LWLockAcquire(lock, LW_EXCLUSIVE);
 
 	/*
 	 * If no serializable transactions are active, there shouldn't be anything
@@ -901,7 +903,7 @@ SerialAdd(TransactionId xid, SerCommitSeqNo minConflictCommitSeqNo)
 	SerialValue(slotno, xid) = minConflictCommitSeqNo;
 	SerialSlruCtl->shared->page_dirty[slotno] = true;
 
-	LWLockRelease(SerialSLRULock);
+	LWLockRelease(lock);
 }
 
 /*
@@ -919,6 +921,7 @@ SerialGetMinConflictCommitSeqNo(TransactionId xid)
 
 	Assert(TransactionIdIsValid(xid));
 
+	//FIXME-SLRU: serialControl data are updated with SLRU lock so maybe we keep that as it is
 	LWLockAcquire(SerialSLRULock, LW_SHARED);
 	headXid = serialControl->headXid;
 	tailXid = serialControl->tailXid;
@@ -940,7 +943,7 @@ SerialGetMinConflictCommitSeqNo(TransactionId xid)
 	slotno = SimpleLruReadPage_ReadOnly(SerialSlruCtl,
 										SerialPage(xid), xid);
 	val = SerialValue(slotno, xid);
-	LWLockRelease(SerialSLRULock);
+	LWLockRelease(SimpleLruPageNoGetLock(SerialSlruCtl, SerialPage(xid)));
 	return val;
 }
 
@@ -953,6 +956,7 @@ SerialGetMinConflictCommitSeqNo(TransactionId xid)
 static void
 SerialSetActiveSerXmin(TransactionId xid)
 {
+	//FIXME-SLRU: serialControl data are updated with SLRU lock so maybe we keep that as it is
 	LWLockAcquire(SerialSLRULock, LW_EXCLUSIVE);
 
 	/*

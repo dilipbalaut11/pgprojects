@@ -59,13 +59,14 @@ typedef struct SlruSharedData
 
 	/*
 	 * Arrays holding info for each buffer slot.  Page number is undefined
-	 * when status is EMPTY, as is page_lru_count.
+	 * when status is EMPTY, as is page_usage_count.
 	 */
 	char	  **page_buffer;
 	SlruPageStatus *page_status;
 	bool	   *page_dirty;
 	int		   *page_number;
-	int		   *page_lru_count;
+	int		   *next_victim_slot;
+	pg_atomic_uint32 *page_usage_count;
 	LWLockPadded *buffer_locks;
 	LWLockPadded *bank_locks;
 
@@ -79,17 +80,6 @@ typedef struct SlruSharedData
 	 */
 	XLogRecPtr *group_lsn;
 	int			lsn_groups_per_page;
-
-	/*----------
-	 * We mark a page "most recently used" by setting
-	 *		page_lru_count[slotno] = ++cur_lru_count;
-	 * The oldest page is therefore the one with the highest value of
-	 *		cur_lru_count - page_lru_count[slotno]
-	 * The counts will eventually wrap around, but this calculation still
-	 * works as long as no page's age exceeds INT_MAX counts.
-	 *----------
-	 */
-	int			cur_lru_count;
 
 	/*
 	 * latest_page_number is the page number of the current end of the log;

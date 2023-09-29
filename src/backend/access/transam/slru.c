@@ -125,9 +125,10 @@ typedef struct SlruWriteAllData *SlruWriteAll;
  */
 #define SlruRecentlyUsed(shared, slotno)	\
 	do { \
-		int		new_lru_count = (shared)->cur_lru_count; \
+		int		bankno = slotno / SLRU_BANK_SIZE; \
+		int		new_lru_count = (shared)->bank_cur_lru_count[bankno]; \
 		if (new_lru_count != (shared)->page_lru_count[slotno]) { \
-			(shared)->cur_lru_count = ++new_lru_count; \
+			(shared)->bank_cur_lru_count[bankno] = ++new_lru_count; \
 			(shared)->page_lru_count[slotno] = new_lru_count; \
 		} \
 	} while (0)
@@ -200,6 +201,7 @@ SimpleLruShmemSize(int nslots, int nlsns)
 	sz += MAXALIGN(nslots * sizeof(int));	/* page_lru_count[] */
 	sz += MAXALIGN(nslots * sizeof(LWLockPadded));	/* buffer_locks[] */
 	sz += MAXALIGN((bankmask + 1) * sizeof(LWLockPadded));	/* buffer_locks[] */
+	sz += MAXALIGN((bankmask + 1) * sizeof(int));	/* bank_cur_lru_count[] */
 
 	if (nlsns > 0)
 		sz += MAXALIGN(nslots * nlsns * sizeof(XLogRecPtr));	/* group_lsn[] */
@@ -270,7 +272,7 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		shared->num_slots = nslots;
 		shared->lsn_groups_per_page = nlsns;
 
-		shared->cur_lru_count = 0;
+		//shared->cur_lru_count = 0;
 
 		/* shared->latest_page_number will be set later */
 
@@ -294,6 +296,8 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		offset += MAXALIGN(nslots * sizeof(LWLockPadded));
 		shared->bank_locks = (LWLockPadded *) (ptr + offset);
 		offset += MAXALIGN(nbanks * sizeof(LWLockPadded));
+		shared->bank_cur_lru_count = (int *) (ptr + offset);
+		offset += MAXALIGN(nbanks * sizeof(int));
 
 		if (nlsns > 0)
 		{
@@ -315,8 +319,11 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		}
 		/* initialize bank locks for each buffer bank */
 		for (bankno = 0; bankno < nbanks; bankno++)
+		{
 			LWLockInitialize(&shared->bank_locks[bankno].lock,
 							 slru_tranche_id);
+			shared->bank_cur_lru_count[bankno] = 0;
+		}
 
 		/* Should fit to estimated shmem size */
 		Assert(ptr - (char *) shared <= SimpleLruShmemSize(nslots, nlsns));
@@ -1106,8 +1113,10 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		int			best_invalid_page_number = 0;	/* keep compiler quiet */
 
 		/* See if page already has a buffer assigned */
-		int			bankstart = (pageno & ctl->bank_mask) * SLRU_BANK_SIZE;
+		int			bankno = pageno & ctl->bank_mask;
+		int			bankstart = bankno * SLRU_BANK_SIZE;
 		int			bankend = bankstart + SLRU_BANK_SIZE;
+
 
 		for (slotno = bankstart; slotno < bankend; slotno++)
 		{
@@ -1143,7 +1152,7 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		 * That gets us back on the path to having good data when there are
 		 * multiple pages with the same lru_count.
 		 */
-		cur_count = (shared->cur_lru_count)++;
+		cur_count = (shared->bank_cur_lru_count[bankno])++;
 		for (slotno = bankstart; slotno < bankend; slotno++)
 		{
 			int			this_delta;

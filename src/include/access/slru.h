@@ -68,6 +68,7 @@ typedef struct SlruSharedData
 	int		   *page_lru_count;
 	LWLockPadded *buffer_locks;
 	LWLockPadded *bank_locks;
+	int			 *bank_cur_lru_count;
 
 	/*
 	 * Optional array of WAL flush LSNs associated with entries in the SLRU
@@ -89,7 +90,7 @@ typedef struct SlruSharedData
 	 * works as long as no page's age exceeds INT_MAX counts.
 	 *----------
 	 */
-	int			cur_lru_count;
+	//int			cur_lru_count;
 
 	/*
 	 * latest_page_number is the page number of the current end of the log;

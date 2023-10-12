@@ -110,13 +110,13 @@ typedef struct SlruWriteAllData *SlruWriteAll;
  *
  * The reason for the if-test is that there are often many consecutive
  * accesses to the same page (particularly the latest page).  By suppressing
- * useless increments of cur_lru_count, we reduce the probability that old
+ * useless increments of bank_cur_lru_count, we reduce the probability that old
  * pages' counts will "wrap around" and make them appear recently used.
  *
  * We allow this code to be executed concurrently by multiple processes within
  * SimpleLruReadPage_ReadOnly().  As long as int reads and writes are atomic,
  * this should not cause any completely-bogus values to enter the computation.
- * However, it is possible for either cur_lru_count or individual
+ * However, it is possible for either bank_cur_lru_count or individual
  * page_lru_count entries to be "reset" to lower values than they should have,
  * in case a process is delayed while it executes this macro.  With care in
  * SlruSelectLRUPage(), this does little harm, and in any case the absolute
@@ -125,9 +125,10 @@ typedef struct SlruWriteAllData *SlruWriteAll;
  */
 #define SlruRecentlyUsed(shared, slotno)	\
 	do { \
-		int		new_lru_count = (shared)->cur_lru_count; \
+		int		slrubankno = (slotno) / SLRU_BANK_SIZE; \
+		int		new_lru_count = (shared)->bank_cur_lru_count[slrubankno]; \
 		if (new_lru_count != (shared)->page_lru_count[slotno]) { \
-			(shared)->cur_lru_count = ++new_lru_count; \
+			(shared)->bank_cur_lru_count[slrubankno] = ++new_lru_count; \
 			(shared)->page_lru_count[slotno] = new_lru_count; \
 		} \
 	} while (0)
@@ -200,6 +201,7 @@ SimpleLruShmemSize(int nslots, int nlsns)
 	sz += MAXALIGN(nslots * sizeof(int));	/* page_lru_count[] */
 	sz += MAXALIGN(nslots * sizeof(LWLockPadded));	/* buffer_locks[] */
 	sz += MAXALIGN((bankmask + 1) * sizeof(LWLockPadded));	/* bank_locks[] */
+	sz += MAXALIGN((bankmask + 1) * sizeof(int));   /* bank_cur_lru_count[] */
 
 	if (nlsns > 0)
 		sz += MAXALIGN(nslots * nlsns * sizeof(XLogRecPtr));	/* group_lsn[] */
@@ -277,8 +279,6 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		shared->num_slots = nslots;
 		shared->lsn_groups_per_page = nlsns;
 
-		shared->cur_lru_count = 0;
-
 		/* shared->latest_page_number will be set later */
 
 		shared->slru_stats_idx = pgstat_get_slru_index(name);
@@ -301,6 +301,8 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		offset += MAXALIGN(nslots * sizeof(LWLockPadded));
 		shared->bank_locks = (LWLockPadded *) (ptr + offset);
 		offset += MAXALIGN(nbanks * sizeof(LWLockPadded));
+		shared->bank_cur_lru_count = (int *) (ptr + offset);
+		offset += MAXALIGN(nbanks * sizeof(int));
 
 		if (nlsns > 0)
 		{
@@ -322,8 +324,11 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		}
 		/* Initialize bank locks for each buffer bank. */
 		for (bankno = 0; bankno < nbanks; bankno++)
+		{
 			LWLockInitialize(&shared->bank_locks[bankno].lock,
 							 bank_tranche_id);
+			shared->bank_cur_lru_count[bankno] = 0;
+		}
 
 		/* Should fit to estimated shmem size */
 		Assert(ptr - (char *) shared <= SimpleLruShmemSize(nslots, nlsns));
@@ -1113,8 +1118,10 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		int			best_invalid_page_number = 0;	/* keep compiler quiet */
 
 		/* See if page already has a buffer assigned */
-		int			bankstart = (pageno & ctl->bank_mask) * SLRU_BANK_SIZE;
+		int			bankno = pageno & ctl->bank_mask;
+		int			bankstart = bankno * SLRU_BANK_SIZE;
 		int			bankend = bankstart + SLRU_BANK_SIZE;
+
 
 		for (slotno = bankstart; slotno < bankend; slotno++)
 		{
@@ -1150,7 +1157,7 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		 * That gets us back on the path to having good data when there are
 		 * multiple pages with the same lru_count.
 		 */
-		cur_count = (shared->cur_lru_count)++;
+		cur_count = (shared->bank_cur_lru_count[bankno])++;
 		for (slotno = bankstart; slotno < bankend; slotno++)
 		{
 			int			this_delta;

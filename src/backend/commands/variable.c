@@ -18,6 +18,8 @@
 
 #include <ctype.h>
 
+#include "access/clog.h"
+#include "access/commit_ts.h"
 #include "access/htup_details.h"
 #include "access/parallel.h"
 #include "access/xact.h"
@@ -400,6 +402,23 @@ show_timezone(void)
 	return "unknown";
 }
 
+const char *
+show_xact_buffers(void)
+{
+	static char nbuf[16];
+
+	snprintf(nbuf, sizeof(nbuf), "%zu", CLOGShmemBuffers());
+	return nbuf;
+}
+
+const char *
+show_commit_ts_buffers(void)
+{
+	static char nbuf[16];
+
+	snprintf(nbuf, sizeof(nbuf), "%zu", CommitTsShmemBuffers());
+	return nbuf;
+}
 
 /*
  * LOG_TIMEZONE

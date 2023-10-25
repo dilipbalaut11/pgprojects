@@ -18,10 +18,16 @@
 #include "storage/sync.h"
 
 /*
+ * SLRU bank size for slotno hash banks
+ */
+#define SLRU_BANK_SIZE		16
+#define SLRU_MAX_BANKS		128
+
+/*
  * To avoid overflowing internal arithmetic and the size_t data type, the
  * number of buffers should not exceed this number.
  */
-#define SLRU_MAX_ALLOWED_BUFFERS ((1024 * 1024 * 1024) / BLCKSZ)
+#define SLRU_MAX_ALLOWED_BUFFERS (SLRU_BANK_SIZE * SLRU_MAX_BANKS)
 
 /*
  * Define SLRU segment size.  A page is the same BLCKSZ as is used everywhere
@@ -139,6 +145,11 @@ typedef struct SlruCtlData
 	 * it's always the same, it doesn't need to be in shared memory.
 	 */
 	char		Dir[64];
+
+	/*
+	 * Mask for slotno banks
+	 */
+	Size		bank_mask;
 } SlruCtlData;
 
 typedef SlruCtlData *SlruCtl;
@@ -175,5 +186,5 @@ extern bool SlruScanDirCbReportPresence(SlruCtl ctl, char *filename,
 										int segpage, void *data);
 extern bool SlruScanDirCbDeleteAll(SlruCtl ctl, char *filename, int segpage,
 								   void *data);
-
+extern bool check_slru_buffers(const char *name, int *newval);
 #endif							/* SLRU_H */

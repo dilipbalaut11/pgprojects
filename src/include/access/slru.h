@@ -78,6 +78,23 @@ typedef struct SlruSharedData
 	 */
 	LWLockPadded *bank_locks;
 
+	/*----------
+	 * Instead of global counter we maintain a bank-wise lru counter because
+	 * a) we are doing the victim buffer selection as bank level so there is
+	 * no point of having a global counter b) manipulating a global counter
+	 * will have frequent cpu cache invalidation and that will affect the
+	 * performance.
+	 *
+	 * We mark a page "most recently used" by setting
+	 *		page_lru_count[slotno] = ++bank_cur_lru_count[bankno];
+	 * The oldest page is therefore the one with the highest value of
+	 *		bank_cur_lru_count[bankno] - page_lru_count[slotno]
+	 * The counts will eventually wrap around, but this calculation still
+	 * works as long as no page's age exceeds INT_MAX counts.
+	 *----------
+	 */
+	int			 *bank_cur_lru_count;
+
 	/*
 	 * Optional array of WAL flush LSNs associated with entries in the SLRU
 	 * pages.  If not zero/NULL, we must flush WAL before writing pages (true
@@ -88,17 +105,6 @@ typedef struct SlruSharedData
 	 */
 	XLogRecPtr *group_lsn;
 	int			lsn_groups_per_page;
-
-	/*----------
-	 * We mark a page "most recently used" by setting
-	 *		page_lru_count[slotno] = ++cur_lru_count;
-	 * The oldest page is therefore the one with the highest value of
-	 *		cur_lru_count - page_lru_count[slotno]
-	 * The counts will eventually wrap around, but this calculation still
-	 * works as long as no page's age exceeds INT_MAX counts.
-	 *----------
-	 */
-	int			cur_lru_count;
 
 	/*
 	 * latest_page_number is the page number of the current end of the log;

@@ -69,14 +69,14 @@ typedef struct SlruSharedData
 	bool	   *page_dirty;
 	int		   *page_number;
 	int		   *page_lru_count;
-	LWLockPadded *buffer_locks;
 
 	/*
-	 * Locks to protect the in memory buffer slot access in per SLRU bank. The
-	 * buffer_locks protects the I/O on each buffer slots whereas this lock
-	 * protect the in memory operation on the buffer within one SLRU bank.
+	 * This contains nslots numbers of buffers locks and nbanks numbers of
+	 * bank locks.  The buffer locks protects the I/O on each buffer slots
+	 * whereas the bank lock protect the in memory operation on the buffer
+	 * within one SLRU bank.
 	 */
-	LWLockPadded *bank_locks;
+	LWLockPadded *locks;
 
 	/*----------
 	 * Instead of global counter we maintain a bank-wise lru counter because
@@ -169,9 +169,10 @@ typedef SlruCtlData *SlruCtl;
 static inline LWLock *
 SimpleLruGetSLRUBankLock(SlruCtl ctl, int pageno)
 {
-	int			bankno = (pageno & ctl->bank_mask);
+	int			banklockoffset =
+		ctl->shared->num_slots + (pageno & ctl->bank_mask);
 
-	return &(ctl->shared->bank_locks[bankno].lock);
+	return &(ctl->shared->locks[banklockoffset].lock);
 }
 
 extern Size SimpleLruShmemSize(int nslots, int nlsns);

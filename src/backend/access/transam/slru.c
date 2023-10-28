@@ -105,34 +105,6 @@ typedef struct SlruWriteAllData *SlruWriteAll;
 	(a).segno = (xx_segno) \
 )
 
-/*
- * Macro to mark a buffer slot "most recently used".  Note multiple evaluation
- * of arguments!
- *
- * The reason for the if-test is that there are often many consecutive
- * accesses to the same page (particularly the latest page).  By suppressing
- * useless increments of cur_lru_count, we reduce the probability that old
- * pages' counts will "wrap around" and make them appear recently used.
- *
- * We allow this code to be executed concurrently by multiple processes within
- * SimpleLruReadPage_ReadOnly().  As long as int reads and writes are atomic,
- * this should not cause any completely-bogus values to enter the computation.
- * However, it is possible for either cur_lru_count or individual
- * page_lru_count entries to be "reset" to lower values than they should have,
- * in case a process is delayed while it executes this macro.  With care in
- * SlruSelectLRUPage(), this does little harm, and in any case the absolute
- * worst possible consequence is a nonoptimal choice of page to evict.  The
- * gain from allowing concurrent reads of SLRU pages seems worth it.
- */
-#define SlruRecentlyUsed(shared, slotno)	\
-	do { \
-		int		new_lru_count = (shared)->cur_lru_count; \
-		if (new_lru_count != (shared)->page_lru_count[slotno]) { \
-			(shared)->cur_lru_count = ++new_lru_count; \
-			(shared)->page_lru_count[slotno] = new_lru_count; \
-		} \
-	} while (0)
-
 /* Saved info for SlruReportIOError */
 typedef enum
 {
@@ -159,6 +131,8 @@ static int	SlruSelectLRUPage(SlruCtl ctl, int pageno);
 static bool SlruScanDirCbDeleteCutoff(SlruCtl ctl, char *filename,
 									  int segpage, void *data);
 static void SlruInternalDeleteSegment(SlruCtl ctl, int segno);
+static inline void SlruRecentlyUsed(SlruShared shared, int slotno,
+									int banksize);
 static int	SlruAdjustNSlots(int *nslots, int *banksize, int *bankmask);
 
 /*
@@ -184,6 +158,7 @@ SimpleLruShmemSize(int nslots, int nlsns)
 	sz += MAXALIGN(nslots * sizeof(int));	/* page_lru_count[] */
 	sz += MAXALIGN(nslots * sizeof(LWLockPadded));	/* buffer_locks[] */
 	sz += MAXALIGN(nbanks * sizeof(LWLockPadded));	/* bank_locks[] */
+	sz += MAXALIGN(nbanks * sizeof(int));	/* bank_cur_lru_count[] */
 
 	if (nlsns > 0)
 		sz += MAXALIGN(nslots * nlsns * sizeof(XLogRecPtr));	/* group_lsn[] */
@@ -236,8 +211,6 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		shared->num_slots = nslots;
 		shared->lsn_groups_per_page = nlsns;
 
-		shared->cur_lru_count = 0;
-
 		/* shared->latest_page_number will be set later */
 
 		shared->slru_stats_idx = pgstat_get_slru_index(name);
@@ -260,6 +233,8 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		offset += MAXALIGN(nslots * sizeof(LWLockPadded));
 		shared->bank_locks = (LWLockPadded *) (ptr + offset);
 		offset += MAXALIGN(nbanks * sizeof(LWLockPadded));
+		shared->bank_cur_lru_count = (int *) (ptr + offset);
+		offset += MAXALIGN(nbanks * sizeof(int));
 
 		if (nlsns > 0)
 		{
@@ -281,8 +256,11 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		}
 		/* Initialize bank locks for each buffer bank. */
 		for (bankno = 0; bankno < nbanks; bankno++)
+		{
 			LWLockInitialize(&shared->bank_locks[bankno].lock,
 							 bank_tranche_id);
+			shared->bank_cur_lru_count[bankno] = 0;
+		}
 
 		/* Should fit to estimated shmem size */
 		Assert(ptr - (char *) shared <= SimpleLruShmemSize(nslots, nlsns));
@@ -329,7 +307,7 @@ SimpleLruZeroPage(SlruCtl ctl, int pageno)
 	shared->page_number[slotno] = pageno;
 	shared->page_status[slotno] = SLRU_PAGE_VALID;
 	shared->page_dirty[slotno] = true;
-	SlruRecentlyUsed(shared, slotno);
+	SlruRecentlyUsed(shared, slotno, ctl->bank_size);
 
 	/* Set the buffer to zeroes */
 	MemSet(shared->page_buffer[slotno], 0, BLCKSZ);
@@ -461,7 +439,7 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 				continue;
 			}
 			/* Otherwise, it's ready to use */
-			SlruRecentlyUsed(shared, slotno);
+			SlruRecentlyUsed(shared, slotno, ctl->bank_size);
 
 			/* update the stats counter of pages found in the SLRU */
 			pgstat_count_slru_page_hit(shared->slru_stats_idx);
@@ -507,7 +485,7 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 		if (!ok)
 			SlruReportIOError(ctl, pageno, xid);
 
-		SlruRecentlyUsed(shared, slotno);
+		SlruRecentlyUsed(shared, slotno, ctl->bank_size);
 
 		/* update the stats counter of pages not found in SLRU */
 		pgstat_count_slru_page_read(shared->slru_stats_idx);
@@ -550,7 +528,7 @@ SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno, TransactionId xid)
 			shared->page_status[slotno] != SLRU_PAGE_READ_IN_PROGRESS)
 		{
 			/* See comments for SlruRecentlyUsed macro */
-			SlruRecentlyUsed(shared, slotno);
+			SlruRecentlyUsed(shared, slotno, ctl->bank_size);
 
 			/* update the stats counter of pages found in the SLRU */
 			pgstat_count_slru_page_hit(shared->slru_stats_idx);
@@ -1073,7 +1051,8 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		int			best_invalid_page_number = 0;	/* keep compiler quiet */
 
 		/* See if page already has a buffer assigned */
-		int			bankstart = (pageno & ctl->bank_mask) * ctl->bank_size;
+		int			bankno = pageno & ctl->bank_mask;
+		int			bankstart = bankno * ctl->bank_size;
 		int			bankend = bankstart + ctl->bank_size;
 
 		for (slotno = bankstart; slotno < bankend; slotno++)
@@ -1110,7 +1089,7 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		 * That gets us back on the path to having good data when there are
 		 * multiple pages with the same lru_count.
 		 */
-		cur_count = (shared->cur_lru_count)++;
+		cur_count = (shared->bank_cur_lru_count[bankno])++;
 		for (slotno = bankstart; slotno < bankend; slotno++)
 		{
 			int			this_delta;
@@ -1699,6 +1678,38 @@ SlruSyncFileTag(SlruCtl ctl, const FileTag *ftag, char *path)
 
 	errno = save_errno;
 	return result;
+}
+
+/*
+ * Function to mark a buffer slot "most recently used".  Note multiple
+ * evaluation of arguments!
+ *
+ * The reason for the if-test is that there are often many consecutive
+ * accesses to the same page (particularly the latest page).  By suppressing
+ * useless increments of bank_cur_lru_count, we reduce the probability that old
+ * pages' counts will "wrap around" and make them appear recently used.
+ *
+ * We allow this code to be executed concurrently by multiple processes within
+ * SimpleLruReadPage_ReadOnly().  As long as int reads and writes are atomic,
+ * this should not cause any completely-bogus values to enter the computation.
+ * However, it is possible for either bank_cur_lru_count or individual
+ * page_lru_count entries to be "reset" to lower values than they should have,
+ * in case a process is delayed while it executes this macro.  With care in
+ * SlruSelectLRUPage(), this does little harm, and in any case the absolute
+ * worst possible consequence is a nonoptimal choice of page to evict.  The
+ * gain from allowing concurrent reads of SLRU pages seems worth it.
+ */
+static inline void
+SlruRecentlyUsed(SlruShared shared, int slotno, int banksize)
+{
+	int			slrubankno = slotno / banksize;
+	int			new_lru_count = shared->bank_cur_lru_count[slrubankno];
+
+	if (new_lru_count != shared->page_lru_count[slotno])
+	{
+		shared->bank_cur_lru_count[slrubankno] = ++new_lru_count;
+		shared->page_lru_count[slotno] = new_lru_count;
+	}
 }
 
 /*

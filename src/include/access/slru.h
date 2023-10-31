@@ -16,6 +16,7 @@
 #include "access/xlogdefs.h"
 #include "storage/lwlock.h"
 #include "storage/sync.h"
+#include "utils/hsearch.h"
 
 /*
  * To avoid overflowing internal arithmetic and the size_t data type, the
@@ -115,6 +116,9 @@ typedef SlruSharedData *SlruShared;
 typedef struct SlruCtlData
 {
 	SlruShared	shared;
+
+	/* Buffer mapping hash table over slru buffer pool */
+	HTAB	   *mapping_table;
 
 	/*
 	 * Which sync handler function to use when handing sync requests over to

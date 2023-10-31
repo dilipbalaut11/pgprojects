@@ -2568,6 +2568,7 @@ SlotNumber
 SlruCtl
 SlruCtlData
 SlruErrorCause
+SlruMappingTableEntry
 SlruPageStatus
 SlruScanCallback
 SlruShared

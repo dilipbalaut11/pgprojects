@@ -58,8 +58,6 @@ typedef enum
  */
 typedef struct SlruSharedData
 {
-	LWLock	   *ControlLock;
-
 	/* Number of buffers managed by this SLRU structure */
 	int			num_slots;
 
@@ -75,6 +73,31 @@ typedef struct SlruSharedData
 	LWLockPadded *buffer_locks;
 
 	/*
+	 * Locks to protect the in memory buffer slot access in per SLRU bank. The
+	 * buffer_locks protects the I/O on each buffer slots whereas this lock
+	 * protect the in memory operation on the buffer within one SLRU bank.
+	 */
+	LWLockPadded *part_locks;
+
+	/*----------
+	 * Instead of global counter we maintain a partition-wise lru counter
+	 * because
+	 * a) we are doing the victim buffer selection as partition level so there
+	 * is no point of having a global counter b) manipulating a global counter
+	 * will have frequent cpu cache invalidation and that will affect the
+	 * performance.
+	 *
+	 * We mark a page "most recently used" by setting
+	 *		page_lru_count[slotno] = ++part_cur_lru_count[partno];
+	 * The oldest page is therefore the one with the highest value of
+	 *		part_cur_lru_count[partno] - page_lru_count[slotno]
+	 * The counts will eventually wrap around, but this calculation still
+	 * works as long as no page's age exceeds INT_MAX counts.
+	 *----------
+	 */
+	int		   *part_cur_lru_count;
+
+	/*
 	 * Optional array of WAL flush LSNs associated with entries in the SLRU
 	 * pages.  If not zero/NULL, we must flush WAL before writing pages (true
 	 * for pg_xact, false for multixact, pg_subtrans, pg_notify).  group_lsn[]
@@ -85,23 +108,12 @@ typedef struct SlruSharedData
 	XLogRecPtr *group_lsn;
 	int			lsn_groups_per_page;
 
-	/*----------
-	 * We mark a page "most recently used" by setting
-	 *		page_lru_count[slotno] = ++cur_lru_count;
-	 * The oldest page is therefore the one with the highest value of
-	 *		cur_lru_count - page_lru_count[slotno]
-	 * The counts will eventually wrap around, but this calculation still
-	 * works as long as no page's age exceeds INT_MAX counts.
-	 *----------
-	 */
-	int			cur_lru_count;
-
 	/*
 	 * latest_page_number is the page number of the current end of the log;
 	 * this is not critical data, since we use it only to avoid swapping out
 	 * the latest page.
 	 */
-	int			latest_page_number;
+	pg_atomic_uint32 latest_page_number;
 
 	/* SLRU's index for statistics purposes (might not be unique) */
 	int			slru_stats_idx;
@@ -143,6 +155,9 @@ typedef struct SlruCtlData
 	 * it's always the same, it doesn't need to be in shared memory.
 	 */
 	char		Dir[64];
+
+	/* Size of one slru buffer pool partition */
+	int			part_size;
 } SlruCtlData;
 
 typedef SlruCtlData *SlruCtl;
@@ -150,8 +165,8 @@ typedef SlruCtlData *SlruCtl;
 
 extern Size SimpleLruShmemSize(int nslots, int nlsns);
 extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
-						  LWLock *ctllock, const char *subdir, int tranche_id,
-						  SyncRequestHandler sync_handler);
+						  const char *subdir, int buffer_tranche_id,
+						  int bank_tranche_id, SyncRequestHandler sync_handler);
 extern int	SimpleLruZeroPage(SlruCtl ctl, int pageno);
 extern int	SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 							  TransactionId xid);
@@ -179,5 +194,8 @@ extern bool SlruScanDirCbReportPresence(SlruCtl ctl, char *filename,
 										int segpage, void *data);
 extern bool SlruScanDirCbDeleteAll(SlruCtl ctl, char *filename, int segpage,
 								   void *data);
-
+extern LWLock *SimpleLruGetPartitionLock(SlruCtl ctl, int pageno);
+extern void SimpleLruLockAllPartitions(SlruCtl ctl, LWLockMode mode);
+extern void SimpleLruUnLockAllPartitions(SlruCtl ctl);
+extern LWLock *SimpleLruGetPartitionLock(SlruCtl ctl, int pageno);
 #endif							/* SLRU_H */

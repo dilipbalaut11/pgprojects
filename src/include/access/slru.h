@@ -70,14 +70,14 @@ typedef struct SlruSharedData
 	bool	   *page_dirty;
 	int		   *page_number;
 	int		   *page_lru_count;
-	LWLockPadded *buffer_locks;
 
 	/*
-	 * Locks to protect the in memory buffer slot access in per SLRU bank. The
-	 * buffer_locks protects the I/O on each buffer slots whereas this lock
-	 * protect the in memory operation on the buffer within one SLRU bank.
+	 * This contains nslots numbers of buffers locks and nparts numbers of
+	 * part locks.  The buffer locks protects the I/O on each buffer slots
+	 * whereas the part lock protect the in memory operation on the buffer
+	 * within one SLRU part.
 	 */
-	LWLockPadded *part_locks;
+	LWLockPadded *locks;
 
 	/*----------
 	 * Instead of global counter we maintain a partition-wise lru counter

@@ -198,4 +198,5 @@ extern LWLock *SimpleLruGetPartitionLock(SlruCtl ctl, int pageno);
 extern void SimpleLruLockAllPartitions(SlruCtl ctl, LWLockMode mode);
 extern void SimpleLruUnLockAllPartitions(SlruCtl ctl);
 extern LWLock *SimpleLruGetPartitionLock(SlruCtl ctl, int pageno);
+extern bool check_slru_buffers(const char *name, int *newval);
 #endif							/* SLRU_H */

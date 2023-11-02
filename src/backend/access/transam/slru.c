@@ -59,6 +59,7 @@
 #include "pgstat.h"
 #include "storage/fd.h"
 #include "storage/shmem.h"
+#include "utils/guc.h"
 #include "utils/hsearch.h"
 
 #define SlruFileName(ctl, path, seg) \
@@ -1849,4 +1850,21 @@ SimpleLruUnLockAllPartitions(SlruCtl ctl)
 
 	for (partno = 0; partno < SLRU_NUM_PARTITIONS; partno++)
 		LWLockRelease(&shared->locks[nslots + partno].lock);
+}
+
+/*
+ * Helper function for GUC check_hook to check whether slru buffers are in
+ * multiples of SLRU_NUM_PARTITIONS.
+ */
+bool
+check_slru_buffers(const char *name, int *newval)
+{
+	/* Value upper and lower hard limits are inclusive */
+	if (*newval % SLRU_NUM_PARTITIONS == 0)
+		return true;
+
+	/* Value does not fall within any allowable range */
+	GUC_check_errdetail("\"%s\" must be in multiple of %d", name,
+						SLRU_NUM_PARTITIONS);
+	return false;
 }

@@ -21,13 +21,13 @@
  * SLRU bank size for slotno hash banks
  */
 #define SLRU_BANK_SIZE		16
-#define SLRU_MAX_BANKS		128
+#define	SLRU_MAX_BANKLOCKS	128
 
 /*
  * To avoid overflowing internal arithmetic and the size_t data type, the
  * number of buffers should not exceed this number.
  */
-#define SLRU_MAX_ALLOWED_BUFFERS (SLRU_BANK_SIZE * SLRU_MAX_BANKS)
+#define SLRU_MAX_ALLOWED_BUFFERS ((1024 * 1024 * 1024) / BLCKSZ)
 
 /*
  * Define SLRU segment size.  A page is the same BLCKSZ as is used everywhere
@@ -174,9 +174,9 @@ typedef SlruCtlData *SlruCtl;
 static inline LWLock *
 SimpleLruGetSLRUBankLock(SlruCtl ctl, int pageno)
 {
-	int			bankno = (pageno & ctl->bank_mask);
+	int			banklockno = (pageno & ctl->bank_mask) % SLRU_MAX_BANKLOCKS;
 
-	return &(ctl->shared->bank_locks[bankno].lock);
+	return &(ctl->shared->bank_locks[banklockno].lock);
 }
 
 extern Size SimpleLruShmemSize(int nslots, int nlsns);

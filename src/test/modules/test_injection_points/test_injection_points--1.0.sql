@@ -26,6 +26,16 @@ AS 'MODULE_PATHNAME', 'test_injection_points_run'
 LANGUAGE C STRICT PARALLEL UNSAFE;
 
 --
+-- test_injection_points_wake()
+--
+-- Wakes a condition variable executed in an injection point.
+--
+CREATE FUNCTION test_injection_points_wake()
+RETURNS void
+AS 'MODULE_PATHNAME', 'test_injection_points_wake'
+LANGUAGE C STRICT PARALLEL UNSAFE;
+
+--
 -- test_injection_points_detach()
 --
 -- Detaches an injection point.

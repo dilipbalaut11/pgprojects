@@ -37,6 +37,7 @@ tests += {
   'tap': {
     'tests': [
       't/001_snapshot_status.pl',
+      't/002_invalid_checkpoint_after_promote.pl',
     ],
   }
 }

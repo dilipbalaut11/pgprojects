@@ -36,6 +36,13 @@ SUBDIRS = \
 		  unsafe_tests \
 		  worker_spi
 
+
+ifeq ($(enable_injection_points),yes)
+SUBDIRS += test_injection_points
+else
+ALWAYS_SUBDIRS += test_injection_points
+endif
+
 ifeq ($(with_ssl),openssl)
 SUBDIRS += ssl_passphrase_callback
 else

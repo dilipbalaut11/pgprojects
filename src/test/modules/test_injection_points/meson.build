@@ -34,4 +34,9 @@ tests += {
       'test_injection_points',
     ],
   },
+  'tap': {
+    'tests': [
+      't/001_snapshot_status.pl',
+    ],
+  }
 }

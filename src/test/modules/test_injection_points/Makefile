@@ -10,6 +10,8 @@ EXTENSION = test_injection_points
 DATA = test_injection_points--1.0.sql
 REGRESS = test_injection_points
 
+TAP_TESTS = 1
+
 ifdef USE_PGXS
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)

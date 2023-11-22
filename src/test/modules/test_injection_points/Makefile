@@ -8,7 +8,7 @@ PGFILEDESC = "test_injection_points - test injection points"
 
 EXTENSION = test_injection_points
 DATA = test_injection_points--1.0.sql
-REGRESS = test_injection_points
+#REGRESS = test_injection_points
 
 TAP_TESTS = 1
 

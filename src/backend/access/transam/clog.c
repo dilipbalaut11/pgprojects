@@ -44,6 +44,7 @@
 #include "storage/proc.h"
 #include "storage/sync.h"
 #include "utils/guc_hooks.h"
+#include "utils/injection_point.h"
 
 /*
  * Defines for CLOG page sizes.  A page is the same BLCKSZ as is used
@@ -313,6 +314,8 @@ TransactionIdSetPageStatus(TransactionId xid, int nsubxids,
 		 */
 		if (LWLockConditionalAcquire(lock, LW_EXCLUSIVE))
 		{
+			elog(LOG, "procno %d got the lock", MyProc->pgprocno);
+			INJECTION_POINT("ClogGroupCommit");
 			/* Got the lock without waiting!  Do the update. */
 			TransactionIdSetPageStatusInternal(xid, nsubxids, subxids, status,
 											   lsn, pageno);
@@ -321,6 +324,7 @@ TransactionIdSetPageStatus(TransactionId xid, int nsubxids,
 		}
 		else if (TransactionGroupUpdateXidStatus(xid, status, lsn, pageno))
 		{
+			elog(LOG, "procno %d completed group update", MyProc->pgprocno);
 			/* Group update mechanism has done the work. */
 			return;
 		}
@@ -472,7 +476,10 @@ TransactionGroupUpdateXidStatus(TransactionId xid, XidStatus status,
 		if (pg_atomic_compare_exchange_u32(&procglobal->clogGroupFirst,
 										   &nextidx,
 										   (uint32) proc->pgprocno))
+		{
+			elog(LOG, "procno %d for xid %d added for group update", proc->pgprocno, xid);
 			break;
+		}
 	}
 
 	/*
@@ -484,6 +491,8 @@ TransactionGroupUpdateXidStatus(TransactionId xid, XidStatus status,
 	if (nextidx != INVALID_PGPROCNO)
 	{
 		int			extraWaits = 0;
+
+		elog(LOG, "procno %d is follower and wait for group leader to update commit status of xid %d", proc->pgprocno, xid);
 
 		/* Sleep until the leader updates our XID status. */
 		pgstat_report_wait_start(WAIT_EVENT_XACT_GROUP_UPDATE);
@@ -502,33 +511,44 @@ TransactionGroupUpdateXidStatus(TransactionId xid, XidStatus status,
 		/* Fix semaphore count for any absorbed wakeups */
 		while (extraWaits-- > 0)
 			PGSemaphoreUnlock(proc->sem);
+		elog(LOG, "procno %d is follower and commit status of xid %d is updated by leader", proc->pgprocno, xid);
 		return true;
 	}
 
 	/*
-	 * We are leader so clear the list of processes waiting for group XID
-	 * status update, saving a pointer to the head of the list. Trying to pop
-	 * elements one at a time could lead to an ABA problem.
+	 * Acquire the SLRU bank lock for the first page in the group before we
+	 * close this group by setting procglobal->clogGroupFirst as
+	 * INVALID_PGPROCNO so there are chances that after we read the
+	 * clogGroupFirst there might some other request get added but thats not a
+	 * problem because we will update the nextidx value again after acquiring
+	 * the lock.  And on the best effort basis we try that all the requests in
+	 * a group are for the same clog page that mean we should be fine with
+	 * the lock we have got based on any index in the group.  But there are
+	 * some possibilities that there may be more than one page in a group (for
+	 * detail refer comment in above while loop) and that it could be from a
+	 * but it is safe since we will be releasing the old lock before getting
+	 * the new lock, so if the concurrent updaters lock in opposite orders,
+	 * there shouldn't be any deadlocks.  Although such case might not be very
+	 * performant because while switching the lock the group leader might need
+	 * to wait on the new lock those are very rare so not need to add other
+	 * complexities for optimizing those cases.
+	 */
+	nextidx = pg_atomic_read_u32(&procglobal->clogGroupFirst);
+	prevpageno = ProcGlobal->allProcs[nextidx].clogGroupMemberPage;
+	prevlock = SimpleLruGetBankLock(XactCtl, prevpageno);
+	LWLockAcquire(prevlock, LW_EXCLUSIVE);
+	elog(LOG, "procno %d is group leader and got the lock", proc->pgprocno);
+
+	/*
+	 * Now that we've got the lock, clear the list of processes waiting for
+	 * group XID status update, saving a pointer to the head of the list.
+	 * Trying to pop elements one at a time could lead to an ABA problem.
 	 */
 	nextidx = pg_atomic_exchange_u32(&procglobal->clogGroupFirst,
 									 INVALID_PGPROCNO);
 
 	/* Remember head of list so we can perform wakeups after dropping lock. */
 	wakeidx = nextidx;
-
-	/*
-	 * Acquire the SLRU bank lock for the first page in the group.  And if
-	 * there are multiple pages in the group which falls under different banks
-	 * then we will release this lock and acquire the new lock before accessing
-	 * the new page.  There is rare a possibility that there may be more than
-	 * one page in a group (for detail refer comment in above while loop) and
-	 * that it could be from a different bank, but we are safe since we will be
-	 * releasing the old lock before getting the new lock, so if the concurrent
-	 * updaters lock in opposite orders, there shouldn't be any deadlocks.
-	 */
-	prevpageno = ProcGlobal->allProcs[nextidx].clogGroupMemberPage;
-	prevlock = SimpleLruGetBankLock(XactCtl, prevpageno);
-	LWLockAcquire(prevlock, LW_EXCLUSIVE);
 
 	/* Walk the list and update the status of all XIDs. */
 	while (nextidx != INVALID_PGPROCNO)
@@ -567,6 +587,7 @@ TransactionGroupUpdateXidStatus(TransactionId xid, XidStatus status,
 										   nextproc->clogGroupMemberXidStatus,
 										   nextproc->clogGroupMemberLsn,
 										   nextproc->clogGroupMemberPage);
+		elog(LOG, "group leader updated status of xid %d", nextproc->clogGroupMemberXid);
 
 		/* Move to next proc in list. */
 		nextidx = pg_atomic_read_u32(&nextproc->clogGroupNext);

@@ -194,6 +194,20 @@ static const char *const BuiltinTrancheNames[] = {
 	"DSMRegistryDSA",
 	/* LWTRANCHE_DSM_REGISTRY_HASH: */
 	"DSMRegistryHash",
+	/* LWTRANCHE_XACT_SLRU: */
+	"XactSLRU",
+	/* LWTRANCHE_SUBTRANS_SLRU: */
+	"SubtransSLRU",
+	/* LWTRANCHE_COMMITTS_SLRU: */
+	"CommitTSSLRU",
+	/* LWTRANCHE_MULTIXACTOFFSET_SLRU: */
+	"MultixactOffsetSLRU",
+	/* LWTRANCHE_MULTIXACTMEMBER_SLRU: */
+	"MultixactMemberSLRU",
+	/* LWTRANCHE_NOTIFY_SLRU: */
+	"NotifySLRU",
+	/* LWTRANCHE_SERIAL_SLRU: */
+	"SerialSLRU",
 };
 
 StaticAssertDecl(lengthof(BuiltinTrancheNames) ==

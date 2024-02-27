@@ -73,6 +73,18 @@
 	Min(SLRU_MAX_ALLOWED_BUFFERS, \
 		(((MaxTransactionId / 2) + (CLOG_XACTS_PER_PAGE - 1)) / CLOG_XACTS_PER_PAGE))
 
+int num_group_commits = 0;
+int num_multi_page_group = 0;
+int max_group_length = 0;
+
+/*
+ * print temp stats variable to track group commit
+ */
+void
+print_group_commit_stats()
+{
+	elog(LOG, "num_group_commits: %d num_multi_page_group: %d max_group_length: %d", num_group_commits, num_multi_page_group, max_group_length);
+}
 
 /*
  * Although we return an int64 the actual value can't currently exceed
@@ -446,6 +458,7 @@ TransactionGroupUpdateXidStatus(TransactionId xid, XidStatus status,
 	uint32		nextidx;
 	uint32		wakeidx;
 	int			prevpageno;
+	int			grouplen = 0;
 	LWLock	   *prevlock = NULL;
 
 	/* We should definitely have an XID whose status needs to be updated. */
@@ -570,6 +583,8 @@ TransactionGroupUpdateXidStatus(TransactionId xid, XidStatus status,
 	nextidx = pg_atomic_exchange_u32(&procglobal->clogGroupFirst,
 									 INVALID_PGPROCNO);
 
+	num_group_commits++;
+
 	/* Remember head of list so we can perform wakeups after dropping lock. */
 	wakeidx = nextidx;
 
@@ -601,6 +616,7 @@ TransactionGroupUpdateXidStatus(TransactionId xid, XidStatus status,
 			}
 			prevlock = lock;
 			prevpageno = thispageno;
+			num_multi_page_group++;
 		}
 
 		/*
@@ -618,11 +634,24 @@ TransactionGroupUpdateXidStatus(TransactionId xid, XidStatus status,
 
 		/* Move to next proc in list. */
 		nextidx = pg_atomic_read_u32(&nextproc->clogGroupNext);
+		grouplen++;
 	}
 
 	/* We're done with the lock now. */
 	if (prevlock != NULL)
 		LWLockRelease(prevlock);
+
+	/*
+	 * Update the max group length, this is not the accurate max but give us the
+	 * idea about the group length.
+	 */
+	{
+		if (grouplen > max_group_length)
+		{
+			max_group_length = grouplen;
+		}
+
+	}
 
 	/*
 	 * Now that we've released the lock, go back and wake everybody up.  We

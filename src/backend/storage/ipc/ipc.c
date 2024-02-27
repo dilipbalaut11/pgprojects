@@ -30,7 +30,7 @@
 #include "storage/dsm.h"
 #include "storage/ipc.h"
 #include "tcop/tcopprot.h"
-
+#include "access/clog.h"
 
 /*
  * This flag is set during proc_exit() to change ereport()'s behavior,
@@ -151,6 +151,7 @@ proc_exit(int code)
 	}
 #endif
 
+	print_group_commit_stats();
 	elog(DEBUG3, "exit(%d)", code);
 
 	exit(code);

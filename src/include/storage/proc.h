@@ -392,6 +392,7 @@ typedef struct PROC_HDR
 	pg_atomic_uint32 procArrayGroupFirst;
 	/* First pgproc waiting for group transaction status update */
 	pg_atomic_uint32 clogGroupFirst;
+
 	/* WALWriter process's latch */
 	Latch	   *walwriterLatch;
 	/* Checkpointer process's latch */

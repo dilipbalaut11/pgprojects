@@ -1187,6 +1187,8 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		}
 	}
 
+	check_index_predicates(root, rel);
+
 	if (has_live_children)
 	{
 		/*
@@ -1284,6 +1286,8 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 
 	/* Add paths to the append relation. */
 	add_paths_to_append_rel(root, rel, live_childrels);
+
+	create_index_paths(root, rel);
 }
 
 

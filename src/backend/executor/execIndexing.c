@@ -110,11 +110,15 @@
 #include "access/relscan.h"
 #include "access/tableam.h"
 #include "access/xact.h"
+#include "access/table.h"
 #include "catalog/index.h"
+#include "catalog/partition.h"
 #include "executor/executor.h"
 #include "nodes/nodeFuncs.h"
 #include "storage/lmgr.h"
 #include "utils/snapmgr.h"
+#include "utils/lsyscache.h"
+#include "partitioning/partdesc.h"
 
 /* waitMode argument to check_exclusion_or_unique_constraint() */
 typedef enum
@@ -153,7 +157,7 @@ static bool index_expression_changed_walker(Node *node,
  * ----------------------------------------------------------------
  */
 void
-ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
+ExecOpenIndices(EState *estate, ResultRelInfo *resultRelInfo, bool speculative, bool include_global_index)
 {
 	Relation	resultRelation = resultRelInfo->ri_RelationDesc;
 	List	   *indexoidlist;
@@ -162,17 +166,49 @@ ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
 				i;
 	RelationPtr relationDescs;
 	IndexInfo **indexInfoArray;
+	List		*global_indexs = NIL;
 
 	resultRelInfo->ri_NumIndices = 0;
 
+	if (include_global_index)
+	{
+		Oid 	relid = RelationGetRelid(resultRelation);
+		bool	relispartition = get_rel_relispartition(relid);
+
+		if (relispartition)
+		{
+			Oid			parent = get_partition_parent(relid);
+			Relation	rel;
+
+			rel = table_open(parent, AccessShareLock);
+			global_indexs = relation_get_global_index_list(rel);
+			table_close(rel, AccessShareLock);
+
+			if (global_indexs)
+			{
+				if (estate == NULL)
+					elog(ERROR, "global indes scan need estate");
+
+				if (estate->es_global_index_partrel_directory == NULL)
+				{
+					estate->es_global_index_partrel_directory =
+						CreateGlobalIndexRelDirectory(estate->es_query_cxt);
+				}
+			}
+		}
+	}
+
 	/* fast path if no indexes */
-	if (!RelationGetForm(resultRelation)->relhasindex)
+	if (global_indexs == NIL &&
+		!RelationGetForm(resultRelation)->relhasindex)
 		return;
 
 	/*
 	 * Get cached list of index OIDs
 	 */
 	indexoidlist = RelationGetIndexList(resultRelation);
+	if (global_indexs)
+		indexoidlist = list_concat_unique_oid(indexoidlist, global_indexs);
 	len = list_length(indexoidlist);
 	if (len == 0)
 		return;
@@ -435,7 +471,8 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 															 indexRelation);
 
 		satisfiesConstraint =
-			index_insert(indexRelation, /* index relation */
+			index_insert(estate,
+						 indexRelation, /* index relation */
 						 values,	/* array of index Datums */
 						 isnull,	/* null flags */
 						 tupleid,	/* tid of heap tuple */
@@ -1096,4 +1133,66 @@ index_expression_changed_walker(Node *node, Bitmapset *allUpdatedCols)
 
 	return expression_tree_walker(node, index_expression_changed_walker,
 								  (void *) allUpdatedCols);
+}
+
+void
+ExecOpenGLobalIndex(EState *estate, ResultRelInfo *resultRelInfo, Oid global_index)
+{
+	List	   *indexoidlist = NIL;
+	ListCell   *l;
+	int			len,
+				i;
+	RelationPtr relationDescs;
+	IndexInfo **indexInfoArray;
+
+	Assert(OidIsValid(global_index));
+	if (estate->es_global_index_partrel_directory == NULL)
+	{
+		estate->es_global_index_partrel_directory =
+			CreateGlobalIndexRelDirectory(estate->es_query_cxt);
+	}
+
+	resultRelInfo->ri_NumIndices = 0;
+
+	/*
+	 * Get cached list of index OIDs
+	 */
+	indexoidlist = lappend_oid(indexoidlist, global_index);
+	len = list_length(indexoidlist);
+
+	/*
+	 * allocate space for result arrays
+	 */
+	relationDescs = (RelationPtr) palloc(len * sizeof(Relation));
+	indexInfoArray = (IndexInfo **) palloc(len * sizeof(IndexInfo *));
+
+	resultRelInfo->ri_NumIndices = len;
+	resultRelInfo->ri_IndexRelationDescs = relationDescs;
+	resultRelInfo->ri_IndexRelationInfo = indexInfoArray;
+
+	/*
+	 * For each index, open the index relation and save pg_index info. We
+	 * acquire RowExclusiveLock, signifying we will update the index.
+	 *
+	 * Note: we do this even if the index is not indisready; it's not worth
+	 * the trouble to optimize for the case where it isn't.
+	 */
+	i = 0;
+	foreach(l, indexoidlist)
+	{
+		Oid			indexOid = lfirst_oid(l);
+		Relation	indexDesc;
+		IndexInfo  *ii;
+
+		indexDesc = index_open(indexOid, RowExclusiveLock);
+
+		/* extract index key information from the index's pg_index info */
+		ii = BuildIndexInfo(indexDesc);
+
+		relationDescs[i] = indexDesc;
+		indexInfoArray[i] = ii;
+		i++;
+	}
+
+	list_free(indexoidlist);
 }

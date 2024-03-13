@@ -1871,7 +1871,16 @@ struct config_bool ConfigureNamesBool[] =
 		false,
 		NULL, NULL, NULL
 	},
-
+	{
+		{"enable_global_index_scan", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("enable global index scan."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_global_index_scan,
+		true,
+		NULL, NULL, NULL
+	},
 	{
 		{"syslog_sequence_numbers", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Add sequence number to syslog messages to avoid duplicate suppression."),

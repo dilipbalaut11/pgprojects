@@ -625,7 +625,7 @@ extern Bitmapset *ExecGetAllUpdatedCols(ResultRelInfo *relinfo, EState *estate);
 /*
  * prototypes from functions in execIndexing.c
  */
-extern void ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative);
+extern void ExecOpenIndices(EState *estate, ResultRelInfo *resultRelInfo, bool speculative, bool include_global_index);
 extern void ExecCloseIndices(ResultRelInfo *resultRelInfo);
 extern List *ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 								   TupleTableSlot *slot, EState *estate,
@@ -666,6 +666,7 @@ extern void CheckCmdReplicaIdentity(Relation rel, CmdType cmd);
 
 extern void CheckSubscriptionRelkind(char relkind, const char *nspname,
 									 const char *relname);
+extern void ExecOpenGLobalIndex(EState *estate, ResultRelInfo *resultRelInfo, Oid global_index);
 
 /*
  * prototypes from functions in nodeModifyTable.c

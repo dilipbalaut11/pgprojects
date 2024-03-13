@@ -6114,6 +6114,9 @@ get_actual_variable_range(PlannerInfo *root, VariableStatData *vardata,
 		if (index->relam != BTREE_AM_OID)
 			continue;
 
+		if (index->is_global_index)
+			continue;
+
 		/*
 		 * Ignore partial indexes --- we only want stats that cover the entire
 		 * relation.
@@ -6331,6 +6334,8 @@ get_actual_variable_endpoint(Relation heapRel,
 	 */
 	InitNonVacuumableSnapshot(SnapshotNonVacuumable,
 							  GlobalVisTestFor(heapRel));
+
+	Assert(!RELATION_INDEX_IS_GLOBAL_INDEX(indexRel));
 
 	index_scan = index_beginscan(heapRel, indexRel,
 								 &SnapshotNonVacuumable,

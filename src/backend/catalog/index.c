@@ -342,12 +342,21 @@ ConstructTupleDescriptor(Relation heapRelation,
 			/* Simple index column */
 			const FormData_pg_attribute *from;
 
-			Assert(atnum > 0);	/* should've been caught above */
-
 			if (atnum > natts)	/* safety check */
 				elog(ERROR, "invalid column number %d", atnum);
-			from = TupleDescAttr(heapTupDesc,
+
+			if (atnum < 0)
+			{
+				/*
+				 * here we are indexing on a system attribute (-1...-n)
+				 */
+				from = SystemAttributeDefinition(atnum);
+			}
+			else
+			{
+				from = TupleDescAttr(heapTupDesc,
 								 AttrNumberGetAttrOffset(atnum));
+			}
 
 			to->atttypid = from->atttypid;
 			to->attlen = from->attlen;
@@ -2903,7 +2912,7 @@ index_update_stats(Relation rel,
 
 	if (reltuples >= 0)
 	{
-		BlockNumber relpages = RelationGetNumberOfBlocks(rel);
+		BlockNumber relpages = RELATION_IS_PARTITION(rel) ? 0 : RelationGetNumberOfBlocks(rel);
 		BlockNumber relallvisible;
 
 		if (rd_rel->relkind != RELKIND_INDEX)
@@ -2975,6 +2984,9 @@ index_build(Relation heapRelation,
 	Oid			save_userid;
 	int			save_sec_context;
 	int			save_nestlevel;
+
+	if (RELATION_INDEX_IS_GLOBAL_INDEX(indexRelation))
+		parallel = false;
 
 	/*
 	 * sanity checks
@@ -3370,6 +3382,7 @@ validate_index(Oid heapId, Oid indexId, Snapshot snapshot)
 	/*
 	 * Scan the index and gather up all the TIDs into a tuplesort object.
 	 */
+	memset(&ivinfo, 0, sizeof(IndexVacuumInfo));
 	ivinfo.index = indexRelation;
 	ivinfo.heaprel = heapRelation;
 	ivinfo.analyze_only = false;
@@ -3378,6 +3391,10 @@ validate_index(Oid heapId, Oid indexId, Snapshot snapshot)
 	ivinfo.message_level = DEBUG2;
 	ivinfo.num_heap_tuples = heapRelation->rd_rel->reltuples;
 	ivinfo.strategy = NULL;
+
+	ivinfo.global_index = RELATION_INDEX_IS_GLOBAL_INDEX(indexRelation);
+	if (ivinfo.global_index)
+		ivinfo.heap_oid = RelationGetRelid(heapRelation);
 
 	/*
 	 * Encode TIDs as int8 values for the sort, rather than directly sorting

@@ -129,3 +129,17 @@ ItemPointerDec(ItemPointer pointer)
 
 	ItemPointerSet(pointer, blk, off);
 }
+
+void
+output_tid_info(Oid relid, ItemPointerData itemPtr, char *opt)
+{
+	BlockNumber blockNumber;
+	OffsetNumber offsetNumber;
+
+	return;
+
+	blockNumber = ItemPointerGetBlockNumberNoCheck(&itemPtr);
+	offsetNumber = ItemPointerGetOffsetNumberNoCheck(&itemPtr);
+
+	elog(WARNING, "rel %u %s tid (%u,%u)", relid, opt, blockNumber, offsetNumber);
+}

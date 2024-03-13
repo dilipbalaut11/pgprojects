@@ -16,6 +16,8 @@
 
 #include "access/sdir.h"
 #include "access/skey.h"
+#include "access/itup.h"
+#include "access/relscan.h"
 #include "nodes/tidbitmap.h"
 #include "storage/lockdefs.h"
 #include "utils/relcache.h"
@@ -51,6 +53,8 @@ typedef struct IndexVacuumInfo
 	int			message_level;	/* ereport level for progress messages */
 	double		num_heap_tuples;	/* tuples remaining in heap */
 	BufferAccessStrategy strategy;	/* access strategy for reads */
+	bool		global_index;
+	Oid			heap_oid;
 } IndexVacuumInfo;
 
 /*
@@ -142,7 +146,8 @@ extern Relation index_open(Oid relationId, LOCKMODE lockmode);
 extern Relation try_index_open(Oid relationId, LOCKMODE lockmode);
 extern void index_close(Relation relation, LOCKMODE lockmode);
 
-extern bool index_insert(Relation indexRelation,
+extern bool index_insert(void *estate, 
+						 Relation indexRelation,
 						 Datum *values, bool *isnull,
 						 ItemPointer heap_t_ctid,
 						 Relation heapRelation,
@@ -199,6 +204,10 @@ extern void index_store_float8_orderby_distances(IndexScanDesc scan,
 extern bytea *index_opclass_options(Relation indrel, AttrNumber attnum,
 									Datum attoptions, bool validate);
 
+extern Oid global_index_itup_fetch_heap_oid(Relation index, IndexTuple itup);
+extern Relation GlobalIndexRelLookup(GlobalIndexRelDirectory pdir, Oid relid);
+extern void DestroyGlobalIndexRelDirectory(GlobalIndexRelDirectory pdir);
+extern GlobalIndexRelDirectory CreateGlobalIndexRelDirectory(MemoryContext mcxt);
 
 /*
  * index access method support routines (in genam.c)

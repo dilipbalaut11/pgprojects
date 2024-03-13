@@ -14,6 +14,7 @@
 #include "postgres.h"
 
 #include "access/xact.h"
+#include "access/genam.h"
 #include "catalog/pg_type.h"
 #include "commands/createas.h"
 #include "commands/defrem.h"
@@ -38,6 +39,7 @@
 #include "utils/tuplesort.h"
 #include "utils/typcache.h"
 #include "utils/xml.h"
+#include "utils/relcache.h"
 
 
 /* Hook for plugins to get control in ExplainOneQuery() */
@@ -1334,7 +1336,17 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			pname = sname = "Gather Merge";
 			break;
 		case T_IndexScan:
-			pname = sname = "Index Scan";
+			{
+				IndexScan	*iscan = (IndexScan *)plan;
+				Relation	index = index_open(iscan->indexid, NoLock);
+
+				if (RELATION_INDEX_IS_GLOBAL_INDEX(index))
+					pname = sname = "Global Index Scan";
+				else
+					pname = sname = "Index Scan";
+
+				index_close(index, NoLock);
+			}
 			break;
 		case T_IndexOnlyScan:
 			pname = sname = "Index Only Scan";

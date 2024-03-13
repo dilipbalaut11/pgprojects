@@ -662,6 +662,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				json_array_constructor_null_clause_opt
 
 
+%type <boolean> OraOptGlobal
+
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
  * They must be listed first so that their numeric codes do not depend on
@@ -8099,6 +8101,12 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 					$$ = (Node *) n;
 				}
 		;
+
+OraOptGlobal: 
+	    LOCAL 					{ $$ = false; }
+			| GLOBAL 			{ $$ = true; }
+			| /*EMPTY*/				{ $$ = false; }
+		  ;
 
 opt_unique:
 			UNIQUE									{ $$ = true; }

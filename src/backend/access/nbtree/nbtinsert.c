@@ -23,6 +23,9 @@
 #include "common/pg_prng.h"
 #include "lib/qunique.h"
 #include "miscadmin.h"
+#include "nodes/execnodes.h"
+#include "partitioning/partdesc.h"
+#include "storage/itemptr.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
 
@@ -32,7 +35,7 @@
 
 static BTStack _bt_search_insert(Relation rel, Relation heaprel,
 								 BTInsertState insertstate);
-static TransactionId _bt_check_unique(Relation rel, BTInsertState insertstate,
+static TransactionId _bt_check_unique(void *estate, Relation rel, BTInsertState insertstate,
 									  Relation heapRel,
 									  IndexUniqueCheck checkUnique, bool *is_unique,
 									  uint32 *speculativeToken);
@@ -99,7 +102,7 @@ static inline int _bt_blk_cmp(const void *arg1, const void *arg2);
  *		that's just a coding artifact.)
  */
 bool
-_bt_doinsert(Relation rel, IndexTuple itup,
+_bt_doinsert(void *estate, Relation rel, IndexTuple itup,
 			 IndexUniqueCheck checkUnique, bool indexUnchanged,
 			 Relation heapRel)
 {
@@ -207,7 +210,7 @@ search:
 		TransactionId xwait;
 		uint32		speculativeToken;
 
-		xwait = _bt_check_unique(rel, &insertstate, heapRel, checkUnique,
+		xwait = _bt_check_unique(estate, rel, &insertstate, heapRel, checkUnique,
 								 &is_unique, &speculativeToken);
 
 		if (unlikely(TransactionIdIsValid(xwait)))
@@ -405,7 +408,7 @@ _bt_search_insert(Relation rel, Relation heaprel, BTInsertState insertstate)
  * the index uses the default NULLS DISTINCT mode.
  */
 static TransactionId
-_bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
+_bt_check_unique(void *estate, Relation rel, BTInsertState insertstate, Relation heapRel,
 				 IndexUniqueCheck checkUnique, bool *is_unique,
 				 uint32 *speculativeToken)
 {
@@ -505,6 +508,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 			if (inposting || !ItemIdIsDead(curitemid))
 			{
 				ItemPointerData htid;
+				Relation	heap_rel;
 				bool		all_dead = false;
 
 				if (!inposting)
@@ -540,6 +544,11 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 					htid = *BTreeTupleGetPostingN(curitup, curposti);
 				}
 
+				if(RELATION_INDEX_IS_GLOBAL_INDEX(rel))
+					heap_rel = bt_global_index_partrel_routing(estate, heapRel, rel, curitup);
+				else
+					heap_rel = heapRel;
+
 				/*
 				 * If we are doing a recheck, we expect to find the tuple we
 				 * are rechecking.  It's not a duplicate, but we have to keep
@@ -557,7 +566,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				 * with optimizations like heap's HOT, we have just a single
 				 * index entry for the entire chain.
 				 */
-				else if (table_index_fetch_tuple_check(heapRel, &htid,
+				else if (table_index_fetch_tuple_check(heap_rel, &htid,
 													   &SnapshotDirty,
 													   &all_dead))
 				{
@@ -619,6 +628,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 													  SnapshotSelf, NULL))
 					{
 						/* Normal case --- it's still live */
+						output_tid_info(RelationGetRelid(heapRel), htid, "bt_check_unique fail");
 					}
 					else
 					{
@@ -3014,4 +3024,37 @@ _bt_blk_cmp(const void *arg1, const void *arg2)
 	BlockNumber b2 = *((BlockNumber *) arg2);
 
 	return pg_cmp_u32(b1, b2);
+}
+
+static Relation
+bt_global_index_partrel_routing(void *estate, Relation heap_rel, Relation index, IndexTuple index_tup)
+{
+	Oid			heapOid_index;
+	Oid			heapOid;
+	EState		*es = (EState *)estate;
+	int 		indnatts = IndexRelationGetNumberOfAttributes(index);
+	TupleDesc	tupleDesc = RelationGetDescr(index);
+	Form_pg_attribute att = TupleDescAttr(tupleDesc, indnatts - 1);
+	Relation	part_rel;
+
+	if(!RELATION_INDEX_IS_GLOBAL_INDEX(index))
+		return heap_rel;
+
+	heapOid = RelationGetRelid(heap_rel);
+	heapOid_index = global_index_itup_fetch_heap_oid(index, index_tup);
+	if (OidIsValid(heapOid_index))
+	{
+		if (heapOid == heapOid_index)
+			return heap_rel;
+	}
+	else
+		elog(ERROR, "global index %s have invalid tableoid column %s on attnum %d", RelationGetRelationName(index), NameStr(att->attname), indnatts - 1);
+
+	if (es == NULL || es->es_global_index_partrel_directory == NULL)
+		elog(ERROR, "global index scan must have rel directory");
+
+	part_rel = GlobalIndexRelLookup(es->es_global_index_partrel_directory, heapOid_index);
+	Assert(part_rel);
+
+	return part_rel;
 }

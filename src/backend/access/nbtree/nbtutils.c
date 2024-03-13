@@ -1785,6 +1785,7 @@ _bt_killitems(IndexScanDesc scan)
 	bool		killedsomething = false;
 	bool		droppedpin PG_USED_FOR_ASSERTS_ONLY;
 
+	Assert(!scan->xs_am_global_index);
 	Assert(BTScanPosIsValid(so->currPos));
 
 	/*
@@ -2781,3 +2782,17 @@ _bt_allequalimage(Relation rel, bool debugmessage)
 
 	return allequalimage;
 }
+
+inline bool
+RELATION_INDEX_IS_GLOBAL_INDEX(Relation relation)
+{
+	bool is_global_index = false;
+
+	if ((relation)->rd_options &&
+		(relation)->rd_rel->relkind == RELKIND_INDEX &&
+		(relation)->rd_rel->relam == BTREE_AM_OID)
+		is_global_index = ((BTOptions *) (relation)->rd_options)->global_index;
+
+	return is_global_index;
+}
+

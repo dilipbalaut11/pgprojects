@@ -209,6 +209,8 @@ IndexNextWithReorder(IndexScanState *node)
 
 		node->iss_ScanDesc = scandesc;
 
+		Assert(!scandesc->xs_am_global_index);
+
 		/*
 		 * If no run-time keys to calculate or they are ready, go ahead and
 		 * pass the scankeys to the index AM.

@@ -188,7 +188,7 @@ extern bool BloomPageAddItem(BloomState *state, Page page, BloomTuple *tuple);
 extern bool blvalidate(Oid opclassoid);
 
 /* index access method interface functions */
-extern bool blinsert(Relation index, Datum *values, bool *isnull,
+extern bool blinsert(void *estate, Relation index, Datum *values, bool *isnull,
 					 ItemPointer ht_ctid, Relation heapRel,
 					 IndexUniqueCheck checkUnique,
 					 bool indexUnchanged,

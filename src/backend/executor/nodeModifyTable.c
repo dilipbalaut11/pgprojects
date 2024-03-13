@@ -60,6 +60,7 @@
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
 
+#include "storage/itemptr.h"
 
 typedef struct MTTargetRelLookup
 {
@@ -790,7 +791,7 @@ ExecInsert(ModifyTableContext *context,
 	 */
 	if (resultRelationDesc->rd_rel->relhasindex &&
 		resultRelInfo->ri_IndexRelationDescs == NULL)
-		ExecOpenIndices(resultRelInfo, onconflict != ONCONFLICT_NONE);
+		ExecOpenIndices(resultRelInfo, onconflict != ONCONFLICT_NONE, true);
 
 	/*
 	 * BEFORE ROW INSERT Triggers.
@@ -1131,6 +1132,8 @@ ExecInsert(ModifyTableContext *context,
 			table_tuple_insert(resultRelationDesc, slot,
 							   estate->es_output_cid,
 							   0, NULL);
+
+			output_tid_info(RelationGetRelid(resultRelationDesc), slot->tts_tid, "INSERT");
 
 			/* insert index entries for tuple */
 			if (resultRelInfo->ri_NumIndices > 0)
@@ -1661,7 +1664,10 @@ ldelete:
 
 	/* Tell caller that the delete actually happened. */
 	if (tupleDeleted)
+	{
 		*tupleDeleted = true;
+		output_tid_info(RelationGetRelid(resultRelationDesc), *tupleid, "DELETE");
+	}
 
 	ExecDeleteEpilogue(context, resultRelInfo, tupleid, oldtuple, changingPart);
 
@@ -1908,7 +1914,7 @@ ExecUpdatePrologue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	 */
 	if (resultRelationDesc->rd_rel->relhasindex &&
 		resultRelInfo->ri_IndexRelationDescs == NULL)
-		ExecOpenIndices(resultRelInfo, false);
+		ExecOpenIndices(resultRelInfo, false, true);
 
 	/* BEFORE ROW UPDATE triggers */
 	if (resultRelInfo->ri_TrigDesc &&

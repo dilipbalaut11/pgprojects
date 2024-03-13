@@ -241,5 +241,6 @@ ItemPointerGetDatum(const ItemPointerData *X)
 
 #define PG_GETARG_ITEMPOINTER(n) DatumGetItemPointer(PG_GETARG_DATUM(n))
 #define PG_RETURN_ITEMPOINTER(x) return ItemPointerGetDatum(x)
+extern void output_tid_info(Oid relid, ItemPointerData itemPtr, char *opt);
 
 #endif							/* ITEMPTR_H */

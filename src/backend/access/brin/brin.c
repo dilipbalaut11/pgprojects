@@ -330,7 +330,7 @@ initialize_brin_insertstate(Relation idxRel, IndexInfo *indexInfo)
  * it), there's nothing to do for this tuple.
  */
 bool
-brininsert(Relation idxRel, Datum *values, bool *nulls,
+brininsert(void *estate, Relation idxRel, Datum *values, bool *nulls,
 		   ItemPointer heaptid, Relation heapRel,
 		   IndexUniqueCheck checkUnique,
 		   bool indexUnchanged,

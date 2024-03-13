@@ -117,8 +117,9 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 {
 	Index		varno = rel->relid;
 	Relation	relation;
-	bool		hasindex;
+	bool		hasindex = false;
 	List	   *indexinfos = NIL;
+	List		*global_indexs = NIL;
 
 	/*
 	 * We need not lock the relation since it was already locked, either by
@@ -206,6 +207,13 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	else
 		hasindex = relation->rd_rel->relhasindex;
 
+	if (RELATION_IS_PARTITION(relation) && enable_global_index_scan)
+	{
+		global_indexs = relation_get_global_index_list(relation);
+		if (global_indexs)
+			hasindex = true;
+	}
+
 	if (hasindex)
 	{
 		List	   *indexoidlist;
@@ -213,6 +221,11 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 		ListCell   *l;
 
 		indexoidlist = RelationGetIndexList(relation);
+		if (global_indexs)
+		{
+			indexoidlist = list_concat_unique_oid(indexoidlist, global_indexs);
+			list_free(global_indexs);
+		}
 
 		/*
 		 * For each index, we get the same type of lock that the executor will
@@ -269,6 +282,10 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			}
 
 			info = makeNode(IndexOptInfo);
+
+/* Dilip : FIXME */
+//			if (RELATION_INDEX_IS_GLOBAL_INDEX(indexRelation))
+//				info->is_global_index = true;
 
 			info->indexoid = index->indexrelid;
 			info->reltablespace =

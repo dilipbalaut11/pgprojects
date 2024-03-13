@@ -94,6 +94,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 								   node->ioss_NumOrderByKeys);
 
 		node->ioss_ScanDesc = scandesc;
+		Assert(!scandesc->xs_am_global_index);
 
 
 		/* Set it up for index-only scan */

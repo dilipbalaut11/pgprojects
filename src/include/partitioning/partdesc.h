@@ -72,4 +72,7 @@ extern void DestroyPartitionDirectory(PartitionDirectory pdir);
 
 extern Oid	get_default_oid_from_partdesc(PartitionDesc partdesc);
 
+extern Relation global_index_heaprel_lookup(PartitionDirectory pdir, Oid relid);
+extern void destroy_partition_rel_directory(PartitionDirectory pdir);
+
 #endif							/* PARTCACHE_H */

@@ -1100,6 +1100,18 @@ heap_vac_scan_next_block(LVRelState *vacrel, BlockNumber *blkno,
 	if (next_block > vacrel->next_unskippable_block ||
 		vacrel->next_unskippable_block == InvalidBlockNumber)
 	{
+		bool	have_global_index = false;
+		int		idx;
+
+		for (idx = 0; idx < nindexes; idx++)
+		{
+			if (RELATION_INDEX_IS_GLOBAL_INDEX(Irel[idx]))
+			{
+				have_global_index = true;
+				break;
+			}
+		}
+
 		/*
 		 * 1. We have just processed an unskippable block (or we're at the
 		 * beginning of the scan).  Find the next unskippable block using the
@@ -1327,6 +1339,8 @@ lazy_scan_new_or_empty(LVRelState *vacrel, Buffer buf, BlockNumber blkno,
 				return false;
 			}
 		}
+		else if (have_global_index)
+			elog(WARNING, "Temporarily disable vacuum global index.");
 		else
 		{
 			/* Already have a full cleanup lock (which is more than enough) */
@@ -2738,6 +2752,7 @@ lazy_vacuum_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	IndexVacuumInfo ivinfo;
 	LVSavedErrInfo saved_err_info;
 
+	memset(&ivinfo, 0, sizeof(IndexVacuumInfo));
 	ivinfo.index = indrel;
 	ivinfo.heaprel = vacrel->rel;
 	ivinfo.analyze_only = false;
@@ -2746,6 +2761,9 @@ lazy_vacuum_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	ivinfo.message_level = DEBUG2;
 	ivinfo.num_heap_tuples = reltuples;
 	ivinfo.strategy = vacrel->bstrategy;
+	ivinfo.global_index = RELATION_INDEX_IS_GLOBAL_INDEX(indrel);
+	if (ivinfo.global_index)
+		ivinfo.heap_oid = RelationGetRelid(vacrel->rel);
 
 	/*
 	 * Update error traceback information.
@@ -2796,6 +2814,9 @@ lazy_cleanup_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 
 	ivinfo.num_heap_tuples = reltuples;
 	ivinfo.strategy = vacrel->bstrategy;
+	ivinfo.global_index = RELATION_INDEX_IS_GLOBAL_INDEX(indrel);
+	if (ivinfo.global_index)
+		ivinfo.heap_oid = RelationGetRelid(vacrel->rel);
 
 	/*
 	 * Update error traceback information.

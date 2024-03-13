@@ -49,7 +49,7 @@ CatalogOpenIndexes(Relation heapRel)
 	resultRelInfo->ri_RelationDesc = heapRel;
 	resultRelInfo->ri_TrigDesc = NULL;	/* we don't fire triggers */
 
-	ExecOpenIndices(resultRelInfo, false);
+	ExecOpenIndices(NULL, resultRelInfo, false, false);
 
 	return resultRelInfo;
 }
@@ -167,7 +167,8 @@ CatalogIndexInsert(CatalogIndexState indstate, HeapTuple heapTuple,
 		/*
 		 * The index AM does the rest.
 		 */
-		index_insert(index,		/* index relation */
+		index_insert(NULL,
+					 index,		/* index relation */
 					 values,	/* array of index Datums */
 					 isnull,	/* is-null flags */
 					 &(heapTuple->t_self),	/* tid of heap tuple */

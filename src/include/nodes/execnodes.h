@@ -30,6 +30,7 @@
 #define EXECNODES_H
 
 #include "access/tupconvert.h"
+#include "access/relscan.h"
 #include "executor/instrument.h"
 #include "fmgr.h"
 #include "lib/ilist.h"
@@ -720,6 +721,7 @@ typedef struct EState
 	 */
 	List	   *es_insert_pending_result_relations;
 	List	   *es_insert_pending_modifytables;
+	GlobalIndexRelDirectory es_global_index_partrel_directory;
 } EState;
 
 

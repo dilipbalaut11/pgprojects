@@ -32,6 +32,8 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_type.h"
+#include "catalog/index.h"
+#include "catalog/pg_inherits.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "pageinspect.h"
@@ -47,9 +49,31 @@ PG_FUNCTION_INFO_V1(bt_page_items_bytea);
 PG_FUNCTION_INFO_V1(bt_page_stats_1_9);
 PG_FUNCTION_INFO_V1(bt_page_stats);
 PG_FUNCTION_INFO_V1(bt_multi_page_stats);
+PG_FUNCTION_INFO_V1(bt_get_global_index_status);
 
 #define IS_INDEX(r) ((r)->rd_rel->relkind == RELKIND_INDEX)
 #define IS_BTREE(r) ((r)->rd_rel->relam == BTREE_AM_OID)
+
+typedef struct global_index_tup_status
+{
+	Oid		partrel;
+	Relation	rel;
+	uint32	alivetup;
+	uint32	deadtup;
+} global_index_tup_status;
+
+typedef struct global_index_status
+{
+	Page		page;
+	uint32		offset;
+	uint32		numrel;
+	global_index_tup_status	*tupstatus;
+} global_index_status;
+
+static void record_global_index_item(global_index_status *status, Oid relid, bool isdead);
+static void global_index_check_page(Relation rel, BlockNumber blkno, global_index_status *status);
+static Datum print_global_index_status(FuncCallContext *fctx, global_index_status *status, int offset);
+
 
 /* ------------------------------------------------
  * structure for single btree page statistics
@@ -937,3 +961,225 @@ bt_metap(PG_FUNCTION_ARGS)
 
 	PG_RETURN_DATUM(result);
 }
+
+Datum
+bt_get_global_index_status(PG_FUNCTION_ARGS)
+{
+	text	   *relname = PG_GETARG_TEXT_PP(0);
+	Datum		result;
+	FuncCallContext *fctx;
+	MemoryContext mctx;
+	struct global_index_status *uargs;
+
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 (errmsg("must be superuser to use pageinspect functions"))));
+
+	if (SRF_IS_FIRSTCALL())
+	{
+		RangeVar   *relrv;
+		Relation	index;
+		Buffer		buffer;
+		TupleDesc	tupleDesc;
+		uint32		num_pages;
+		Oid			partitionOid;
+		Relation	partitionRel;
+		List		*list_children = NIL;
+		int			nlist;
+		int			i;
+		ListCell	*l;
+		BlockNumber blkno;
+
+		fctx = SRF_FIRSTCALL_INIT();
+
+		relrv = makeRangeVarFromNameList(textToQualifiedNameList(relname));
+		index = relation_openrv(relrv, AccessShareLock);
+
+		if (!IS_INDEX(index) || !IS_BTREE(index))
+			elog(ERROR, "relation \"%s\" is not a btree index",
+				 RelationGetRelationName(index));
+
+		/*
+		 * Reject attempts to read non-local temporary relations; we would be
+		 * likely to get wrong data since we have no visibility into the
+		 * owning session's local buffers.
+		 */
+		if (RELATION_IS_OTHER_TEMP(index))
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot access temporary tables of other sessions")));
+
+		if (!RELATION_INDEX_IS_GLOBAL_INDEX(index))
+			elog(ERROR, "relation \"%s\" is not a global index",
+							 RelationGetRelationName(index));
+
+		partitionOid = IndexGetRelation(RelationGetRelid(index), false);
+		partitionRel = relation_open(partitionOid, AccessShareLock);
+		if (partitionRel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
+			elog(ERROR, "relation \"%s\" is not a partition",
+							 RelationGetRelationName(partitionRel));
+
+		list_children = find_inheritance_children(partitionOid, AccessShareLock);
+		nlist = list_length(list_children);
+		if (nlist <= 0)
+			elog(ERROR, "parition %s have 0 children", RelationGetRelationName(partitionRel));
+
+		mctx = MemoryContextSwitchTo(fctx->multi_call_memory_ctx);
+		uargs = palloc(sizeof(struct global_index_status));
+		uargs->page = palloc0(BLCKSZ);
+		uargs->offset = 0;
+		uargs->numrel = nlist;
+		uargs->tupstatus = palloc0(sizeof(global_index_tup_status) * nlist);
+		i = 0;
+		foreach(l, list_children)
+		{
+			Oid relid = lfirst_oid(l);
+			global_index_tup_status	*tableinfo = &uargs->tupstatus[i++];
+
+			tableinfo->partrel = relid;
+			tableinfo->rel = relation_open(relid, AccessShareLock);
+		}
+
+		blkno = BTREE_METAPAGE + 1;
+		num_pages = RelationGetNumberOfBlocks(index);
+		for (; blkno < num_pages; blkno++)
+		{
+			buffer = ReadBuffer(index, blkno);
+			LockBuffer(buffer, BUFFER_LOCK_SHARE);
+			memset(uargs->page, 0, BLCKSZ);
+			memcpy(uargs->page, BufferGetPage(buffer), BLCKSZ);
+			UnlockReleaseBuffer(buffer);
+
+			global_index_check_page(index, blkno, uargs);
+		}
+
+		i = 0;
+		for (i = 0; i < uargs->numrel; i++)
+		{
+			global_index_tup_status	*tableinfo = &uargs->tupstatus[i];
+
+			relation_close(tableinfo->rel, AccessShareLock);
+		}
+
+		relation_close(index, AccessShareLock);
+		relation_close(partitionRel, AccessShareLock);
+
+		/* Build a tuple descriptor for our result type */
+		if (get_call_result_type(fcinfo, NULL, &tupleDesc) != TYPEFUNC_COMPOSITE)
+			elog(ERROR, "return type must be a row type");
+
+		fctx->max_calls = uargs->numrel;
+		fctx->attinmeta = TupleDescGetAttInMetadata(tupleDesc);
+		fctx->user_fctx = uargs;
+
+		MemoryContextSwitchTo(mctx);
+	}
+
+	fctx = SRF_PERCALL_SETUP();
+	uargs = fctx->user_fctx;
+
+	if (fctx->call_cntr < fctx->max_calls)
+	{
+		result = print_global_index_status(fctx, uargs, uargs->offset);
+		uargs->offset++;
+		SRF_RETURN_NEXT(fctx, result);
+	}
+	else
+	{
+		pfree(uargs->page);
+		pfree(uargs);
+		SRF_RETURN_DONE(fctx);
+	}
+}
+
+static void
+global_index_check_page(Relation rel, BlockNumber blkno, global_index_status *status)
+{
+	Page		page = status->page;
+	BTPageOpaque opaque = NULL;
+
+	Assert(RELATION_INDEX_IS_GLOBAL_INDEX(rel));
+
+	if (PageIsNew(page))
+		return;
+
+	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+
+	/* Page is valid, see what to do with it */
+	if (_bt_page_recyclable(page))
+	{
+		;
+	}
+	else if (P_ISDELETED(opaque))
+	{
+		;
+	}
+	else if (P_ISHALFDEAD(opaque))
+	{
+		;
+	}
+	else if (P_ISLEAF(opaque))
+	{
+		OffsetNumber offnum,
+					minoff,
+					maxoff;
+
+		minoff = P_FIRSTDATAKEY(opaque);
+		maxoff = PageGetMaxOffsetNumber(page);
+		if (1)
+		{
+			for (offnum = minoff;
+				 offnum <= maxoff;
+				 offnum = OffsetNumberNext(offnum))
+			{
+				ItemId		iid = PageGetItemId(page, offnum);
+				Oid 		heapOid = 0;
+				IndexTuple	itup;
+
+				itup = (IndexTuple) PageGetItem(page,
+												PageGetItemId(page, offnum));
+
+				heapOid = global_index_itup_fetch_heap_oid(rel, itup);
+				record_global_index_item(status, heapOid, ItemIdIsDead(iid));
+			}
+		}
+	}
+}
+
+static void
+record_global_index_item(global_index_status *status, Oid relid, bool isdead)
+{
+	int		i;
+
+	for(i = 0; i < status->numrel; i++)
+	{
+		global_index_tup_status	*part = &status->tupstatus[i];
+		if (part->partrel == relid)
+		{
+			if (isdead)
+				part->deadtup++;
+			else
+				part->alivetup++;
+		}
+	}
+}
+
+static Datum
+print_global_index_status(FuncCallContext *fctx, global_index_status *status, int offset)
+{
+	char	   *values[3];
+	HeapTuple	tuple;
+	int			j;
+	global_index_tup_status	*tinfo = &status->tupstatus[offset];
+
+	j = 0;
+	values[j++] = psprintf("%s", RelationGetRelationName(tinfo->rel));
+	values[j++] = psprintf("%u", tinfo->alivetup);
+	values[j++] = psprintf("%u", tinfo->deadtup);
+
+	tuple = BuildTupleFromCStrings(fctx->attinmeta, values);
+
+	return HeapTupleGetDatum(tuple);
+}
+

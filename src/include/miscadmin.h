@@ -490,6 +490,8 @@ extern PGDLLIMPORT char *session_preload_libraries_string;
 extern PGDLLIMPORT char *shared_preload_libraries_string;
 extern PGDLLIMPORT char *local_preload_libraries_string;
 
+extern bool enable_global_index_scan;
+
 extern void CreateDataDirLockFile(bool amPostmaster);
 extern void CreateSocketLockFile(const char *socketfile, bool amPostmaster,
 								 const char *socketDir);

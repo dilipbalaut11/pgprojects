@@ -363,7 +363,7 @@ typedef struct HashOptions
 extern IndexBuildResult *hashbuild(Relation heap, Relation index,
 								   struct IndexInfo *indexInfo);
 extern void hashbuildempty(Relation index);
-extern bool hashinsert(Relation rel, Datum *values, bool *isnull,
+extern bool hashinsert(void *estate, Relation rel, Datum *values, bool *isnull,
 					   ItemPointer ht_ctid, Relation heapRel,
 					   IndexUniqueCheck checkUnique,
 					   bool indexUnchanged,

@@ -662,6 +662,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				json_array_constructor_null_clause_opt
 
 
+%type <boolean> opt_global
+
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
  * They must be listed first so that their numeric codes do not depend on
@@ -8036,7 +8038,7 @@ defacl_privilege_target:
 
 IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 			ON relation_expr access_method_clause '(' index_params ')'
-			opt_include opt_unique_null_treatment opt_reloptions OptTableSpace where_clause
+			opt_include opt_unique_null_treatment opt_reloptions opt_global OptTableSpace where_clause
 				{
 					IndexStmt *n = makeNode(IndexStmt);
 
@@ -8049,8 +8051,9 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 					n->indexIncludingParams = $12;
 					n->nulls_not_distinct = !$13;
 					n->options = $14;
-					n->tableSpace = $15;
-					n->whereClause = $16;
+					n->global = $15;
+					n->tableSpace = $16;
+					n->whereClause = $17;
 					n->excludeOpNames = NIL;
 					n->idxcomment = NULL;
 					n->indexOid = InvalidOid;
@@ -8068,7 +8071,7 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 				}
 			| CREATE opt_unique INDEX opt_concurrently IF_P NOT EXISTS name
 			ON relation_expr access_method_clause '(' index_params ')'
-			opt_include opt_unique_null_treatment opt_reloptions OptTableSpace where_clause
+			opt_include opt_unique_null_treatment opt_reloptions opt_global OptTableSpace where_clause
 				{
 					IndexStmt *n = makeNode(IndexStmt);
 
@@ -8081,8 +8084,9 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 					n->indexIncludingParams = $15;
 					n->nulls_not_distinct = !$16;
 					n->options = $17;
-					n->tableSpace = $18;
-					n->whereClause = $19;
+					n->global = $18;
+					n->tableSpace = $19;
+					n->whereClause = $20;
 					n->excludeOpNames = NIL;
 					n->idxcomment = NULL;
 					n->indexOid = InvalidOid;
@@ -8099,6 +8103,12 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 					$$ = (Node *) n;
 				}
 		;
+
+opt_global: 
+	    LOCAL 					{ $$ = false; }
+			| GLOBAL 			{ $$ = true; }
+			| /*EMPTY*/				{ $$ = false; }
+		  ;
 
 opt_unique:
 			UNIQUE									{ $$ = true; }

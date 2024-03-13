@@ -180,7 +180,7 @@ spgbuildempty(Relation index)
  * Insert one new tuple into an SPGiST index.
  */
 bool
-spginsert(Relation index, Datum *values, bool *isnull,
+spginsert(void *estate, Relation index, Datum *values, bool *isnull,
 		  ItemPointer ht_ctid, Relation heapRel,
 		  IndexUniqueCheck checkUnique,
 		  bool indexUnchanged,

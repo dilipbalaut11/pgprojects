@@ -43,6 +43,7 @@
 #include "commands/progress.h"
 #include "commands/tablecmds.h"
 #include "commands/tablespace.h"
+#include "executor/executor.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -69,6 +70,7 @@
 #include "utils/regproc.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
+#include "utils/rel.h"
 
 
 /* non-export function prototypes */
@@ -114,6 +116,12 @@ static bool ReindexRelationConcurrently(const ReindexStmt *stmt,
 										const ReindexParams *params);
 static void update_relispartition(Oid relationId, bool newval);
 static inline void set_indexsafe_procflags(void);
+static void global_index_option_check(Relation rel, IndexStmt *stmt);
+static void store_global_index_option(IndexStmt *stmt);
+static void check_global_index_option(List *options);
+static void check_global_index_include_clause(IndexStmt *stmt);
+static void reindex_global_index(Oid global_index);
+static int64 global_index_build_one_rel(Oid relid, Oid global_index);
 
 /*
  * callback argument type for RangeVarCallbackForReindexIndex()
@@ -633,6 +641,8 @@ DefineIndex(Oid tableId,
 	 */
 	numberOfKeyAttributes = list_length(stmt->indexParams);
 
+	check_global_index_include_clause(stmt);
+
 	/*
 	 * Calculate the new list of index columns including both key columns and
 	 * INCLUDE columns.  Later we can determine which of these are key
@@ -892,6 +902,8 @@ DefineIndex(Oid tableId,
 	if (stmt->whereClause)
 		CheckPredicate((Expr *) stmt->whereClause);
 
+	global_index_option_check(rel, stmt);
+
 	/*
 	 * Parse AM-specific options, convert to text array form, validate.
 	 */
@@ -1076,7 +1088,7 @@ DefineIndex(Oid tableId,
 				}
 			}
 
-			if (!found)
+			if (!found && !stmt->global)
 			{
 				Form_pg_attribute att;
 
@@ -1101,7 +1113,8 @@ DefineIndex(Oid tableId,
 	{
 		AttrNumber	attno = indexInfo->ii_IndexAttrNumbers[i];
 
-		if (attno < 0)
+		if ((attno < 0 && !stmt->global) ||
+			(stmt->global && attno < 0 && attno != TableOidAttributeNumber))
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("index creation on system columns is not supported")));
@@ -1173,13 +1186,13 @@ DefineIndex(Oid tableId,
 	flags = constr_flags = 0;
 	if (stmt->isconstraint)
 		flags |= INDEX_CREATE_ADD_CONSTRAINT;
-	if (skip_build || concurrent || partitioned)
+	if (skip_build || concurrent || (partitioned && !stmt->global))
 		flags |= INDEX_CREATE_SKIP_BUILD;
 	if (stmt->if_not_exists)
 		flags |= INDEX_CREATE_IF_NOT_EXISTS;
 	if (concurrent)
 		flags |= INDEX_CREATE_CONCURRENT;
-	if (partitioned)
+	if (partitioned && !stmt->global)
 		flags |= INDEX_CREATE_PARTITIONED;
 	if (stmt->primary)
 		flags |= INDEX_CREATE_IS_PRIMARY;
@@ -1249,7 +1262,7 @@ DefineIndex(Oid tableId,
 		CreateComments(indexRelationId, RelationRelationId, 0,
 					   stmt->idxcomment);
 
-	if (partitioned)
+	if (partitioned && !stmt->global)
 	{
 		PartitionDesc partdesc;
 
@@ -4559,4 +4572,201 @@ set_indexsafe_procflags(void)
 	MyProc->statusFlags |= PROC_IN_SAFE_IC;
 	ProcGlobal->statusFlags[MyProc->pgxactoff] = MyProc->statusFlags;
 	LWLockRelease(ProcArrayLock);
+}
+
+static void
+global_index_option_check(Relation rel, IndexStmt *stmt)
+{
+	check_global_index_option(stmt->options);
+
+	if(!stmt->global)
+		return;
+
+	if (rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
+		elog(ERROR, "global index must create on partition table");
+
+	store_global_index_option(stmt);
+
+	if (stmt->concurrent)
+		elog(ERROR, "create global index does not support concurrent mode");
+}
+
+static void
+check_global_index_option(List *options)
+{
+	ListCell		*listptr;
+
+	if (options == NIL)
+		return;
+
+	foreach(listptr, options)
+	{
+		DefElem    *def = (DefElem *) lfirst(listptr);
+
+		if (strcmp(def->defname, "global_index") == 0)
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("can not set or reset parameter \"global_index\"")));
+
+		}
+	}
+
+	return;
+}
+
+static void
+check_global_index_include_clause(IndexStmt *stmt)
+{
+	ListCell *lc;
+	IndexElem	*iparam;
+
+	if(!stmt->global)
+		return;
+
+	foreach(lc, stmt->indexIncludingParams)
+	{
+		char	*key = strVal(lfirst(lc));
+
+		if (pg_strcasecmp("tableoid", key) == 0)
+			elog(ERROR, "global index can not have tableoid column in include clause");
+	}
+
+	iparam = makeNode(IndexElem);
+	iparam->name = pstrdup("tableoid");
+	iparam->expr = NULL;
+	iparam->indexcolname = NULL;
+	iparam->collation = NIL;
+	iparam->opclass = NIL;
+	stmt->indexIncludingParams = lappend(stmt->indexIncludingParams, iparam);
+
+	return;
+}
+
+static void
+store_global_index_option(IndexStmt *stmt)
+{
+	DefElem		*opt;
+
+	opt = makeNode(DefElem);
+	opt->type = T_DefElem;
+	opt->defnamespace = NULL;
+	opt->defname = "deduplicate_items";
+	opt->defaction = DEFELEM_UNSPEC;
+	opt->arg  = (Node *)makeString("false");
+	stmt->options = lappend(stmt->options, opt);
+
+	opt = makeNode(DefElem);
+	opt->type = T_DefElem;
+	opt->defnamespace = NULL;
+	opt->defname = "global_index";
+	opt->defaction = DEFELEM_UNSPEC;
+	opt->arg  = (Node *)makeString("true");
+	stmt->options = lappend(stmt->options, opt);
+
+	return;
+}
+
+static void
+reindex_global_index(Oid global_index)
+{
+	Relation		global_rel,
+					main_partion_rel;
+	Oid				heapId;
+	MemoryContext	oldcontext = CurrentMemoryContext;
+	MemoryContext	context;
+	int64			pressrow = 0;
+	List			*all_children;
+	ListCell		*lc;
+
+	heapId = IndexGetRelation(global_index, false);
+	global_rel = index_open(global_index, AccessExclusiveLock);
+	main_partion_rel = table_open(heapId, ShareLock);
+
+	context = AllocSetContextCreate(CurrentMemoryContext,
+									"build global index",
+									ALLOCSET_DEFAULT_SIZES);
+
+	MemoryContextSwitchTo(context);
+
+	all_children = find_inheritance_children(heapId, ShareLock);
+	foreach(lc, all_children)
+	{
+		Oid			child_oid = lfirst_oid(lc);
+
+		pressrow += global_index_build_one_rel(child_oid, global_index);
+	}
+
+	MemoryContextSwitchTo(oldcontext);
+	MemoryContextDelete(context);
+
+	table_close(main_partion_rel, NoLock);
+	index_close(global_rel, NoLock);
+
+	elog(WARNING, "build global index insert %d rows", (int)pressrow);
+
+	return;
+}
+
+static int64
+global_index_build_one_rel(Oid relid, Oid global_index)
+{
+	int64			pressrow = 0;
+	Relation		rel;
+	TableScanDesc	scandesc;
+	TupleTableSlot *slot;
+	EState			*estate;
+	ResultRelInfo	*resultRelInfo;
+
+	rel = table_open(relid, NoLock);
+
+	estate = CreateExecutorState();
+	resultRelInfo = makeNode(ResultRelInfo);
+	InitResultRelInfo(resultRelInfo,
+					  rel,
+					  1,
+					  NULL,
+					  0);
+
+	CheckValidResultRel(resultRelInfo, CMD_INSERT, NIL);
+	ExecOpenGLobalIndex(estate, resultRelInfo, global_index);
+
+	estate->es_result_relations = NULL; /* Dilip: FIXME*/
+	estate->es_num_result_relations = 1;
+
+	slot = table_slot_create(rel, NULL);
+
+	scandesc = table_beginscan(rel, GetActiveSnapshot(), 0, NULL);
+	while (table_scan_getnextslot(scandesc, ForwardScanDirection, slot))
+	{
+		CHECK_FOR_INTERRUPTS();
+
+		slot_getallattrs(slot);
+
+		if (resultRelInfo->ri_NumIndices > 0)
+		{
+			ExecInsertIndexTuples(resultRelInfo,
+								  slot,
+								  estate,
+								  false,
+								  false,
+								  NULL,
+								  NIL,
+								  false);
+			pressrow++;
+		}
+
+		ResetPerTupleExprContext(estate);
+		ExecClearTuple(slot);
+	}
+
+	table_endscan(scandesc);
+
+	ExecDropSingleTupleTableSlot(slot);
+	ExecCloseIndices(resultRelInfo);
+	FreeExecutorState(estate);
+
+	table_close(rel, NoLock);
+
+	return pressrow;
 }

@@ -79,7 +79,7 @@ RelationGetIndexScan(Relation indexRelation, int nkeys, int norderbys)
 {
 	IndexScanDesc scan;
 
-	scan = (IndexScanDesc) palloc(sizeof(IndexScanDescData));
+	scan = (IndexScanDesc) palloc0(sizeof(IndexScanDescData));
 
 	scan->heapRelation = NULL;	/* may be set later */
 	scan->xs_heapfetch = NULL;
@@ -122,6 +122,14 @@ RelationGetIndexScan(Relation indexRelation, int nkeys, int norderbys)
 	scan->xs_itupdesc = NULL;
 	scan->xs_hitup = NULL;
 	scan->xs_hitupdesc = NULL;
+
+	if (RELATION_INDEX_IS_GLOBAL_INDEX(indexRelation))
+	{
+		scan->xs_am_global_index = true;
+		scan->xs_want_itup = true;
+		scan->xs_globalindex_rel_directory =
+			CreateGlobalIndexRelDirectory(CurrentMemoryContext);
+	}
 
 	return scan;
 }
@@ -439,6 +447,7 @@ systable_beginscan(Relation heapRelation,
 
 		sysscan->iscan = index_beginscan(heapRelation, irel,
 										 snapshot, nkeys, 0);
+		Assert(!sysscan->iscan->xs_am_global_index);
 		index_rescan(sysscan->iscan, key, nkeys, NULL, 0);
 		sysscan->scan = NULL;
 	}

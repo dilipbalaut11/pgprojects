@@ -2461,7 +2461,7 @@ apply_handle_insert_internal(ApplyExecutionData *edata,
 	EState	   *estate = edata->estate;
 
 	/* We must open indexes here. */
-	ExecOpenIndices(relinfo, false);
+	ExecOpenIndices(estate, relinfo, false, true);
 
 	/* Do the insert. */
 	TargetPrivilegesCheck(relinfo->ri_RelationDesc, ACL_INSERT);
@@ -2649,7 +2649,7 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 	MemoryContext oldctx;
 
 	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1, NIL);
-	ExecOpenIndices(relinfo, false);
+	ExecOpenIndices(estate, relinfo, false, true);
 
 	found = FindReplTupleInLocalRel(edata, localrel,
 									&relmapentry->remoterel,
@@ -2802,7 +2802,7 @@ apply_handle_delete_internal(ApplyExecutionData *edata,
 	bool		found;
 
 	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1, NIL);
-	ExecOpenIndices(relinfo, false);
+	ExecOpenIndices(estate, relinfo, false, true);
 
 	found = FindReplTupleInLocalRel(edata, localrel, remoterel, localindexoid,
 									remoteslot, &localslot);
@@ -3042,7 +3042,7 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 					EPQState	epqstate;
 
 					EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1, NIL);
-					ExecOpenIndices(partrelinfo, false);
+					ExecOpenIndices(estate, partrelinfo, false, true);
 
 					EvalPlanQualSetSlot(&epqstate, remoteslot_part);
 					TargetPrivilegesCheck(partrelinfo->ri_RelationDesc,

@@ -630,6 +630,26 @@ DefineIndex(Oid tableId,
 								 InvalidOid);
 
 	/*
+	 * If this is a global index then add an additional include column for
+	 * storing partition id.
+	 *
+	 * TODO: For now we do not have concept of partid so just use the tableoid
+	 * system column.
+	 */
+	if (stmt->global)
+	{
+		IndexElem	*newparam;
+
+		newparam = makeNode(IndexElem);
+		newparam->name = pstrdup("tableoid");
+		newparam->expr = NULL;
+		newparam->indexcolname = NULL;
+		newparam->collation = NIL;
+		newparam->opclass = NIL;
+		stmt->indexIncludingParams = lappend(stmt->indexIncludingParams, newparam);
+	}
+
+	/*
 	 * count key attributes in index
 	 */
 	numberOfKeyAttributes = list_length(stmt->indexParams);
@@ -915,7 +935,8 @@ DefineIndex(Oid tableId,
 							  stmt->nulls_not_distinct,
 							  !concurrent,
 							  concurrent,
-							  amissummarizing);
+							  amissummarizing,
+							  stmt->global);
 
 	typeIds = palloc_array(Oid, numberOfAttributes);
 	collationIds = palloc_array(Oid, numberOfAttributes);
@@ -1102,7 +1123,7 @@ DefineIndex(Oid tableId,
 	{
 		AttrNumber	attno = indexInfo->ii_IndexAttrNumbers[i];
 
-		if (attno < 0)
+		if (attno < 0 && !stmt->global)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("index creation on system columns is not supported")));
@@ -1174,13 +1195,13 @@ DefineIndex(Oid tableId,
 	flags = constr_flags = 0;
 	if (stmt->isconstraint)
 		flags |= INDEX_CREATE_ADD_CONSTRAINT;
-	if (skip_build || concurrent || partitioned)
+	if (skip_build || concurrent || (partitioned && !stmt->global))
 		flags |= INDEX_CREATE_SKIP_BUILD;
 	if (stmt->if_not_exists)
 		flags |= INDEX_CREATE_IF_NOT_EXISTS;
 	if (concurrent)
 		flags |= INDEX_CREATE_CONCURRENT;
-	if (partitioned)
+	if (partitioned && !stmt->global)
 		flags |= INDEX_CREATE_PARTITIONED;
 	if (stmt->primary)
 		flags |= INDEX_CREATE_IS_PRIMARY;
@@ -1250,7 +1271,7 @@ DefineIndex(Oid tableId,
 		CreateComments(indexRelationId, RelationRelationId, 0,
 					   stmt->idxcomment);
 
-	if (partitioned)
+	if (partitioned && !stmt->global)
 	{
 		PartitionDesc partdesc;
 

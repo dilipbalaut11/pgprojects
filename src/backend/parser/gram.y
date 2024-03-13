@@ -494,7 +494,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <str>		unicode_normal_form
 
 %type <boolean> opt_instead
-%type <boolean> opt_unique opt_verbose opt_full
+%type <boolean> opt_unique opt_verbose opt_full opt_global
 %type <boolean> opt_freeze opt_analyze opt_default opt_recheck
 %type <defelt>	opt_binary copy_delimiter
 
@@ -8126,7 +8126,7 @@ defacl_privilege_target:
 
 IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 			ON relation_expr access_method_clause '(' index_params ')'
-			opt_include opt_unique_null_treatment opt_reloptions OptTableSpace where_clause
+			opt_include opt_unique_null_treatment opt_reloptions opt_global OptTableSpace where_clause
 				{
 					IndexStmt *n = makeNode(IndexStmt);
 
@@ -8139,8 +8139,9 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 					n->indexIncludingParams = $12;
 					n->nulls_not_distinct = !$13;
 					n->options = $14;
-					n->tableSpace = $15;
-					n->whereClause = $16;
+					n->global = $15;
+					n->tableSpace = $16;
+					n->whereClause = $17;
 					n->excludeOpNames = NIL;
 					n->idxcomment = NULL;
 					n->indexOid = InvalidOid;
@@ -8158,7 +8159,7 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 				}
 			| CREATE opt_unique INDEX opt_concurrently IF_P NOT EXISTS name
 			ON relation_expr access_method_clause '(' index_params ')'
-			opt_include opt_unique_null_treatment opt_reloptions OptTableSpace where_clause
+			opt_include opt_unique_null_treatment opt_reloptions opt_global OptTableSpace where_clause
 				{
 					IndexStmt *n = makeNode(IndexStmt);
 
@@ -8171,8 +8172,9 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 					n->indexIncludingParams = $15;
 					n->nulls_not_distinct = !$16;
 					n->options = $17;
-					n->tableSpace = $18;
-					n->whereClause = $19;
+					n->global = $18;
+					n->tableSpace = $19;
+					n->whereClause = $20;
 					n->excludeOpNames = NIL;
 					n->idxcomment = NULL;
 					n->indexOid = InvalidOid;
@@ -8194,6 +8196,10 @@ opt_unique:
 			UNIQUE									{ $$ = true; }
 			| /*EMPTY*/								{ $$ = false; }
 		;
+
+opt_global:
+			GLOBAL									{ $$ = true; }
+			| /*EMPTY*/								{ $$ = false; }
 
 access_method_clause:
 			USING name								{ $$ = $2; }

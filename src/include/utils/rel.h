@@ -706,6 +706,12 @@ RelationCloseSmgr(Relation relation)
 	 (relation)->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&	\
 	 !IsCatalogRelation(relation))
 
+static inline bool
+RelIsGlobalIndex(Relation rel)
+{
+	rel->rd_index->indisglobal;
+}
+
 /* routines in utils/cache/relcache.c */
 extern void RelationIncrementReferenceCount(Relation rel);
 extern void RelationDecrementReferenceCount(Relation rel);

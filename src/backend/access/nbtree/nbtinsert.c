@@ -381,6 +381,25 @@ _bt_search_insert(Relation rel, Relation heaprel, BTInsertState insertstate)
 					  BT_WRITE);
 }
 
+static Relation
+index_itup_fetch_partrel(Relation indexrel, IndexTuple itup)
+{
+	Datum		datum;
+	bool		isNull;
+	Oid 		partid;
+	Relation	partrel;
+	int 		indnatts = IndexRelationGetNumberOfKeyAttributes(indexrel);
+	TupleDesc	tupleDesc = RelationGetDescr(indexrel);
+
+	datum = index_getattr(itup, indnatts, tupleDesc, &isNull);
+	partid = DatumGetObjectId(datum);
+	Assert(OidIsValid(partid));
+
+	/* TODO: fetch partition relation*/
+
+	return partrel;
+}
+
 /*
  *	_bt_check_unique() -- Check for violation of unique index constraint
  *
@@ -418,6 +437,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 	OffsetNumber maxoff;
 	Page		page;
 	BTPageOpaque opaque;
+	Relation	partrel;
 	Buffer		nbuf = InvalidBuffer;
 	bool		found = false;
 	bool		inposting = false;
@@ -539,6 +559,11 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 					Assert(curposti > 0);
 					htid = *BTreeTupleGetPostingN(curitup, curposti);
 				}
+
+				if(RelIsGlobalIndex(rel))
+					partrel = index_itup_fetch_partrel(rel, curitup);
+				else
+					partrel = heapRel;
 
 				/*
 				 * If we are doing a recheck, we expect to find the tuple we

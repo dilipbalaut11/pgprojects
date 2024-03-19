@@ -8257,6 +8257,7 @@ opt_unique:
 opt_global:
 			GLOBAL									{ $$ = true; }
 			| /*EMPTY*/								{ $$ = false; }
+		;
 
 access_method_clause:
 			USING name								{ $$ = $2; }

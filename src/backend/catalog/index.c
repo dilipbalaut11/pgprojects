@@ -2492,7 +2492,8 @@ BuildDummyIndexInfo(Relation index)
 					   indexStruct->indnullsnotdistinct,
 					   indexStruct->indisready,
 					   false,
-					   index->rd_indam->amsummarizing);
+					   index->rd_indam->amsummarizing,
+					   false);
 
 	/* fill in attribute numbers */
 	for (i = 0; i < numAtts; i++)

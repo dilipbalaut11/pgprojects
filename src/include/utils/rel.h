@@ -707,7 +707,7 @@ RelationCloseSmgr(Relation relation)
 static inline bool
 RelIsGlobalIndex(Relation rel)
 {
-	rel->rd_index->indisglobal;
+	return rel->rd_index->indisglobal;
 }
 
 /* routines in utils/cache/relcache.c */

@@ -104,11 +104,33 @@ do { \
 			 CppAsString(pname), RelationGetRelationName(scan->indexRelation)); \
 } while(0)
 
+/*
+ * lookup table from partition relation oid to the relation descriptor and
+ * IndexFetchTableData structure.  Because only once we should call
+ * table_index_fetch_begin() for each partition but in scan->xs_heapfetch we
+ * will overwrite with the current partition so if we come back to the old
+ * partition which we already have scanned once then we should use the same
+ * xs_heapfetch and that we can get from the cache.
+ */
+typedef struct GlobalIndexRelDirectoryData
+{
+	MemoryContext pdir_mcxt;
+	HTAB	*pdir_hash;
+} GlobalIndexRelDirectoryData;
+
+typedef struct GlobalIndexRelDirectoryEntry
+{
+	Oid 		reloid;
+	Relation	rel;
+	IndexFetchTableData *xs_heapfetch;
+} GlobalIndexRelDirectoryEntry;
+
 static IndexScanDesc index_beginscan_internal(Relation indexRelation,
 											  int nkeys, int norderbys, Snapshot snapshot,
 											  ParallelIndexScanDesc pscan, bool temp_snap);
 static inline void validate_relation_kind(Relation r);
-
+static GlobalIndexRelDirectoryEntry *GlobalIndexRelEntryLookup(GlobalIndexRelDirectory pdir, Oid relid, bool heapfetch);
+static void ResetGlobalIndexRelDirectory(GlobalIndexRelDirectory pdir);
 
 /* ----------------------------------------------------------------
  *				   index_ interface functions
@@ -269,11 +291,27 @@ index_beginscan(Relation heapRelation,
 	 * Save additional parameters into the scandesc.  Everything else was set
 	 * up by RelationGetIndexScan.
 	 */
-	scan->heapRelation = heapRelation;
 	scan->xs_snapshot = snapshot;
 
-	/* prepare to fetch index matches from table */
-	scan->xs_heapfetch = table_index_fetch_begin(heapRelation);
+	/*
+	 * For global index do not set the heapRelation and xs_heapfetch because
+	 * while scanning the index we might get tids belongs to different
+	 * partitions so we will initialize these fields when we actually fetch the
+	 * tid from the index as that time we will get more clarity about the
+	 * partition the tid belongs to.
+	 */
+	if (scan->xs_am_global_index)
+	{
+		scan->heapRelation = NULL;
+		scan->xs_heapfetch = NULL;
+	}
+	else
+	{
+		scan->heapRelation = heapRelation;
+
+		/* prepare to fetch index matches from table */
+		scan->xs_heapfetch = table_index_fetch_begin(heapRelation);
+	}
 
 	return scan;
 }
@@ -361,7 +399,14 @@ index_rescan(IndexScanDesc scan,
 	Assert(norderbys == scan->numberOfOrderBys);
 
 	/* Release resources (like buffer pins) from table accesses */
-	if (scan->xs_heapfetch)
+	if (scan->xs_am_global_index)
+	{
+		scan->xs_heapfetch = NULL;
+		scan->heapRelation = NULL;
+		if (scan->xs_globalindex_rel_directory)
+			ResetGlobalIndexRelDirectory(scan->xs_globalindex_rel_directory);
+	}
+	else if (scan->xs_heapfetch)
 		table_index_fetch_reset(scan->xs_heapfetch);
 
 	scan->kill_prior_tuple = false; /* for safety */
@@ -382,9 +427,15 @@ index_endscan(IndexScanDesc scan)
 	CHECK_SCAN_PROCEDURE(amendscan);
 
 	/* Release resources (like buffer pins) from table accesses */
-	if (scan->xs_heapfetch)
+	if (scan->xs_am_global_index)
 	{
-		table_index_fetch_end(scan->xs_heapfetch);
+		scan->xs_heapfetch = NULL;
+		if (scan->xs_globalindex_rel_directory)
+			DestroyGlobalIndexRelDirectory(scan->xs_globalindex_rel_directory);
+	}
+	else if (scan->xs_heapfetch)
+ 	{
+ 		table_index_fetch_end(scan->xs_heapfetch);	
 		scan->xs_heapfetch = NULL;
 	}
 
@@ -440,6 +491,14 @@ index_restrpos(IndexScanDesc scan)
 	/* release resources (like buffer pins) from table accesses */
 	if (scan->xs_heapfetch)
 		table_index_fetch_reset(scan->xs_heapfetch);
+	if (scan->xs_am_global_index)
+	{
+		scan->xs_heapfetch = NULL;
+		if (scan->xs_globalindex_rel_directory)
+			DestroyGlobalIndexRelDirectory(scan->xs_globalindex_rel_directory);
+	}
+	else if (scan->xs_heapfetch)
+ 		table_index_fetch_reset(scan->xs_heapfetch);
 
 	scan->kill_prior_tuple = false; /* for safety */
 	scan->xs_heap_continue = false;
@@ -651,6 +710,7 @@ index_fetch_heap(IndexScanDesc scan, TupleTableSlot *slot)
 	 * recovery because it may violate MVCC to do so.  See comments in
 	 * RelationGetIndexScan().
 	 */
+	/* FIXME : can we do this for global index maybe yes because it is not looking for tuple using TID */
 	if (!scan->xactStartedInRecovery)
 		scan->kill_prior_tuple = all_dead;
 
@@ -697,6 +757,47 @@ index_getnext_slot(IndexScanDesc scan, ScanDirection direction, TupleTableSlot *
 		 * the index.
 		 */
 		Assert(ItemPointerIsValid(&scan->xs_heaptid));
+
+		/*
+		 * For global index we need to fetch the heapoid of the parittion
+		 * relation and fetch the tuple from that relation.
+		 */
+		if (scan->xs_am_global_index)
+		{
+			IndexTuple	itup;
+			Oid			heapoid;
+			GlobalIndexRelDirectoryEntry *entry;
+
+			Assert(scan->xs_want_itup);
+			Assert(scan->xs_itup);
+			itup = scan->xs_itup;
+			heapoid = global_index_itup_fetch_heap_oid(scan->indexRelation, itup);
+
+			if (scan->heapRelation &&
+				heapoid == RelationGetRelid(scan->heapRelation))
+			{
+				Assert(scan->xs_heapfetch);
+			}
+			else if (scan->heapRelation == NULL)
+			{
+				Assert(scan->xs_heapfetch == NULL);
+				entry = GlobalIndexRelEntryLookup(scan->xs_globalindex_rel_directory, heapoid, true);
+				scan->heapRelation = entry->rel;
+				scan->xs_heapfetch = entry->xs_heapfetch;
+			}
+			else if (scan->heapRelation &&
+				heapoid != RelationGetRelid(scan->heapRelation))
+			{
+				Assert(scan->xs_heapfetch);
+				table_index_fetch_reset(scan->xs_heapfetch);
+				entry = GlobalIndexRelEntryLookup(scan->xs_globalindex_rel_directory, heapoid, true);
+				scan->heapRelation = entry->rel;
+				scan->xs_heapfetch = entry->xs_heapfetch;
+			}
+			else
+				Assert(false);
+		}
+
 		if (index_fetch_heap(scan, slot))
 			return true;
 	}
@@ -1039,4 +1140,122 @@ index_opclass_options(Relation indrel, AttrNumber attnum, Datum attoptions,
 	(void) FunctionCall1(procinfo, PointerGetDatum(&relopts));
 
 	return build_local_reloptions(&relopts, attoptions, validate);
+}
+
+GlobalIndexRelDirectory
+CreateGlobalIndexRelDirectory(MemoryContext mcxt)
+{
+	MemoryContext oldcontext = MemoryContextSwitchTo(mcxt);
+	GlobalIndexRelDirectory pdir;
+	HASHCTL		ctl;
+
+	MemSet(&ctl, 0, sizeof(HASHCTL));
+	ctl.keysize = sizeof(Oid);
+	ctl.entrysize = sizeof(GlobalIndexRelDirectoryEntry);
+	ctl.hcxt = mcxt;
+
+	pdir = palloc(sizeof(GlobalIndexRelDirectoryData));
+	pdir->pdir_mcxt = mcxt;
+	pdir->pdir_hash = hash_create("GlobalIndex Rel Directory", 256, &ctl,
+								  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+
+	MemoryContextSwitchTo(oldcontext);
+	return pdir;
+}
+
+static GlobalIndexRelDirectoryEntry *
+GlobalIndexRelEntryLookup(GlobalIndexRelDirectory pdir, Oid relid,
+						  bool heapfetch)
+{
+	GlobalIndexRelDirectoryEntry *pde;
+	bool		found;
+	Relation	part_rel;
+
+	Assert(OidIsValid(relid));
+	Assert(pdir);
+	pde = hash_search(pdir->pdir_hash, &relid, HASH_FIND, &found);
+	if (found)
+	{
+		Assert(pde->rel);
+		if (heapfetch)
+			Assert(pde->xs_heapfetch);
+
+		return pde;
+	}
+	else
+	{
+		pde = hash_search(pdir->pdir_hash, &relid, HASH_ENTER, &found);
+		part_rel = relation_open(relid, AccessShareLock);
+		pde->rel = part_rel;
+		if (heapfetch)
+			pde->xs_heapfetch = table_index_fetch_begin(part_rel);
+		else
+			pde->xs_heapfetch = NULL;
+	}
+
+	return pde;
+}
+
+Relation
+GlobalIndexRelLookup(GlobalIndexRelDirectory pdir, Oid relid)
+{
+	GlobalIndexRelDirectoryEntry *pde;
+
+	Assert(pdir);
+	pde = GlobalIndexRelEntryLookup(pdir, relid, false);
+	Assert(pde);
+
+	return pde->rel;
+}
+
+void
+DestroyGlobalIndexRelDirectory(GlobalIndexRelDirectory pdir)
+{
+	HASH_SEQ_STATUS status;
+	GlobalIndexRelDirectoryEntry *pde;
+
+	hash_seq_init(&status, pdir->pdir_hash);
+	while ((pde = hash_seq_search(&status)) != NULL)
+	{
+		if (pde->xs_heapfetch)
+		{
+			table_index_fetch_end(pde->xs_heapfetch);
+			pde->xs_heapfetch = NULL;
+		}
+
+		relation_close(pde->rel, NoLock);
+	}
+}
+
+static void
+ResetGlobalIndexRelDirectory(GlobalIndexRelDirectory pdir)
+{
+	HASH_SEQ_STATUS status;
+	GlobalIndexRelDirectoryEntry *entry;
+
+	hash_seq_init(&status, pdir->pdir_hash);
+	while ((entry = hash_seq_search(&status)))
+	{
+		if (entry->xs_heapfetch)
+			table_index_fetch_reset(entry->xs_heapfetch);
+	}
+}
+
+Oid
+global_index_itup_fetch_heap_oid(Relation index, IndexTuple itup)
+{
+	Datum		datum;
+	bool		isNull;
+	Oid 		heapOid_index;
+	int 		indnatts = IndexRelationGetNumberOfAttributes(index);
+	TupleDesc	tupleDesc = RelationGetDescr(index);
+
+	Assert(RelIsGlobalIndex(index));
+
+	datum = index_getattr(itup, indnatts, tupleDesc, &isNull);
+	Assert(!isNull);
+	heapOid_index = DatumGetObjectId(datum);
+	Assert(OidIsValid(heapOid_index));
+
+	return heapOid_index;
 }

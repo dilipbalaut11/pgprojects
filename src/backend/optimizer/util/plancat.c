@@ -35,6 +35,7 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/pathnodes.h"
 #include "nodes/supportnodes.h"
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
@@ -118,6 +119,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	Index		varno = rel->relid;
 	Relation	relation;
 	bool		hasindex;
+	List	   *global_indexs = NIL;
 	List	   *indexinfos = NIL;
 
 	/*
@@ -217,6 +219,13 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	else
 		hasindex = relation->rd_rel->relhasindex;
 
+	if (IS_PARTITIONED_REL(rel) && enable_global_index_scan)
+	{
+		global_indexs = RelationGetGlobalIndexList(relation);
+		if (global_indexs)
+			hasindex = true;
+	}
+
 	if (hasindex)
 	{
 		List	   *indexoidlist;
@@ -224,6 +233,11 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 		ListCell   *l;
 
 		indexoidlist = RelationGetIndexList(relation);
+		if (global_indexs)
+		{
+			indexoidlist = list_concat(indexoidlist, global_indexs);
+			list_free(global_indexs);
+		}
 
 		/*
 		 * For each index, we get the same type of lock that the executor will
@@ -280,6 +294,8 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			}
 
 			info = makeNode(IndexOptInfo);
+			if (RelIsGlobalIndex(indexRelation))
+				info->global = true;
 
 			info->indexoid = index->indexrelid;
 			info->reltablespace =
@@ -321,13 +337,21 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 				info->amoptionalkey = amroutine->amoptionalkey;
 				info->amsearcharray = amroutine->amsearcharray;
 				info->amsearchnulls = amroutine->amsearchnulls;
-				info->amcanparallel = amroutine->amcanparallel;
 				info->amhasgettuple = (amroutine->amgettuple != NULL);
 				info->amhasgetbitmap = amroutine->amgetbitmap != NULL &&
 					relation->rd_tableam->scan_bitmap_next_block != NULL;
 				info->amcanmarkpos = (amroutine->ammarkpos != NULL &&
 									  amroutine->amrestrpos != NULL);
 				info->amcostestimate = amroutine->amcostestimate;
+				if (info->global)
+				{
+					info->amcanparallel = false;
+				}
+				else
+				{
+					info->amcanparallel = amroutine->amcanparallel;
+				}
+
 				Assert(info->amcostestimate != NULL);
 
 				/* Fetch index opclass options */

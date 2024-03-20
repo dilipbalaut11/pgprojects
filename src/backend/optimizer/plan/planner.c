@@ -7657,8 +7657,29 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 	 * generate_useful_gather_paths to add path(s) to the main list, and
 	 * finally zap the partial pathlist.
 	 */
+
+	/*
+	 * FIXME: remove above comments.
+	 * For partition parent we can have a global index path so we don't need
+	 * to set the path to NULL.
+	 */
 	if (rel_is_partitioned)
-		rel->pathlist = NIL;
+	{
+		List	*index_path_list = NIL;
+
+		foreach(lc, rel->pathlist)
+		{
+			Path	   *subpath = (Path *) lfirst(lc);
+
+			if (nodeTag(subpath) == T_IndexPath)
+				index_path_list = lappend(index_path_list, subpath);
+		}
+
+		if (index_path_list)
+			rel->pathlist = index_path_list;
+		else
+			rel->pathlist = NIL;
+	}
 
 	/*
 	 * If the scan/join target is not parallel-safe, partial paths cannot

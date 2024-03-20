@@ -1848,6 +1848,16 @@ struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
+		{"enable_global_index_scan", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("enable global index scan."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_global_index_scan,
+		true,
+		NULL, NULL, NULL
+	},
+	{
 		{"lo_compat_privileges", PGC_SUSET, COMPAT_OPTIONS_PREVIOUS,
 			gettext_noop("Enables backward compatibility mode for privilege checks on large objects."),
 			gettext_noop("Skips privilege checks when reading or modifying large objects, "

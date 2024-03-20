@@ -130,6 +130,12 @@ RelationGetIndexScan(Relation indexRelation, int nkeys, int norderbys)
 		scan->xs_globalindex_rel_directory =
 			CreateGlobalIndexRelDirectory(CurrentMemoryContext);
 	}
+	else
+	{
+		scan->xs_am_global_index = false;
+		scan->xs_want_itup = false;
+		scan->xs_globalindex_rel_directory = NULL;
+	}
 
 	return scan;
 }

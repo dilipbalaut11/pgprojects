@@ -342,11 +342,16 @@ ConstructTupleDescriptor(Relation heapRelation,
 			/* Simple index column */
 			const FormData_pg_attribute *from;
 
-			Assert(atnum > 0);	/* should've been caught above */
-
 			if (atnum > natts)	/* safety check */
 				elog(ERROR, "invalid column number %d", atnum);
-			from = TupleDescAttr(heapTupDesc,
+
+			/*
+			 * For global indexes we are indexing on a system attribute.
+			 */
+			if (atnum < 0)
+				from = SystemAttributeDefinition(atnum);
+			else
+				from = TupleDescAttr(heapTupDesc,
 								 AttrNumberGetAttrOffset(atnum));
 
 			to->atttypid = from->atttypid;

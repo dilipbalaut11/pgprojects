@@ -6887,3 +6887,30 @@ ResOwnerReleaseRelation(Datum res)
 
 	RelationCloseCleanup((Relation) res);
 }
+
+List *
+RelationGetGlobalIndexList(Relation relation)
+{
+	ListCell	*l;
+	List		*indexs = NIL;
+	List		*global_indexs = NIL;
+
+	indexs = RelationGetIndexList(relation);
+	if (indexs == NIL)
+		return NIL;
+
+	foreach(l, indexs)
+	{
+		Oid			indexOid = lfirst_oid(l);
+		Relation	indexDesc;
+
+		indexDesc = index_open(indexOid, AccessShareLock);
+
+		if (RelIsGlobalIndex(indexDesc))
+			global_indexs = lappend_oid(global_indexs, indexOid);
+
+		index_close(indexDesc, AccessShareLock);
+	}
+
+	return global_indexs;
+}

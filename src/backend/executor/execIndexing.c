@@ -107,13 +107,16 @@
 #include "postgres.h"
 
 #include "access/genam.h"
+#include "access/relation.h"
 #include "access/relscan.h"
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/index.h"
+#include "catalog/partition.h"
 #include "executor/executor.h"
 #include "nodes/nodeFuncs.h"
 #include "storage/lmgr.h"
+#include "utils/lsyscache.h"
 #include "utils/snapmgr.h"
 
 /* waitMode argument to check_exclusion_or_unique_constraint() */
@@ -162,6 +165,9 @@ ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
 				i;
 	RelationPtr relationDescs;
 	IndexInfo **indexInfoArray;
+	List	   *global_indexs = NIL;
+	Oid 	relid = RelationGetRelid(resultRelation);
+	bool	relispartition = get_rel_relispartition(relid);
 
 	resultRelInfo->ri_NumIndices = 0;
 
@@ -169,10 +175,28 @@ ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
 	if (!RelationGetForm(resultRelation)->relhasindex)
 		return;
 
+	if (relispartition)
+	{
+		Oid			parent = get_partition_parent(relid, false);
+		Relation	rel;
+
+		rel = relation_open(parent, AccessShareLock);
+
+		global_indexs = RelationGetGlobalIndexList(rel);
+		relation_close(rel, AccessShareLock);
+	}
+
+	/* fast path if no indexes */
+	if (global_indexs == NIL &&
+		!RelationGetForm(resultRelation)->relhasindex)
+		return;
+
 	/*
 	 * Get cached list of index OIDs
 	 */
 	indexoidlist = RelationGetIndexList(resultRelation);
+	if (global_indexs)
+		indexoidlist = list_concat_unique_oid(indexoidlist, global_indexs);
 	len = list_length(indexoidlist);
 	if (len == 0)
 		return;

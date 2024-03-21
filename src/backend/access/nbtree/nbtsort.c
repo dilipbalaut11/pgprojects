@@ -50,6 +50,7 @@
 #include "commands/progress.h"
 #include "executor/instrument.h"
 #include "miscadmin.h"
+#include "partitioning/partdesc.h"
 #include "pgstat.h"
 #include "storage/bulk_write.h"
 #include "tcop/tcopprot.h"		/* pgrminclude ignore */
@@ -470,8 +471,34 @@ _bt_spools_heapscan(Relation heap, Relation index, BTBuildState *buildstate,
 										coordinate2, TUPLESORT_NONE);
 	}
 
+	/*
+	 * FIXME: here we need to pull tuple from all the parititons.
+	 */
+#if 0
+	if (heap->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		PartitionDesc partdesc = RelationGetPartitionDesc(heap, true);
+		Oid			 *part_oids = palloc_array(Oid, partdesc->nparts);
+
+		/* Make a local copy of partdesc->oids[], just for safety */
+		memcpy(part_oids, partdesc->oids, sizeof(Oid) * partdesc->nparts);
+
+		for (int i = 0; i < partdesc->nparts; i++)
+		{
+			Oid			childRelid = part_oids[i];
+			Relation	childrel;
+
+			childrel = table_open(childRelid, AccessShareLock);
+			reltuples += table_index_build_scan(childrel, index, indexInfo, true,
+												true, _bt_build_callback,
+												(void *) buildstate, NULL);
+		}
+	}
+#endif
+	if (heap->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		reltuples = 0;
 	/* Fill spool using either serial or parallel heap scan */
-	if (!buildstate->btleader)
+	else if (!buildstate->btleader)
 		reltuples = table_index_build_scan(heap, index, indexInfo, true, true,
 										   _bt_build_callback, (void *) buildstate,
 										   NULL);

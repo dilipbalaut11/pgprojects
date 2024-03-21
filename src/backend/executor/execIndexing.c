@@ -171,10 +171,6 @@ ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
 
 	resultRelInfo->ri_NumIndices = 0;
 
-	/* fast path if no indexes */
-	if (!RelationGetForm(resultRelation)->relhasindex)
-		return;
-
 	if (relispartition)
 	{
 		Oid			parent = get_partition_parent(relid, false);

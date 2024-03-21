@@ -2836,7 +2836,7 @@ CopyFrom(CopyState cstate)
 	/* Verify the named relation is a valid target for INSERT */
 	CheckValidResultRel(resultRelInfo, CMD_INSERT);
 
-	ExecOpenIndices(resultRelInfo, false);
+	ExecOpenIndices(estate, resultRelInfo, false, true);
 
 	estate->es_result_relations = resultRelInfo;
 	estate->es_num_result_relations = 1;

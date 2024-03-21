@@ -1904,7 +1904,8 @@ heapam_index_validate_scan(Relation heapRelation,
 			 * there is one.
 			 */
 
-			index_insert(indexRelation,
+			index_insert(estate,
+						 indexRelation,
 						 values,
 						 isnull,
 						 &rootTuple,

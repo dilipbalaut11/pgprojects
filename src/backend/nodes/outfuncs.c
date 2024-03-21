@@ -2337,6 +2337,8 @@ _outIndexOptInfo(StringInfo str, const IndexOptInfo *node)
 	WRITE_BOOL_FIELD(unique);
 	WRITE_BOOL_FIELD(immediate);
 	WRITE_BOOL_FIELD(hypothetical);
+
+	WRITE_BOOL_FIELD(is_global_index);
 	/* we don't bother with fields copied from the index AM's API struct */
 }
 
@@ -2688,6 +2690,7 @@ _outIndexStmt(StringInfo str, const IndexStmt *node)
 	WRITE_BOOL_FIELD(concurrent);
 	WRITE_BOOL_FIELD(if_not_exists);
 	WRITE_BOOL_FIELD(reset_default_tblspc);
+	WRITE_BOOL_FIELD(global_index);
 }
 
 static void

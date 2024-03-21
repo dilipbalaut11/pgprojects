@@ -16,6 +16,7 @@
 
 #include "access/tupdesc.h"
 #include "access/xlog.h"
+#include "catalog/pg_am.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_index.h"
 #include "catalog/pg_publication.h"
@@ -636,6 +637,10 @@ typedef struct ViewOptions
 	(XLogLogicalInfoActive() && \
 	 RelationNeedsWAL(relation) && \
 	 !IsCatalogRelation(relation))
+
+#define RELATION_IS_PARTITION(relation)	((relation)->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+
+extern bool RELATION_INDEX_IS_GLOBAL_INDEX(Relation relation);
 
 /* routines in utils/cache/relcache.c */
 extern void RelationIncrementReferenceCount(Relation rel);

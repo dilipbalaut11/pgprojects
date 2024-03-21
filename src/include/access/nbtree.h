@@ -963,6 +963,7 @@ typedef struct BTOptions
 	/* fraction of newly inserted tuples prior to trigger index cleanup */
 	float8		vacuum_cleanup_index_scale_factor;
 	bool		deduplicate_items;	/* Try to deduplicate items? */
+	bool		global_index;
 } BTOptions;
 
 #define BTGetFillFactor(relation) \
@@ -993,7 +994,7 @@ typedef struct BTOptions
  * external entry points for btree, in nbtree.c
  */
 extern void btbuildempty(Relation index);
-extern bool btinsert(Relation rel, Datum *values, bool *isnull,
+extern bool btinsert(void *estate, Relation rel, Datum *values, bool *isnull,
 					 ItemPointer ht_ctid, Relation heapRel,
 					 IndexUniqueCheck checkUnique,
 					 struct IndexInfo *indexInfo);
@@ -1043,7 +1044,7 @@ extern IndexTuple _bt_swap_posting(IndexTuple newitem, IndexTuple oposting,
 /*
  * prototypes for functions in nbtinsert.c
  */
-extern bool _bt_doinsert(Relation rel, IndexTuple itup,
+extern bool _bt_doinsert(void *estate, Relation rel, IndexTuple itup,
 						 IndexUniqueCheck checkUnique, Relation heapRel);
 extern void _bt_finish_split(Relation rel, Buffer lbuf, BTStack stack);
 extern Buffer _bt_getstackbuf(Relation rel, BTStack stack, BlockNumber child);

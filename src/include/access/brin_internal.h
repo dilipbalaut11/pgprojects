@@ -88,7 +88,7 @@ extern void brin_free_desc(BrinDesc *bdesc);
 extern IndexBuildResult *brinbuild(Relation heap, Relation index,
 								   struct IndexInfo *indexInfo);
 extern void brinbuildempty(Relation index);
-extern bool brininsert(Relation idxRel, Datum *values, bool *nulls,
+extern bool brininsert(void *estate, Relation idxRel, Datum *values, bool *nulls,
 					   ItemPointer heaptid, Relation heapRel,
 					   IndexUniqueCheck checkUnique,
 					   struct IndexInfo *indexInfo);

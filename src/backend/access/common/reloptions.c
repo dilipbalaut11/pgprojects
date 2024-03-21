@@ -168,6 +168,17 @@ static relopt_bool boolRelOpts[] =
 		},
 		true
 	},
+
+	{
+		{
+			"global_index",
+			"is global index",
+			RELOPT_KIND_BTREE,
+			ShareUpdateExclusiveLock
+		},
+		false
+	},
+
 	/* list terminator */
 	{{NULL}}
 };

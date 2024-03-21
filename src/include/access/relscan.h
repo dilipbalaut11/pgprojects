@@ -103,6 +103,8 @@ typedef struct IndexFetchTableData
 	Relation	rel;
 } IndexFetchTableData;
 
+typedef struct GlobalIndexRelDirectoryData *GlobalIndexRelDirectory;
+
 /*
  * We use the same IndexScanDescData structure for both amgettuple-based
  * and amgetbitmap-based index scans.  Some fields are only relevant in
@@ -161,6 +163,9 @@ typedef struct IndexScanDescData
 
 	/* parallel index scan information, in shared memory */
 	struct ParallelIndexScanDescData *parallel_scan;
+
+	bool		xs_am_global_index;
+	GlobalIndexRelDirectory xs_globalindex_rel_directory;
 }			IndexScanDescData;
 
 /* Generic structure for parallel scans */

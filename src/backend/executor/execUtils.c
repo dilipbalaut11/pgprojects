@@ -45,6 +45,7 @@
 
 #include "postgres.h"
 
+#include "access/genam.h"
 #include "access/parallel.h"
 #include "access/relscan.h"
 #include "access/table.h"
@@ -219,6 +220,12 @@ FreeExecutorState(EState *estate)
 	{
 		DestroyPartitionDirectory(estate->es_partition_directory);
 		estate->es_partition_directory = NULL;
+	}
+
+	if (estate->es_global_index_partrel_directory)
+	{
+		DestroyGlobalIndexRelDirectory(estate->es_global_index_partrel_directory);
+		estate->es_global_index_partrel_directory = NULL;
 	}
 
 	/*

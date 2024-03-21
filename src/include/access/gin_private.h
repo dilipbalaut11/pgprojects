@@ -113,7 +113,7 @@ extern Datum gintuple_get_key(GinState *ginstate, IndexTuple tuple,
 extern IndexBuildResult *ginbuild(Relation heap, Relation index,
 								  struct IndexInfo *indexInfo);
 extern void ginbuildempty(Relation index);
-extern bool gininsert(Relation index, Datum *values, bool *isnull,
+extern bool gininsert(void *estate, Relation index, Datum *values, bool *isnull,
 					  ItemPointer ht_ctid, Relation heapRel,
 					  IndexUniqueCheck checkUnique,
 					  struct IndexInfo *indexInfo);

@@ -741,7 +741,7 @@ static void
 apply_handle_insert_internal(ResultRelInfo *relinfo,
 							 EState *estate, TupleTableSlot *remoteslot)
 {
-	ExecOpenIndices(relinfo, false);
+	ExecOpenIndices(estate, relinfo, false, true);
 
 	/* Do the insert. */
 	ExecSimpleRelationInsert(estate, remoteslot);
@@ -893,7 +893,7 @@ apply_handle_update_internal(ResultRelInfo *relinfo,
 	MemoryContext oldctx;
 
 	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1);
-	ExecOpenIndices(relinfo, false);
+	ExecOpenIndices(estate, relinfo, false, true);
 
 	found = FindReplTupleInLocalRel(estate, localrel,
 									&relmapentry->remoterel,
@@ -1013,7 +1013,7 @@ apply_handle_delete_internal(ResultRelInfo *relinfo, EState *estate,
 	bool		found;
 
 	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1);
-	ExecOpenIndices(relinfo, false);
+	ExecOpenIndices(estate, relinfo, false, true);
 
 	found = FindReplTupleInLocalRel(estate, localrel, remoterel,
 									remoteslot, &localslot);
@@ -1210,7 +1210,7 @@ apply_handle_tuple_routing(ResultRelInfo *relinfo,
 					EPQState	epqstate;
 
 					EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1);
-					ExecOpenIndices(partrelinfo, false);
+					ExecOpenIndices(estate, partrelinfo, false, true);
 
 					EvalPlanQualSetSlot(&epqstate, remoteslot_part);
 					ExecSimpleRelationUpdate(estate, &epqstate, localslot,

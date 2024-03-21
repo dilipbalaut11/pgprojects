@@ -196,7 +196,7 @@ btbuildempty(Relation index)
  *		new tuple, and put it there.
  */
 bool
-btinsert(Relation rel, Datum *values, bool *isnull,
+btinsert(void *estate, Relation rel, Datum *values, bool *isnull,
 		 ItemPointer ht_ctid, Relation heapRel,
 		 IndexUniqueCheck checkUnique,
 		 IndexInfo *indexInfo)
@@ -208,7 +208,7 @@ btinsert(Relation rel, Datum *values, bool *isnull,
 	itup = index_form_tuple(RelationGetDescr(rel), values, isnull);
 	itup->t_tid = *ht_ctid;
 
-	result = _bt_doinsert(rel, itup, checkUnique, heapRel);
+	result = _bt_doinsert(estate, rel, itup, checkUnique, heapRel);
 
 	pfree(itup);
 
@@ -1097,8 +1097,16 @@ btvacuumpage(BTVacState *vstate, BlockNumber scanblkno)
 	Buffer		buf;
 	Page		page;
 	BTPageOpaque opaque;
+	Oid			heap_oid = InvalidOid;
 
 	blkno = scanblkno;
+
+	if (info->global_index)
+	{
+		Assert(RELATION_INDEX_IS_GLOBAL_INDEX(rel));
+		Assert(OidIsValid(info->heap_oid));
+		heap_oid = info->heap_oid;
+	}
 
 backtrack:
 
@@ -1263,6 +1271,13 @@ backtrack:
 
 				itup = (IndexTuple) PageGetItem(page,
 												PageGetItemId(page, offnum));
+
+				if (RELATION_INDEX_IS_GLOBAL_INDEX(rel))
+				{
+					Oid heap_in_index = global_index_itup_fetch_heap_oid(rel, itup);
+					if (heap_in_index != heap_oid)
+						continue;
+				}
 
 				/*
 				 * Hot Standby assumes that it's okay that XLOG_BTREE_VACUUM

@@ -1358,6 +1358,7 @@ _equalIndexStmt(const IndexStmt *a, const IndexStmt *b)
 	COMPARE_SCALAR_FIELD(concurrent);
 	COMPARE_SCALAR_FIELD(if_not_exists);
 	COMPARE_SCALAR_FIELD(reset_default_tblspc);
+	COMPARE_SCALAR_FIELD(global_index);
 
 	return true;
 }

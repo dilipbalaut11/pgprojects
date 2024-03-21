@@ -856,6 +856,8 @@ struct IndexOptInfo
 	bool		immediate;		/* is uniqueness enforced immediately? */
 	bool		hypothetical;	/* true if index doesn't really exist */
 
+	bool		is_global_index;
+
 	/* Remaining fields are copied from the index AM's API struct: */
 	bool		amcanorderbyop; /* does AM support order by operator result? */
 	bool		amoptionalkey;	/* can query omit key for the first column? */

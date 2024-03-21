@@ -366,3 +366,39 @@ get_default_oid_from_partdesc(PartitionDesc partdesc)
 
 	return InvalidOid;
 }
+
+Relation
+global_index_heaprel_lookup(PartitionDirectory pdir, Oid relid)
+{
+	PartitionDirectoryEntry *pde;
+	bool		found;
+	Relation	part_rel;
+
+	Assert(pdir);
+	pde = hash_search(pdir->pdir_hash, &relid, HASH_FIND, &found);
+	if (found)
+	{
+		part_rel = pde->rel;
+	}
+	else
+	{
+		pde = hash_search(pdir->pdir_hash, &relid, HASH_ENTER, &found);
+		part_rel = table_open(relid, AccessShareLock);
+		pde->rel = part_rel;
+		pde->pd = NULL;
+	}
+
+	return part_rel;
+}
+
+void
+destroy_partition_rel_directory(PartitionDirectory pdir)
+{
+	HASH_SEQ_STATUS status;
+	PartitionDirectoryEntry *pde;
+
+	hash_seq_init(&status, pdir->pdir_hash);
+	while ((pde = hash_seq_search(&status)) != NULL)
+		table_close(pde->rel, NoLock);
+}
+

@@ -485,7 +485,7 @@ ginHeapTupleInsert(GinState *ginstate, OffsetNumber attnum,
 }
 
 bool
-gininsert(Relation index, Datum *values, bool *isnull,
+gininsert(void *estate, Relation index, Datum *values, bool *isnull,
 		  ItemPointer ht_ctid, Relation heapRel,
 		  IndexUniqueCheck checkUnique,
 		  IndexInfo *indexInfo)

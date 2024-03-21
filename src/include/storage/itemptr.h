@@ -203,4 +203,6 @@ typedef ItemPointerData *ItemPointer;
 extern bool ItemPointerEquals(ItemPointer pointer1, ItemPointer pointer2);
 extern int32 ItemPointerCompare(ItemPointer arg1, ItemPointer arg2);
 
+extern void output_tid_info(Oid relid, ItemPointerData itemPtr, char *opt);
+
 #endif							/* ITEMPTR_H */

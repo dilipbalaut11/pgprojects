@@ -15,6 +15,7 @@
 #define EXECNODES_H
 
 #include "access/tupconvert.h"
+#include "access/relscan.h"
 #include "executor/instrument.h"
 #include "fmgr.h"
 #include "lib/pairingheap.h"
@@ -600,6 +601,8 @@ typedef struct EState
 	int			es_jit_flags;
 	struct JitContext *es_jit;
 	struct JitInstrumentation *es_jit_worker_instr;
+
+	GlobalIndexRelDirectory es_global_index_partrel_directory;
 } EState;
 
 

@@ -599,6 +599,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>		hash_partbound
 %type <defelt>		hash_partbound_elem
 
+%type <boolean> OraOptGlobal
+
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
  * They must be listed first so that their numeric codes do not depend on
@@ -7168,7 +7170,7 @@ defacl_privilege_target:
 
 IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_index_name
 			ON relation_expr access_method_clause '(' index_params ')'
-			opt_include opt_reloptions OptTableSpace where_clause
+			opt_include opt_reloptions OraOptGlobal OptTableSpace where_clause
 				{
 					IndexStmt *n = makeNode(IndexStmt);
 					n->unique = $2;
@@ -7179,8 +7181,9 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_index_name
 					n->indexParams = $10;
 					n->indexIncludingParams = $12;
 					n->options = $13;
-					n->tableSpace = $14;
-					n->whereClause = $15;
+					n->global_index = $14;
+					n->tableSpace = $15;
+					n->whereClause = $16;
 					n->excludeOpNames = NIL;
 					n->idxcomment = NULL;
 					n->indexOid = InvalidOid;
@@ -7198,7 +7201,7 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_index_name
 				}
 			| CREATE opt_unique INDEX opt_concurrently IF_P NOT EXISTS name
 			ON relation_expr access_method_clause '(' index_params ')'
-			opt_include opt_reloptions OptTableSpace where_clause
+			opt_include opt_reloptions OraOptGlobal OptTableSpace where_clause
 				{
 					IndexStmt *n = makeNode(IndexStmt);
 					n->unique = $2;
@@ -7209,8 +7212,9 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_index_name
 					n->indexParams = $13;
 					n->indexIncludingParams = $15;
 					n->options = $16;
-					n->tableSpace = $17;
-					n->whereClause = $18;
+					n->global_index = $17;
+					n->tableSpace = $18;
+					n->whereClause = $19;
 					n->excludeOpNames = NIL;
 					n->idxcomment = NULL;
 					n->indexOid = InvalidOid;
@@ -7227,6 +7231,12 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_index_name
 					$$ = (Node *)n;
 				}
 		;
+
+OraOptGlobal: 
+	    LOCAL 					{ $$ = false; }
+			| GLOBAL 			{ $$ = true; }
+			| /*EMPTY*/				{ $$ = false; }
+		  ;
 
 opt_unique:
 			UNIQUE									{ $$ = true; }

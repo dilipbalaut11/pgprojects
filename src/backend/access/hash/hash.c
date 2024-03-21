@@ -244,7 +244,7 @@ hashbuildCallback(Relation index,
  *	Find the appropriate location for the new tuple, and put it there.
  */
 bool
-hashinsert(Relation rel, Datum *values, bool *isnull,
+hashinsert(void *estate, Relation rel, Datum *values, bool *isnull,
 		   ItemPointer ht_ctid, Relation heapRel,
 		   IndexUniqueCheck checkUnique,
 		   IndexInfo *indexInfo)

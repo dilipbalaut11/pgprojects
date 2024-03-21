@@ -53,6 +53,7 @@ extern List *RelationGetDummyIndexExpressions(Relation relation);
 extern List *RelationGetIndexPredicate(Relation relation);
 extern Datum *RelationGetIndexRawAttOptions(Relation relation);
 extern bytea **RelationGetIndexAttOptions(Relation relation, bool copy);
+extern List *relation_get_global_index_list(Relation relation);
 
 typedef enum IndexAttrBitmapKind
 {

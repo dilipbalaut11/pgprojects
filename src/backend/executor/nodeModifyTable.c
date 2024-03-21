@@ -57,6 +57,7 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
+#include "storage/itemptr.h"
 
 static bool ExecOnConflictUpdate(ModifyTableState *mtstate,
 								 ResultRelInfo *resultRelInfo,
@@ -619,6 +620,8 @@ ExecInsert(ModifyTableState *mtstate,
 							   estate->es_output_cid,
 							   0, NULL);
 
+			output_tid_info(RelationGetRelid(resultRelationDesc), slot->tts_tid, "INSERT");
+
 			/* insert index entries for tuple */
 			if (resultRelInfo->ri_NumIndices > 0)
 				recheckIndexes = ExecInsertIndexTuples(slot, estate, false, NULL,
@@ -968,7 +971,10 @@ ldelete:;
 
 	/* Tell caller that the delete actually happened. */
 	if (tupleDeleted)
+	{
 		*tupleDeleted = true;
+		output_tid_info(RelationGetRelid(resultRelationDesc), *tupleid, "DELETE");
+	}
 
 	/*
 	 * If this delete is the result of a partition key update that moved the
@@ -2373,11 +2379,11 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 		 * already, since we share the resultrel state with the original
 		 * query.
 		 */
-		if (resultRelInfo->ri_RelationDesc->rd_rel->relhasindex &&
-			operation != CMD_DELETE &&
+		if (operation != CMD_DELETE &&
 			resultRelInfo->ri_IndexRelationDescs == NULL)
-			ExecOpenIndices(resultRelInfo,
-							node->onConflictAction != ONCONFLICT_NONE);
+			ExecOpenIndices(estate, resultRelInfo,
+							node->onConflictAction != ONCONFLICT_NONE,
+							true);
 
 		/*
 		 * If this is an UPDATE and a BEFORE UPDATE trigger is present, the

@@ -473,8 +473,10 @@ _bt_spools_heapscan(Relation heap, Relation index, BTBuildState *buildstate,
 										coordinate2, false);
 	}
 
+	if (RELATION_IS_PARTITION(heap))
+		reltuples = 0;
 	/* Fill spool using either serial or parallel heap scan */
-	if (!buildstate->btleader)
+	else if (!buildstate->btleader)
 		reltuples = table_index_build_scan(heap, index, indexInfo, true, true,
 										   _bt_build_callback, (void *) buildstate,
 										   NULL);

@@ -195,7 +195,7 @@ blbuildempty(Relation index)
  * Insert new tuple to the bloom index.
  */
 bool
-blinsert(Relation index, Datum *values, bool *isnull,
+blinsert(void *estate, Relation index, Datum *values, bool *isnull,
 		 ItemPointer ht_ctid, Relation heapRel,
 		 IndexUniqueCheck checkUnique,
 		 IndexInfo *indexInfo)

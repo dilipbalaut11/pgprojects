@@ -662,6 +662,7 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 			IndexBulkDeleteResult *stats;
 			IndexVacuumInfo ivinfo;
 
+			memset(&ivinfo, 0, sizeof(IndexVacuumInfo));
 			ivinfo.index = Irel[ind];
 			ivinfo.analyze_only = true;
 			ivinfo.estimated_count = true;

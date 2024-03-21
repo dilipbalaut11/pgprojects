@@ -24,13 +24,17 @@
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
 #include "storage/smgr.h"
+#include "nodes/execnodes.h"
+
+#include "storage/itemptr.h"
+#include "partitioning/partdesc.h"
 
 /* Minimum tree height for application of fastpath optimization */
 #define BTREE_FASTPATH_MIN_LEVEL	2
 
 
 static BTStack _bt_search_insert(Relation rel, BTInsertState insertstate);
-static TransactionId _bt_check_unique(Relation rel, BTInsertState insertstate,
+static TransactionId _bt_check_unique(void *estate, Relation rel, BTInsertState insertstate,
 									  Relation heapRel,
 									  IndexUniqueCheck checkUnique, bool *is_unique,
 									  uint32 *speculativeToken);
@@ -59,6 +63,7 @@ static Buffer _bt_newroot(Relation rel, Buffer lbuf, Buffer rbuf);
 static inline bool _bt_pgaddtup(Page page, Size itemsize, IndexTuple itup,
 								OffsetNumber itup_off, bool newfirstdataitem);
 static void _bt_vacuum_one_page(Relation rel, Buffer buffer, Relation heapRel);
+static Relation bt_global_index_partrel_routing(void *estate, Relation heap_rel, Relation index, IndexTuple index_tup);
 
 /*
  *	_bt_doinsert() -- Handle insertion of a single index tuple in the tree.
@@ -79,7 +84,7 @@ static void _bt_vacuum_one_page(Relation rel, Buffer buffer, Relation heapRel);
  *		that's just a coding artifact.)
  */
 bool
-_bt_doinsert(Relation rel, IndexTuple itup,
+_bt_doinsert(void *estate, Relation rel, IndexTuple itup,
 			 IndexUniqueCheck checkUnique, Relation heapRel)
 {
 	bool		is_unique = false;
@@ -186,7 +191,7 @@ search:
 		TransactionId xwait;
 		uint32		speculativeToken;
 
-		xwait = _bt_check_unique(rel, &insertstate, heapRel, checkUnique,
+		xwait = _bt_check_unique(estate, rel, &insertstate, heapRel, checkUnique,
 								 &is_unique, &speculativeToken);
 
 		if (unlikely(TransactionIdIsValid(xwait)))
@@ -384,7 +389,7 @@ _bt_search_insert(Relation rel, BTInsertState insertstate)
  * prepared to handle that correctly.
  */
 static TransactionId
-_bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
+_bt_check_unique(void *estate, Relation rel, BTInsertState insertstate, Relation heapRel,
 				 IndexUniqueCheck checkUnique, bool *is_unique,
 				 uint32 *speculativeToken)
 {
@@ -488,6 +493,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 			if (inposting || !ItemIdIsDead(curitemid))
 			{
 				ItemPointerData htid;
+				Relation	heap_rel;
 				bool		all_dead = false;
 
 				if (!inposting)
@@ -523,6 +529,11 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 					htid = *BTreeTupleGetPostingN(curitup, curposti);
 				}
 
+				if(RELATION_INDEX_IS_GLOBAL_INDEX(rel))
+					heap_rel = bt_global_index_partrel_routing(estate, heapRel, rel, curitup);
+				else
+					heap_rel = heapRel;
+
 				/*
 				 * If we are doing a recheck, we expect to find the tuple we
 				 * are rechecking.  It's not a duplicate, but we have to keep
@@ -540,7 +551,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				 * with optimizations like heap's HOT, we have just a single
 				 * index entry for the entire chain.
 				 */
-				else if (table_index_fetch_tuple_check(heapRel, &htid,
+				else if (table_index_fetch_tuple_check(heap_rel, &htid,
 													   &SnapshotDirty,
 													   &all_dead))
 				{
@@ -602,6 +613,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 													  SnapshotSelf, NULL))
 					{
 						/* Normal case --- it's still live */
+						output_tid_info(RelationGetRelid(heapRel), htid, "bt_check_unique fail");
 					}
 					else
 					{
@@ -2670,3 +2682,37 @@ _bt_vacuum_one_page(Relation rel, Buffer buffer, Relation heapRel)
 	 * the page, or when deduplication runs.
 	 */
 }
+
+static Relation
+bt_global_index_partrel_routing(void *estate, Relation heap_rel, Relation index, IndexTuple index_tup)
+{
+	Oid			heapOid_index;
+	Oid			heapOid;
+	EState		*es = (EState *)estate;
+	int 		indnatts = IndexRelationGetNumberOfAttributes(index);
+	TupleDesc	tupleDesc = RelationGetDescr(index);
+	Form_pg_attribute att = TupleDescAttr(tupleDesc, indnatts - 1);
+	Relation	part_rel;
+
+	if(!RELATION_INDEX_IS_GLOBAL_INDEX(index))
+		return heap_rel;
+
+	heapOid = RelationGetRelid(heap_rel);
+	heapOid_index = global_index_itup_fetch_heap_oid(index, index_tup);
+	if (OidIsValid(heapOid_index))
+	{
+		if (heapOid == heapOid_index)
+			return heap_rel;
+	}
+	else
+		elog(ERROR, "global index %s have invalid tableoid column %s on attnum %d", RelationGetRelationName(index), NameStr(att->attname), indnatts - 1);
+
+	if (es == NULL || es->es_global_index_partrel_directory == NULL)
+		elog(ERROR, "global index scan must have rel directory");
+
+	part_rel = GlobalIndexRelLookup(es->es_global_index_partrel_directory, heapOid_index);
+	Assert(part_rel);
+
+	return part_rel;
+}
+

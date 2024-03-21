@@ -571,7 +571,7 @@ extern TupleTableSlot *ExecGetReturningSlot(EState *estate, ResultRelInfo *relIn
 /*
  * prototypes from functions in execIndexing.c
  */
-extern void ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative);
+extern void ExecOpenIndices(EState *estate, ResultRelInfo *resultRelInfo, bool speculative, bool include_global_index);
 extern void ExecCloseIndices(ResultRelInfo *resultRelInfo);
 extern List *ExecInsertIndexTuples(TupleTableSlot *slot, EState *estate, bool noDupErr,
 								   bool *specConflict, List *arbiterIndexes);
@@ -602,5 +602,6 @@ extern void CheckCmdReplicaIdentity(Relation rel, CmdType cmd);
 
 extern void CheckSubscriptionRelkind(char relkind, const char *nspname,
 									 const char *relname);
+extern void ExecOpenGLobalIndex(EState *estate, ResultRelInfo *resultRelInfo, Oid global_index);
 
 #endif							/* EXECUTOR_H  */

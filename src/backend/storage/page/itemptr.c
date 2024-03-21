@@ -71,3 +71,18 @@ ItemPointerCompare(ItemPointer arg1, ItemPointer arg2)
 	else
 		return 0;
 }
+
+void
+output_tid_info(Oid relid, ItemPointerData itemPtr, char *opt)
+{
+	BlockNumber blockNumber;
+	OffsetNumber offsetNumber;
+
+	return;
+
+	blockNumber = ItemPointerGetBlockNumberNoCheck(&itemPtr);
+	offsetNumber = ItemPointerGetOffsetNumberNoCheck(&itemPtr);
+
+	elog(WARNING, "rel %u %s tid (%u,%u)", relid, opt, blockNumber, offsetNumber);
+}
+

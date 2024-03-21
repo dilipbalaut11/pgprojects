@@ -115,8 +115,9 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 {
 	Index		varno = rel->relid;
 	Relation	relation;
-	bool		hasindex;
+	bool		hasindex = false;
 	List	   *indexinfos = NIL;
+	List		*global_indexs = NIL;
 
 	/*
 	 * We need not lock the relation since it was already locked, either by
@@ -163,6 +164,13 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	else
 		hasindex = relation->rd_rel->relhasindex;
 
+	if (RELATION_IS_PARTITION(relation) && enable_global_index_scan)
+	{
+		global_indexs = relation_get_global_index_list(relation);
+		if (global_indexs)
+			hasindex = true;
+	}
+
 	if (hasindex)
 	{
 		List	   *indexoidlist;
@@ -170,6 +178,11 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 		ListCell   *l;
 
 		indexoidlist = RelationGetIndexList(relation);
+		if (global_indexs)
+		{
+			indexoidlist = list_concat_unique_oid(indexoidlist, global_indexs);
+			list_free(global_indexs);
+		}
 
 		/*
 		 * For each index, we get the same type of lock that the executor will
@@ -237,6 +250,9 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 
 			info = makeNode(IndexOptInfo);
 
+			if (RELATION_INDEX_IS_GLOBAL_INDEX(indexRelation))
+				info->is_global_index = true;
+
 			info->indexoid = index->indexrelid;
 			info->reltablespace =
 				RelationGetForm(indexRelation)->reltablespace;
@@ -271,15 +287,24 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			info->amoptionalkey = amroutine->amoptionalkey;
 			info->amsearcharray = amroutine->amsearcharray;
 			info->amsearchnulls = amroutine->amsearchnulls;
-			info->amcanparallel = amroutine->amcanparallel;
 			info->amhasgettuple = (amroutine->amgettuple != NULL);
-			info->amhasgetbitmap = amroutine->amgetbitmap != NULL &&
-				relation->rd_tableam->scan_bitmap_next_block != NULL;
 			info->amcostestimate = amroutine->amcostestimate;
 			Assert(info->amcostestimate != NULL);
 
 			/* Fetch index opclass options */
 			info->opclassoptions = RelationGetIndexAttOptions(indexRelation, true);
+
+			if (info->is_global_index)
+			{
+				info->amcanparallel = false;
+				info->amhasgetbitmap = false;
+			}
+			else
+			{
+				info->amcanparallel = amroutine->amcanparallel;
+				info->amhasgetbitmap = amroutine->amgetbitmap != NULL &&
+					relation->rd_tableam->scan_bitmap_next_block != NULL;
+			}
 
 			/*
 			 * Fetch the ordering information for the index, if any.

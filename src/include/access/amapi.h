@@ -104,7 +104,8 @@ typedef IndexBuildResult *(*ambuild_function) (Relation heapRelation,
 typedef void (*ambuildempty_function) (Relation indexRelation);
 
 /* insert this tuple */
-typedef bool (*aminsert_function) (Relation indexRelation,
+typedef bool (*aminsert_function) (void *estate,
+								   Relation indexRelation,
 								   Datum *values,
 								   bool *isnull,
 								   ItemPointer heap_tid,

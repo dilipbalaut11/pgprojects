@@ -153,7 +153,7 @@ gistbuildempty(Relation index)
  *	  It doesn't do any work; just locks the relation and passes the buck.
  */
 bool
-gistinsert(Relation r, Datum *values, bool *isnull,
+gistinsert(void *estate, Relation r, Datum *values, bool *isnull,
 		   ItemPointer ht_ctid, Relation heapRel,
 		   IndexUniqueCheck checkUnique,
 		   IndexInfo *indexInfo)

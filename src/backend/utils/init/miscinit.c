@@ -76,6 +76,8 @@ static Latch LocalLatchData;
 
 bool		IgnoreSystemIndexes = false;
 
+bool		enable_global_index_scan = false;
+
 
 /* ----------------------------------------------------------------
  *	common process startup code

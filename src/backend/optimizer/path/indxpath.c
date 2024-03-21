@@ -1811,6 +1811,9 @@ check_index_only(RelOptInfo *rel, IndexOptInfo *index)
 	if (!enable_indexonlyscan)
 		return false;
 
+	if (index->is_global_index)
+		return false;
+
 	/*
 	 * Check that all needed attributes of the relation are available from the
 	 * index.

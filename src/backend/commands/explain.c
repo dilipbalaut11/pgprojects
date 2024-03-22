@@ -1456,7 +1456,17 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			pname = sname = "Gather Merge";
 			break;
 		case T_IndexScan:
-			pname = sname = "Index Scan";
+			{
+				IndexScan	*iscan = (IndexScan *) plan;
+				Relation	index = index_open(iscan->indexid, NoLock);
+
+				if (RelationIsGlobalIndex(index))
+					pname = sname = "Global Index Scan";
+				else
+					pname = sname = "Index Scan";
+
+				index_close(index, NoLock);
+			}
 			break;
 		case T_IndexOnlyScan:
 			pname = sname = "Index Only Scan";

@@ -219,7 +219,8 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	else
 		hasindex = relation->rd_rel->relhasindex;
 
-	if (IS_PARTITIONED_REL(rel) && enable_global_index_scan)
+	if (relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE
+		&& enable_global_index_scan)
 	{
 		global_indexs = RelationGetGlobalIndexList(relation);
 		if (global_indexs)
@@ -294,7 +295,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			}
 
 			info = makeNode(IndexOptInfo);
-			if (RelIsGlobalIndex(indexRelation))
+			if (RelationIsGlobalIndex(indexRelation))
 				info->global = true;
 
 			info->indexoid = index->indexrelid;

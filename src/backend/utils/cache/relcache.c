@@ -6882,7 +6882,7 @@ RelationGetGlobalIndexList(Relation relation)
 
 		indexDesc = index_open(indexOid, AccessShareLock);
 
-		if (RelIsGlobalIndex(indexDesc))
+		if (RelationIsGlobalIndex(indexDesc))
 			global_indexs = lappend_oid(global_indexs, indexOid);
 
 		index_close(indexDesc, AccessShareLock);

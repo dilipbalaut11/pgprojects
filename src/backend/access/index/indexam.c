@@ -1250,7 +1250,7 @@ global_index_itup_fetch_heap_oid(Relation index, IndexTuple itup)
 	int 		indnatts = IndexRelationGetNumberOfAttributes(index);
 	TupleDesc	tupleDesc = RelationGetDescr(index);
 
-	Assert(RelIsGlobalIndex(index));
+	Assert(RelationIsGlobalIndex(index));
 
 	datum = index_getattr(itup, indnatts, tupleDesc, &isNull);
 	Assert(!isNull);

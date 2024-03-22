@@ -2959,7 +2959,7 @@ index_build(Relation heapRelation,
 	int			save_nestlevel;
 
 	/* TODO: for now block parallel build */
-	if (RelIsGlobalIndex(indexRelation))
+	if (RelationIsGlobalIndex(indexRelation))
 		parallel = false;
 
 	/*

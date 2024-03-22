@@ -123,7 +123,7 @@ RelationGetIndexScan(Relation indexRelation, int nkeys, int norderbys)
 	scan->xs_hitup = NULL;
 	scan->xs_hitupdesc = NULL;
 
-	if (RelIsGlobalIndex(indexRelation))
+	if (RelationIsGlobalIndex(indexRelation))
 	{
 		scan->xs_am_global_index = true;
 		scan->xs_want_itup = true;

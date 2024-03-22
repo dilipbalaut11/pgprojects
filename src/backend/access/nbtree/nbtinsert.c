@@ -387,7 +387,7 @@ index_itup_fetch_partrel(Relation indexrel, IndexTuple itup)
 	Datum		datum;
 	bool		isNull;
 	Oid 		partid;
-	Relation	partrel;
+	Relation	partrel = NULL;
 	int 		indnatts = IndexRelationGetNumberOfKeyAttributes(indexrel);
 	TupleDesc	tupleDesc = RelationGetDescr(indexrel);
 
@@ -560,7 +560,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 					htid = *BTreeTupleGetPostingN(curitup, curposti);
 				}
 
-				if(RelIsGlobalIndex(rel))
+				if (RelationIsGlobalIndex(rel))
 					partrel = index_itup_fetch_partrel(rel, curitup);
 				else
 					partrel = heapRel;

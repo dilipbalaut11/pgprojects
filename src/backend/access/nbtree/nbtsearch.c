@@ -27,7 +27,8 @@
 
 static void _bt_drop_lock_and_maybe_pin(IndexScanDesc scan, BTScanPos sp);
 static OffsetNumber _bt_binsrch(Relation rel, BTScanInsert key, Buffer buf);
-static int	_bt_binsrch_posting(BTScanInsert key, Page page,
+static int	_bt_binsrch_posting(Relation rel, IndexTuple newitup,
+								BTScanInsert key, Page page,
 								OffsetNumber offnum);
 static bool _bt_readpage(IndexScanDesc scan, ScanDirection dir,
 						 OffsetNumber offnum, bool firstPage);
@@ -538,7 +539,7 @@ _bt_binsrch_insert(Relation rel, BTInsertState insertstate)
 			if (result != 0)
 				stricthigh = high;
 		}
-
+#if 1
 		/*
 		 * If tuple at offset located by binary search is a posting list whose
 		 * TID range overlaps with caller's scantid, perform posting list
@@ -563,8 +564,11 @@ _bt_binsrch_insert(Relation rel, BTInsertState insertstate)
 										 BufferGetBlockNumber(insertstate->buf),
 										 RelationGetRelationName(rel))));
 
-			insertstate->postingoff = _bt_binsrch_posting(key, page, mid);
+			insertstate->postingoff = _bt_binsrch_posting(rel,
+														  insertstate->itup,
+														  key, page, mid);
 		}
+#endif
 	}
 
 	/*
@@ -593,7 +597,8 @@ _bt_binsrch_insert(Relation rel, BTInsertState insertstate)
  *----------
  */
 static int
-_bt_binsrch_posting(BTScanInsert key, Page page, OffsetNumber offnum)
+_bt_binsrch_posting(Relation rel, IndexTuple newitup, BTScanInsert key, Page page,
+					OffsetNumber offnum)
 {
 	IndexTuple	itup;
 	ItemId		itemid;
@@ -627,6 +632,23 @@ _bt_binsrch_posting(BTScanInsert key, Page page, OffsetNumber offnum)
 	 */
 	if (ItemIdIsDead(itemid))
 		return -1;
+
+
+	if (RelationIsGlobalIndex(rel))
+	{
+		TupleDesc	itupdesc = RelationGetDescr(rel);
+		int			keysz = GlobalIndexRelationGetNumberOfKeyAttributes(rel);
+		Datum		datum1;
+		Datum		datum2;
+		bool		isNull1;
+		bool		isNull2;
+
+		datum1 = index_getattr(itup, keysz + 1, itupdesc, &isNull1);
+		datum2 = index_getattr(newitup, keysz + 1, itupdesc, &isNull2);
+
+		if (DatumGetObjectId(datum1) != DatumGetObjectId(datum2))
+			return 0;
+	}
 
 	/* "high" is past end of posting list for loop invariant */
 	low = 0;

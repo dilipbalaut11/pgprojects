@@ -525,6 +525,13 @@ typedef struct ViewOptions
 		((relation)->rd_index->indnkeyatts)
 
 /*
+ * GlobalIndexRelationGetNumberOfKeyAttributes
+ *		Returns the number of key attributes + partid column in an index.
+ */
+#define GlobalIndexRelationGetNumberOfKeyAttributes(relation) \
+		IndexRelationGetNumberOfKeyAttributes(relation) + 1
+
+/*
  * RelationGetDescr
  *		Returns tuple descriptor for a relation.
  */

@@ -593,7 +593,8 @@ _bt_binsrch_insert(Relation rel, BTInsertState insertstate)
  *----------
  */
 static int
-_bt_binsrch_posting(BTScanInsert key, Page page, OffsetNumber offnum)
+_bt_binsrch_posting(BTScanInsert key, Page page,
+					OffsetNumber offnum)
 {
 	IndexTuple	itup;
 	ItemId		itemid;

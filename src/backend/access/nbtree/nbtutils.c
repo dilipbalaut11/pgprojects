@@ -4881,6 +4881,13 @@ _bt_keep_natts_fast(Relation rel, IndexTuple lastleft, IndexTuple firstright)
 	int			keysz = IndexRelationGetNumberOfKeyAttributes(rel);
 	int			keepnatts;
 
+	/*
+	 * For global index compare parition id as well along with the other
+	 * key column for deduplicating.
+	 */
+	if (RelationIsGlobalIndex(rel))
+		keysz = keysz + 1;
+
 	keepnatts = 1;
 	for (int attnum = 1; attnum <= keysz; attnum++)
 	{
@@ -5145,7 +5152,13 @@ _bt_allequalimage(Relation rel, bool debugmessage)
 	bool		allequalimage = true;
 
 	/* INCLUDE indexes can never support deduplication */
-	if (IndexRelationGetNumberOfAttributes(rel) !=
+	if (RelationIsGlobalIndex(rel))
+	{
+		if (IndexRelationGetNumberOfAttributes(rel) !=
+			GlobalIndexRelationGetNumberOfKeyAttributes(rel))
+			return false;
+	}
+	else if (IndexRelationGetNumberOfAttributes(rel) !=
 		IndexRelationGetNumberOfKeyAttributes(rel))
 		return false;
 

@@ -525,6 +525,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 			if (inposting || !ItemIdIsDead(curitemid))
 			{
 				ItemPointerData htid;
+				BTPostingItemData posting;
 				bool		all_dead = false;
 
 				if (!inposting)
@@ -551,13 +552,15 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 					inposting = true;
 					prevalldead = true;
 					curposti = 0;
-					htid = *BTreeTupleGetPostingN(curitup, 0);
+					posting = *BTreeTupleGetPostingN(curitup, 0);
+					htid = posting.tid;
 				}
 				else
 				{
 					/* ... htid is second or subsequent TID in posting list */
 					Assert(curposti > 0);
-					htid = *BTreeTupleGetPostingN(curitup, curposti);
+					posting = *BTreeTupleGetPostingN(curitup, curposti);
+					htid = posting.tid;
 				}
 
 				if (RelationIsGlobalIndex(rel))
@@ -2899,7 +2902,8 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 
 			for (int p = 0; p < nitem; p++)
 			{
-				ItemPointer tid = BTreeTupleGetPostingN(itup, p);
+				BTPostingItem posting = BTreeTupleGetPostingN(itup, p);
+				ItemPointer tid = &posting->tid;
 
 				tidblock = ItemPointerGetBlockNumber(tid);
 				match = bsearch(&tidblock, deadblocks, ndeadblocks,
@@ -3016,9 +3020,9 @@ _bt_deadblocks(Page page, OffsetNumber *deletable, int ndeletable,
 
 			for (int j = 0; j < nposting; j++)
 			{
-				ItemPointer tid = BTreeTupleGetPostingN(itup, j);
+				BTPostingItem item = BTreeTupleGetPostingN(itup, j);
 
-				tidblocks[ntids++] = ItemPointerGetBlockNumber(tid);
+				tidblocks[ntids++] = ItemPointerGetBlockNumber(&item->tid);
 			}
 		}
 	}

@@ -235,6 +235,13 @@ typedef struct BTDeletedPageData
 	FullTransactionId safexid;	/* See BTPageIsRecyclable() */
 } BTDeletedPageData;
 
+typedef struct BTPostingItemData
+{
+	ItemPointerData	tid;
+} BTPostingItemData;
+
+typedef BTPostingItemData *BTPostingItem;
+
 static inline void
 BTPageSetDeleted(Page page, FullTransactionId safexid)
 {
@@ -533,17 +540,23 @@ BTreeTupleGetPostingOffset(IndexTuple posting)
 	return ItemPointerGetBlockNumberNoCheck(&posting->t_tid);
 }
 
-static inline ItemPointer
+static inline BTPostingItem
 BTreeTupleGetPosting(IndexTuple posting)
 {
-	return (ItemPointer) ((char *) posting +
+	return (BTPostingItem) ((char *) posting +
 						  BTreeTupleGetPostingOffset(posting));
 }
 
-static inline ItemPointer
+static inline BTPostingItem
 BTreeTupleGetPostingN(IndexTuple posting, int n)
 {
 	return BTreeTupleGetPosting(posting) + n;
+}
+
+static inline ItemPointer
+BTreeTupleGetPostingItemPointerN(IndexTuple posting, int n)
+{
+	return &(BTreeTupleGetPostingN(posting, n))->tid;
 }
 
 /*
@@ -649,7 +662,11 @@ BTreeTupleGetHeapTID(IndexTuple itup)
 		return NULL;
 	}
 	else if (BTreeTupleIsPosting(itup))
-		return BTreeTupleGetPosting(itup);
+	{
+		BTPostingItem item =  BTreeTupleGetPosting(itup);
+
+		return &item->tid;
+	}
 
 	return &itup->t_tid;
 }
@@ -669,7 +686,7 @@ BTreeTupleGetMaxHeapTID(IndexTuple itup)
 	{
 		uint16		nposting = BTreeTupleGetNPosting(itup);
 
-		return BTreeTupleGetPostingN(itup, nposting - 1);
+		return &(BTreeTupleGetPostingN(itup, nposting - 1)->tid);
 	}
 
 	return &itup->t_tid;
@@ -875,7 +892,7 @@ typedef struct BTDedupStateData
 	Size		basetupsize;	/* base size without original posting list */
 
 	/* Other metadata about pending posting list */
-	ItemPointer htids;			/* Heap TIDs in pending posting list */
+	BTPostingItem htids;		/* Heap TIDs in pending posting list */
 	int			nhtids;			/* Number of heap TIDs in htids array */
 	int			nitems;			/* Number of existing tuples/line pointers */
 	Size		phystupsize;	/* Includes line pointer overhead */
@@ -1165,7 +1182,7 @@ extern void _bt_dedup_start_pending(BTDedupState state, IndexTuple base,
 									OffsetNumber baseoff);
 extern bool _bt_dedup_save_htid(BTDedupState state, IndexTuple itup);
 extern Size _bt_dedup_finish_pending(Page newpage, BTDedupState state);
-extern IndexTuple _bt_form_posting(IndexTuple base, ItemPointer htids,
+extern IndexTuple _bt_form_posting(IndexTuple base, BTPostingItem htids,
 								   int nhtids);
 extern void _bt_update_posting(BTVacuumPosting vacposting);
 extern IndexTuple _bt_swap_posting(IndexTuple newitem, IndexTuple oposting,

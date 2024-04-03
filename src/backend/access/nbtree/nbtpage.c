@@ -1599,7 +1599,7 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 		nitem = BTreeTupleGetNPosting(itup);
 		for (int p = 0; p < nitem; p++)
 		{
-			ItemPointer ptid = BTreeTupleGetPostingN(itup, p);
+			BTPostingItem ptid = BTreeTupleGetPostingN(itup, p);
 			int			ptidcmp = -1;
 
 			/*
@@ -1623,7 +1623,7 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 					continue;
 
 				/* Entry is first partial ptid match (or an exact match)? */
-				ptidcmp = ItemPointerCompare(&tcdeltid->tid, ptid);
+				ptidcmp = ItemPointerCompare(&tcdeltid->tid, &ptid->tid);
 				if (ptidcmp >= 0)
 				{
 					/* Greater than or equal (partial or exact) match... */

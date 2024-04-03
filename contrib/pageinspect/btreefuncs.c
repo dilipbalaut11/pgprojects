@@ -592,15 +592,15 @@ bt_page_print_tuples(ua_page_items *uargs)
 	if (BTreeTupleIsPosting(itup))
 	{
 		/* Build an array of item pointers */
-		ItemPointer tids;
+		BTPostingItem items;
 		Datum	   *tids_datum;
 		int			nposting;
 
-		tids = BTreeTupleGetPosting(itup);
+		items = BTreeTupleGetPosting(itup);
 		nposting = BTreeTupleGetNPosting(itup);
 		tids_datum = (Datum *) palloc(nposting * sizeof(Datum));
 		for (int i = 0; i < nposting; i++)
-			tids_datum[i] = ItemPointerGetDatum(&tids[i]);
+			tids_datum[i] = ItemPointerGetDatum(&items[i].tid);
 		values[j++] = PointerGetDatum(construct_array_builtin(tids_datum, nposting, TIDOID));
 		pfree(tids_datum);
 	}

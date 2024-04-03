@@ -1055,7 +1055,7 @@ bt_entry_unique_check(BtreeCheckState *state, IndexTuple itup,
 	{
 		for (int i = 0; i < BTreeTupleGetNPosting(itup); i++)
 		{
-			tid = BTreeTupleGetPostingN(itup, i);
+			tid = &BTreeTupleGetPostingN(itup, i)->tid;
 			if (heap_entry_is_visible(state, tid))
 			{
 				has_visible_entry = true;
@@ -1540,7 +1540,7 @@ bt_target_page_check(BtreeCheckState *state)
 			for (int i = 1; i < BTreeTupleGetNPosting(itup); i++)
 			{
 
-				current = BTreeTupleGetPostingN(itup, i);
+				current = &BTreeTupleGetPostingN(itup, i)->tid;
 
 				if (ItemPointerCompare(current, &last) <= 0)
 				{

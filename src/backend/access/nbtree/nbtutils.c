@@ -1867,7 +1867,7 @@ _bt_killitems(IndexScanDesc scan)
 				 */
 				for (j = 0; j < nposting; j++)
 				{
-					ItemPointer item = BTreeTupleGetPostingN(ituple, j);
+					ItemPointer item = BTreeTupleGetPostingItemPointerN(ituple, j);
 
 					if (!ItemPointerEquals(item, &kitem->heapTid))
 						break;	/* out of posting list loop */

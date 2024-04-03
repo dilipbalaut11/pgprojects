@@ -1363,12 +1363,12 @@ btreevacuumposting(BTVacState *vstate, IndexTuple posting,
 {
 	int			live = 0;
 	int			nitem = BTreeTupleGetNPosting(posting);
-	ItemPointer items = BTreeTupleGetPosting(posting);
+	BTPostingItem items = BTreeTupleGetPosting(posting);
 	BTVacuumPosting vacposting = NULL;
 
 	for (int i = 0; i < nitem; i++)
 	{
-		if (!vstate->callback(items + i, vstate->callback_state))
+		if (!vstate->callback(&items[i].tid, vstate->callback_state))
 		{
 			/* Live table TID */
 			live++;

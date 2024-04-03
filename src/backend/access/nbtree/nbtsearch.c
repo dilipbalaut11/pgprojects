@@ -34,11 +34,11 @@ static bool _bt_readpage(IndexScanDesc scan, ScanDirection dir,
 static void _bt_saveitem(BTScanOpaque so, int itemIndex,
 						 OffsetNumber offnum, IndexTuple itup);
 static int	_bt_setuppostingitems(BTScanOpaque so, int itemIndex,
-								  OffsetNumber offnum, ItemPointer heapTid,
+								  OffsetNumber offnum, BTPostingItem item,
 								  IndexTuple itup);
 static inline void _bt_savepostingitem(BTScanOpaque so, int itemIndex,
 									   OffsetNumber offnum,
-									   ItemPointer heapTid, int tupleOffset);
+									   BTPostingItem item, int tupleOffset);
 static bool _bt_steppage(IndexScanDesc scan, ScanDirection dir);
 static bool _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno, ScanDirection dir);
 static bool _bt_parallel_readpage(IndexScanDesc scan, BlockNumber blkno,
@@ -637,7 +637,7 @@ _bt_binsrch_posting(BTScanInsert key, Page page, OffsetNumber offnum)
 	{
 		mid = low + ((high - low) / 2);
 		res = ItemPointerCompare(key->scantid,
-								 BTreeTupleGetPostingN(itup, mid));
+								 &BTreeTupleGetPostingN(itup, mid)->tid);
 
 		if (res > 0)
 			low = mid + 1;
@@ -1876,13 +1876,13 @@ _bt_saveitem(BTScanOpaque so, int itemIndex,
  */
 static int
 _bt_setuppostingitems(BTScanOpaque so, int itemIndex, OffsetNumber offnum,
-					  ItemPointer heapTid, IndexTuple itup)
+					  BTPostingItem item, IndexTuple itup)
 {
 	BTScanPosItem *currItem = &so->currPos.items[itemIndex];
 
 	Assert(BTreeTupleIsPosting(itup));
 
-	currItem->heapTid = *heapTid;
+	currItem->heapTid = item->tid;
 	currItem->indexOffset = offnum;
 	if (so->currTuples)
 	{
@@ -1914,11 +1914,11 @@ _bt_setuppostingitems(BTScanOpaque so, int itemIndex, OffsetNumber offnum,
  */
 static inline void
 _bt_savepostingitem(BTScanOpaque so, int itemIndex, OffsetNumber offnum,
-					ItemPointer heapTid, int tupleOffset)
+					BTPostingItem item, int tupleOffset)
 {
 	BTScanPosItem *currItem = &so->currPos.items[itemIndex];
 
-	currItem->heapTid = *heapTid;
+	currItem->heapTid = item->tid;
 	currItem->indexOffset = offnum;
 
 	/*

@@ -443,7 +443,7 @@ _bt_dedup_start_pending(BTDedupState state, IndexTuple base,
 	 */
 	if (!BTreeTupleIsPosting(base))
 	{
-		memcpy(state->htids, &base->t_tid, sizeof(ItemPointerData));
+		memcpy(&state->htids->tid, &base->t_tid, sizeof(ItemPointerData));
 		state->nhtids = 1;
 		state->basetupsize = IndexTupleSize(base);
 	}
@@ -453,7 +453,7 @@ _bt_dedup_start_pending(BTDedupState state, IndexTuple base,
 
 		nposting = BTreeTupleGetNPosting(base);
 		memcpy(state->htids, BTreeTupleGetPosting(base),
-			   sizeof(ItemPointerData) * nposting);
+			   sizeof(BTPostingItemData) * nposting);
 		state->nhtids = nposting;
 		/* basetupsize should not include existing posting list */
 		state->basetupsize = BTreeTupleGetPostingOffset(base);
@@ -484,15 +484,18 @@ bool
 _bt_dedup_save_htid(BTDedupState state, IndexTuple itup)
 {
 	int			nhtids;
-	ItemPointer htids;
+	BTPostingItem htids;
 	Size		mergedtupsz;
 
 	Assert(!BTreeTupleIsPivot(itup));
 
 	if (!BTreeTupleIsPosting(itup))
 	{
+		BTPostingItemData	item;
+
 		nhtids = 1;
-		htids = &itup->t_tid;
+		item.tid = itup->t_tid;
+		htids = &item;
 	}
 	else
 	{
@@ -508,7 +511,7 @@ _bt_dedup_save_htid(BTDedupState state, IndexTuple itup)
 	 * for new posting list tuples.
 	 */
 	mergedtupsz = MAXALIGN(state->basetupsize +
-						   (state->nhtids + nhtids) * sizeof(ItemPointerData));
+						   (state->nhtids + nhtids) * sizeof(BTPostingItemData));
 
 	if (mergedtupsz > state->maxpostingsize)
 	{
@@ -536,7 +539,7 @@ _bt_dedup_save_htid(BTDedupState state, IndexTuple itup)
 	 */
 	state->nitems++;
 	memcpy(state->htids + state->nhtids, htids,
-		   sizeof(ItemPointerData) * nhtids);
+		   sizeof(BTPostingItemData) * nhtids);
 	state->nhtids += nhtids;
 	state->phystupsize += MAXALIGN(IndexTupleSize(itup)) + sizeof(ItemIdData);
 
@@ -707,7 +710,7 @@ _bt_bottomupdel_finish_pending(Page page, BTDedupState state,
 							maxtid;
 
 				mintid = BTreeTupleGetHeapTID(itup);
-				midtid = BTreeTupleGetPostingN(itup, nitem / 2);
+				midtid = &(BTreeTupleGetPostingN(itup, nitem / 2)->tid);
 				maxtid = BTreeTupleGetMaxHeapTID(itup);
 				minblocklist = ItemPointerGetBlockNumber(mintid);
 				midblocklist = ItemPointerGetBlockNumber(midtid);
@@ -721,9 +724,9 @@ _bt_bottomupdel_finish_pending(Page page, BTDedupState state,
 
 			for (int p = 0; p < nitem; p++)
 			{
-				ItemPointer htid = BTreeTupleGetPostingN(itup, p);
+				BTPostingItem	item = BTreeTupleGetPostingN(itup, p);
 
-				ideltid->tid = *htid;
+				ideltid->tid = item->tid;
 				ideltid->id = delstate->ndeltids;
 				istatus->idxoffnum = offnum;
 				istatus->knowndeletable = false;	/* for now */
@@ -861,7 +864,7 @@ _bt_singleval_fillfactor(Page page, BTDedupState state, Size newitemsz)
  * returned posting list tuple (they must be included in htids array.)
  */
 IndexTuple
-_bt_form_posting(IndexTuple base, ItemPointer htids, int nhtids)
+_bt_form_posting(IndexTuple base, BTPostingItem htids, int nhtids)
 {
 	uint32		keysize,
 				newsize;
@@ -879,7 +882,7 @@ _bt_form_posting(IndexTuple base, ItemPointer htids, int nhtids)
 	/* Determine final size of new tuple */
 	if (nhtids > 1)
 		newsize = MAXALIGN(keysize +
-						   nhtids * sizeof(ItemPointerData));
+						   nhtids * sizeof(BTPostingItemData));
 	else
 		newsize = keysize;
 
@@ -896,14 +899,14 @@ _bt_form_posting(IndexTuple base, ItemPointer htids, int nhtids)
 		/* Form posting list tuple */
 		BTreeTupleSetPosting(itup, nhtids, keysize);
 		memcpy(BTreeTupleGetPosting(itup), htids,
-			   sizeof(ItemPointerData) * nhtids);
+			   sizeof(BTPostingItemData) * nhtids);
 		Assert(_bt_posting_valid(itup));
 	}
 	else
 	{
 		/* Form standard non-pivot tuple */
 		itup->t_info &= ~INDEX_ALT_TID_MASK;
-		ItemPointerCopy(htids, &itup->t_tid);
+		ItemPointerCopy(&htids->tid, &itup->t_tid);
 		Assert(ItemPointerIsValid(&itup->t_tid));
 	}
 
@@ -930,7 +933,7 @@ _bt_update_posting(BTVacuumPosting vacposting)
 	int			nhtids;
 	int			ui,
 				d;
-	ItemPointer htids;
+	BTPostingItem	htids;
 
 	nhtids = BTreeTupleGetNPosting(origtuple) - vacposting->ndeletedtids;
 
@@ -947,7 +950,7 @@ _bt_update_posting(BTVacuumPosting vacposting)
 	keysize = BTreeTupleGetPostingOffset(origtuple);
 	if (nhtids > 1)
 		newsize = MAXALIGN(keysize +
-						   nhtids * sizeof(ItemPointerData));
+						   nhtids * sizeof(BTPostingItemData));
 	else
 		newsize = keysize;
 
@@ -970,19 +973,24 @@ _bt_update_posting(BTVacuumPosting vacposting)
 	{
 		/* Form standard non-pivot tuple */
 		itup->t_info &= ~INDEX_ALT_TID_MASK;
-		htids = &itup->t_tid;
 	}
 
 	ui = 0;
 	d = 0;
 	for (int i = 0; i < BTreeTupleGetNPosting(origtuple); i++)
 	{
+		BTPostingItem	htid;
+
 		if (d < vacposting->ndeletedtids && vacposting->deletetids[d] == i)
 		{
 			d++;
 			continue;
 		}
-		htids[ui++] = *BTreeTupleGetPostingN(origtuple, i);
+		htid = BTreeTupleGetPostingN(origtuple, i);
+		if (nhtids > 1)
+			htids[ui++] = *htid;
+		else
+			itup->t_tid = htid->tid;
 	}
 	Assert(ui == nhtids);
 	Assert(d == vacposting->ndeletedtids);
@@ -1052,12 +1060,12 @@ _bt_swap_posting(IndexTuple newitem, IndexTuple oposting, int postingoff)
 	nposting = CopyIndexTuple(oposting);
 	replacepos = (char *) BTreeTupleGetPostingN(nposting, postingoff);
 	replaceposright = (char *) BTreeTupleGetPostingN(nposting, postingoff + 1);
-	nmovebytes = (nhtids - postingoff - 1) * sizeof(ItemPointerData);
+	nmovebytes = (nhtids - postingoff - 1) * sizeof(BTPostingItemData);
 	memmove(replaceposright, replacepos, nmovebytes);
 
 	/* Fill the gap at postingoff with TID of new item (original new TID) */
 	Assert(!BTreeTupleIsPivot(newitem) && !BTreeTupleIsPosting(newitem));
-	ItemPointerCopy(&newitem->t_tid, (ItemPointer) replacepos);
+	ItemPointerCopy(&newitem->t_tid, &((BTPostingItem)replacepos)->tid);
 
 	/* Now copy oposting's rightmost/max TID into new item (final new TID) */
 	ItemPointerCopy(BTreeTupleGetMaxHeapTID(oposting), &newitem->t_tid);
@@ -1078,7 +1086,7 @@ static bool
 _bt_posting_valid(IndexTuple posting)
 {
 	ItemPointerData last;
-	ItemPointer htid;
+	BTPostingItem	item;
 
 	if (!BTreeTupleIsPosting(posting) || BTreeTupleGetNPosting(posting) < 2)
 		return false;
@@ -1091,13 +1099,13 @@ _bt_posting_valid(IndexTuple posting)
 	/* Iterate, starting from second TID */
 	for (int i = 1; i < BTreeTupleGetNPosting(posting); i++)
 	{
-		htid = BTreeTupleGetPostingN(posting, i);
+		item = BTreeTupleGetPostingN(posting, i);
 
-		if (!ItemPointerIsValid(htid))
+		if (!ItemPointerIsValid(&item->tid))
 			return false;
-		if (ItemPointerCompare(htid, &last) <= 0)
+		if (ItemPointerCompare(&item->tid, &last) <= 0)
 			return false;
-		ItemPointerCopy(htid, &last);
+		ItemPointerCopy(&item->tid, &last);
 	}
 
 	return true;

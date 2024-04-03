@@ -1247,7 +1247,7 @@ global_index_itup_fetch_heap_oid(Relation index, IndexTuple itup)
 	Datum		datum;
 	bool		isNull;
 	Oid 		heapOid_index;
-	int 		indnatts = IndexRelationGetNumberOfAttributes(index);
+	int 		indnatts = IndexRelationGetNumberOfKeyAttributes(index) + 1;
 	TupleDesc	tupleDesc = RelationGetDescr(index);
 
 	Assert(RelationIsGlobalIndex(index));

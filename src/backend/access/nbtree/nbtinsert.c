@@ -2850,6 +2850,11 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 	/* Get array of table blocks pointed to by LP_DEAD-set tuples */
 	deadblocks = _bt_deadblocks(page, deletable, ndeletable, newitem,
 								&ndeadblocks);
+	/*
+	 * TODO_GI: Here the output should include partion_id + block_number
+	 * because for global index block number alone doesn't provide meaningful
+	 * information.  And should also be sorted by partid+BlockNumber Key.
+	 */
 
 	/* Initialize tableam state that describes index deletion operation */
 	delstate.irel = rel;
@@ -2860,6 +2865,18 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 	delstate.deltids = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexDelete));
 	delstate.status = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexStatus));
 
+	/*
+	 * TODO_GI: We need to refactor our code so that all TM_IndexDelete items
+	 * corresponding to a partition are grouped together. And We also need to
+	 * introduce a mapping structure that tracks the partition ID along with
+	 * its starting index within the TM_IndexDelete array.  Furthermore, it's
+	 * crucial to maintain the TM_IndexStatus array in sync with the
+	 * TM_IndexDelete array's order.
+	 *
+	 * It may be challenging to generate these arrays in partition order
+	 * initially, so we may require an additional sorting step to rearrange
+	 * them in partition ID order.
+	 */
 	for (offnum = minoff;
 		 offnum <= maxoff;
 		 offnum = OffsetNumberNext(offnum))
@@ -2936,6 +2953,39 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 	pfree(deadblocks);
 
 	Assert(delstate.ndeltids >= ndeletable);
+
+	/*
+	 * TODO_GI: this will be loop for on the number of partition ids for which
+	 * we have deltids and then accordinglt we will have to change the
+	 * delstate.ndeltids so that _bt_delitems_delete_check() only process the
+	 * items w.r.t. its own partition and also pass a valid partition rel
+	 * instead of heapRel.
+	 * 
+	 * PSEUDOCODE:
+	 * partition info structure might be something like this
+	 * IndexDeletePartInfo
+	 * {
+	 * 	  uint32 partid;
+	 * 	  uint32 deltididx; //start index inside delstate
+	 * }
+	 * 
+	 * curidx = 0;
+	 * //preserve the original pointer as it will change in a loop
+	 * prevdeltids = delstate.deltids;
+	 * prevstatus = delstate.status;
+	 *
+	 * LOOP: foreach partition
+	 *  // point to deltid and status to our partition's deltids and status
+	 * 	delstate.deltids = delstate.deltids + curidx;
+	 *  delstate.status = delstate.status + curidx;
+	 * 	delstate.ndeltids = next_partinfo.deltididx;
+	 *  curidx += delstate.ndeltids;
+	 * 	 _bt_delitems_delete_check(rel, buffer, partRel, &delstate);
+	 * END LOOP
+	 * // restore the original pointers
+	 * delstate.deltids = prevdeltids;
+	 * delstate.status = prevstatus;
+	 */
 
 	/* Physically delete LP_DEAD tuples (plus any delete-safe extra TIDs) */
 	_bt_delitems_delete_check(rel, buffer, heapRel, &delstate);

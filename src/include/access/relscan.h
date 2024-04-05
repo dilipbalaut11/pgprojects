@@ -146,6 +146,11 @@ typedef struct IndexScanDescData
 	HeapTuple	xs_hitup;		/* index data returned by AM, as HeapTuple */
 	struct TupleDescData *xs_hitupdesc; /* rowtype descriptor of xs_hitup */
 
+	/*
+	 * TODO_GI: also store the partition id along wiht the heaptid.  With that
+	 * in index_getnext_slot() we don't need to fetch partid from the index
+	 * tuple.
+	 */
 	ItemPointerData xs_heaptid; /* result */
 	bool		xs_heap_continue;	/* T if must keep walking, potential
 									 * further results */

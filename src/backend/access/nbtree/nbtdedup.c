@@ -360,6 +360,20 @@ _bt_bottomupdel_pass(Relation rel, Buffer buf, Relation heapRel,
 
 	minoff = P_FIRSTDATAKEY(opaque);
 	maxoff = PageGetMaxOffsetNumber(page);
+
+	/*
+	 * TODO_GI: As part of the previous refactoring, BTDedupState now stores
+	 * duplicates as an array of BTPostingItem instead of an array of
+	 * ItemPointer. This change allows us to include the partition id inside
+	 * BTPostingItem along with the ItemPointer.  But we will need to change
+	 * the logic inside _bt_bottomupdel_finish_pending() where we are preparing
+	 * TM_IndexDelete and TM_IndexStatus arrays, mostly these changes should be
+	 * same as what we are doing inside bt_simpledel_pass().
+	 *
+	 * XXX inside posting list do we need to store the items in partition id
+	 * order and more than that inside index pages do we need to arrange items
+	 * in partition id order, so far I did't find any need for this.
+	 */
 	for (offnum = minoff;
 		 offnum <= maxoff;
 		 offnum = OffsetNumberNext(offnum))

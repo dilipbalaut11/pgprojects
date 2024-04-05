@@ -892,6 +892,9 @@ typedef struct BTDedupStateData
 	Size		basetupsize;	/* base size without original posting list */
 
 	/* Other metadata about pending posting list */
+	/*
+	 * TODO_GI: Rename htids/nhtids to somthing like posting items?
+	 */
 	BTPostingItem htids;		/* Heap TIDs in pending posting list */
 	int			nhtids;			/* Number of heap TIDs in htids array */
 	int			nitems;			/* Number of existing tuples/line pointers */

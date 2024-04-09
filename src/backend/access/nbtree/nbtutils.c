@@ -164,6 +164,13 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 	key->keysz = Min(indnkeyatts, tupnatts);
 	key->scantid = key->heapkeyspace && itup ?
 		BTreeTupleGetHeapTID(itup) : NULL;
+
+	/* For global indexes also fetch the partition ID along with heaptid */
+	if (RelationIsGlobalIndex(rel) && itup)
+		key->partid = BTreeTupleGetPartID(rel, itup);
+	else
+		key->partid = InvalidOid;
+
 	skey = key->scankeys;
 	for (i = 0; i < indnkeyatts; i++)
 	{

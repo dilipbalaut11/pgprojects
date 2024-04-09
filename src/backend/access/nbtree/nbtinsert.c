@@ -107,6 +107,7 @@ _bt_doinsert(Relation rel, IndexTuple itup,
 	BTInsertStateData insertstate;
 	BTScanInsert itup_key;
 	BTStack		stack;
+	Oid			partid;
 	bool		checkingunique = (checkUnique != UNIQUE_CHECK_NO);
 
 	/* we need an insertion scan key to do our search, so build one */
@@ -117,6 +118,8 @@ _bt_doinsert(Relation rel, IndexTuple itup,
 		if (!itup_key->anynullkeys)
 		{
 			/* No (heapkeyspace) scantid until uniqueness established */
+			partid = itup_key->partid;
+			itup_key->partid = InvalidOid;
 			itup_key->scantid = NULL;
 		}
 		else
@@ -235,6 +238,8 @@ search:
 		/* Uniqueness is established -- restore heap tid as scantid */
 		if (itup_key->heapkeyspace)
 			itup_key->scantid = &itup->t_tid;
+
+		itup_key->partid = partid;
 	}
 
 	if (checkUnique != UNIQUE_CHECK_EXISTING)
@@ -468,6 +473,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 	Assert(!insertstate->bounds_valid || insertstate->low == offset);
 	Assert(!itup_key->anynullkeys);
 	Assert(itup_key->scantid == NULL);
+	Assert(!OidIsValid(itup_key->partid));
 	for (;;)
 	{
 		/*
@@ -858,6 +864,8 @@ _bt_findinsertloc(Relation rel,
 
 	Assert(P_ISLEAF(opaque) && !P_INCOMPLETE_SPLIT(opaque));
 	Assert(!insertstate->bounds_valid || checkingunique);
+	Assert(!RelationIsGlobalIndex(rel) || OidIsValid(key->partid));
+	Assert(RelationIsGlobalIndex(rel) || !OidIsValid(key->partid));
 	Assert(!itup_key->heapkeyspace || itup_key->scantid != NULL);
 	Assert(itup_key->heapkeyspace || itup_key->scantid == NULL);
 	Assert(!itup_key->allequalimage || itup_key->heapkeyspace);

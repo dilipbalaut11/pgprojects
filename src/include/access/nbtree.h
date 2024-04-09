@@ -654,6 +654,50 @@ BTreeTupleGetHeapTID(IndexTuple itup)
 	return &itup->t_tid;
 }
 
+static inline Oid
+BTreeTupleGetPartID(Relation index, IndexTuple itup)
+{
+	if (BTreeTupleIsPivot(itup))
+	{
+		/* Pivot tuple heap TID representation? */
+		if ((ItemPointerGetOffsetNumberNoCheck(&itup->t_tid) &
+			 BT_PIVOT_HEAP_TID_ATTR) != 0)
+			return *((Oid *) ((char *) itup + IndexTupleSize(itup) -
+							  (sizeof(Oid) + sizeof(ItemPointerData))));
+
+		/* Part ID attribute was truncated */
+		return InvalidOid;
+	}
+	else
+	{
+		Datum		datum;
+		bool		isNull;
+		Oid 		partid;
+		int 		indnatts = IndexRelationGetNumberOfAttributes(index);
+		TupleDesc	tupleDesc = RelationGetDescr(index);
+
+		Assert(RelationIsGlobalIndex(index));
+
+		datum = index_getattr(itup, indnatts, tupleDesc, &isNull);
+		Assert(!isNull);
+		partid = DatumGetObjectId(datum);
+		Assert(OidIsValid(heapOid_index));
+
+		return partid;
+	}
+}
+
+static inline int32
+BTreePartIDCompare(Oid partid1, Oid partid2)
+{
+	if (partid1 < partid2)
+		return -1;
+	else if (partid1 > partid2)
+		return 1;
+	else
+		return 0;
+}
+
 /*
  * Get maximum heap TID attribute, which could be the only TID in the case of
  * a non-pivot tuple that does not have a posting list.
@@ -788,6 +832,7 @@ typedef struct BTScanInsertData
 	bool		anynullkeys;
 	bool		nextkey;
 	bool		backward;		/* backward index scan? */
+	Oid			partid;			/* tiebreaker only for global indexes */
 	ItemPointer scantid;		/* tiebreaker for scankeys */
 	int			keysz;			/* Size of scankeys array */
 	ScanKeyData scankeys[INDEX_MAX_KEYS];	/* Must appear last */

@@ -4681,6 +4681,17 @@ _bt_truncate(Relation rel, IndexTuple lastleft, IndexTuple firstright,
 	keepnatts = nkeyatts + 1;
 #endif
 
+	/*
+	 * For global indexes for suffix truncation purpose also consider the
+	 * part-id column as key atrribute so that this will only get truncated
+	 * away if remaining keyspace is sufficient to uniquly identify the
+	 * lastleft and the firstright, otherwise part-id has to be part of the
+	 * tuple and if the part-id is also same then we would include the heaptid
+	 * as well.
+	 */
+	if (RelationIsGlobalIndex(rel))
+		nkeyatts += 1;
+
 	pivot = index_truncate_tuple(itupdesc, firstright,
 								 Min(keepnatts, nkeyatts));
 
@@ -4807,6 +4818,7 @@ _bt_keep_natts(Relation rel, IndexTuple lastleft, IndexTuple firstright,
 	int			nkeyatts = IndexRelationGetNumberOfKeyAttributes(rel);
 	TupleDesc	itupdesc = RelationGetDescr(rel);
 	int			keepnatts;
+	int			ncmpatts;
 	ScanKey		scankey;
 
 	/*
@@ -4817,9 +4829,18 @@ _bt_keep_natts(Relation rel, IndexTuple lastleft, IndexTuple firstright,
 	if (!itup_key->heapkeyspace)
 		return nkeyatts;
 
+	/*
+	 * For global indexes also compare the partid stored right after the key
+	 * attributes.
+	 */
+	if (RelationIsGlobalIndex(rel))
+		ncmpatts = nkeyatts + 1;
+	else
+		ncmpatts = nkeyatts;
+
 	scankey = itup_key->scankeys;
 	keepnatts = 1;
-	for (int attnum = 1; attnum <= nkeyatts; attnum++, scankey++)
+	for (int attnum = 1; attnum <= ncmpatts; attnum++, scankey++)
 	{
 		Datum		datum1,
 					datum2;
@@ -4832,11 +4853,16 @@ _bt_keep_natts(Relation rel, IndexTuple lastleft, IndexTuple firstright,
 		if (isNull1 != isNull2)
 			break;
 
-		if (!isNull1 &&
-			DatumGetInt32(FunctionCall2Coll(&scankey->sk_func,
-											scankey->sk_collation,
-											datum1,
-											datum2)) != 0)
+		if (ncmpatts > nkeyatts)
+		{
+			if (DatumGetObjectId(datum1) != DatumGetObjectId(datum2))
+				break;
+		}
+		else if (!isNull1 &&
+				 DatumGetInt32(FunctionCall2Coll(&scankey->sk_func,
+												 scankey->sk_collation,
+												 datum1,
+												 datum2)) != 0)
 			break;
 
 		keepnatts++;

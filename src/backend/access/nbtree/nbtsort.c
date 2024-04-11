@@ -472,9 +472,10 @@ _bt_spools_heapscan(Relation heap, Relation index, BTBuildState *buildstate,
 	}
 
 	/*
-	 * FIXME: here we need to pull tuple from all the parititons.
+	 * If this table is partitioned, it indicates that we are building a
+	 * global index. Therefore, we need to scan all the child partitions to
+	 * build this global index.
 	 */
-#if 0
 	if (heap->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
 		PartitionDesc partdesc = RelationGetPartitionDesc(heap, true);
@@ -492,11 +493,9 @@ _bt_spools_heapscan(Relation heap, Relation index, BTBuildState *buildstate,
 			reltuples += table_index_build_scan(childrel, index, indexInfo, true,
 												true, _bt_build_callback,
 												(void *) buildstate, NULL);
+			table_close(childrel, AccessShareLock);
 		}
 	}
-#endif
-	if (heap->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		reltuples = 0;
 	/* Fill spool using either serial or parallel heap scan */
 	else if (!buildstate->btleader)
 		reltuples = table_index_build_scan(heap, index, indexInfo, true, true,
@@ -1177,6 +1176,15 @@ _bt_load(BTWriteState *wstate, BTSpool *btspool, BTSpool *btspool2)
 
 	deduplicate = wstate->inskey->allequalimage && !btspool->isunique &&
 		BTGetDeduplicateItems(wstate->index);
+
+	/*
+	 * When creating global indexes, include the partition ID as part of the
+	 * sort key along with the index keys. Also, consider this partition ID
+	 * during deduplication, as deduplication should not occur across different
+	 * partitions.
+	 */
+	if (RelationIsGlobalIndex(wstate->index))
+		keysz += 1;
 
 	if (merge)
 	{

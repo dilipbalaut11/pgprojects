@@ -17,6 +17,7 @@
 
 #include "access/nbtree.h"
 #include "access/nbtxlog.h"
+#include "access/table.h"
 #include "access/transam.h"
 #include "access/xloginsert.h"
 #include "common/int.h"
@@ -29,6 +30,11 @@
 /* Minimum tree height for application of fastpath optimization */
 #define BTREE_FASTPATH_MIN_LEVEL	2
 
+typedef struct BTHeapBlockInfo
+{
+	Oid			partid;
+	BlockNumber	blockno;
+} BTHeapBlockInfo;
 
 static BTStack _bt_search_insert(Relation rel, Relation heaprel,
 								 BTInsertState insertstate);
@@ -70,10 +76,12 @@ static void _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 							   OffsetNumber *deletable, int ndeletable,
 							   IndexTuple newitem, OffsetNumber minoff,
 							   OffsetNumber maxoff);
-static BlockNumber *_bt_deadblocks(Page page, OffsetNumber *deletable,
-								   int ndeletable, IndexTuple newitem,
-								   int *nblocks);
+static BTHeapBlockInfo* _bt_deadblocks(Relation rel, Page page,
+									   OffsetNumber *deletable,
+									   int ndeletable, IndexTuple newitem,
+									   int *nblocks);
 static inline int _bt_blk_cmp(const void *arg1, const void *arg2);
+static inline int _bt_indexdel_cmp(const void *arg1, const void *arg2);
 
 /*
  *	_bt_doinsert() -- Handle insertion of a single index tuple in the tree.
@@ -2847,13 +2855,13 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 				   OffsetNumber minoff, OffsetNumber maxoff)
 {
 	Page		page = BufferGetPage(buffer);
-	BlockNumber *deadblocks;
+	BTHeapBlockInfo *deadblocks;
 	int			ndeadblocks;
 	TM_IndexDeleteOp delstate;
 	OffsetNumber offnum;
 
 	/* Get array of table blocks pointed to by LP_DEAD-set tuples */
-	deadblocks = _bt_deadblocks(page, deletable, ndeletable, newitem,
+	deadblocks = _bt_deadblocks(rel, page, deletable, ndeletable, newitem,
 								&ndeadblocks);
 
 	/* Initialize tableam state that describes index deletion operation */
@@ -2873,14 +2881,16 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 		IndexTuple	itup = (IndexTuple) PageGetItem(page, itemid);
 		TM_IndexDelete *odeltid = &delstate.deltids[delstate.ndeltids];
 		TM_IndexStatus *ostatus = &delstate.status[delstate.ndeltids];
-		BlockNumber tidblock;
+		BTHeapBlockInfo tidblock;
 		void	   *match;
 
 		if (!BTreeTupleIsPosting(itup))
 		{
-			tidblock = ItemPointerGetBlockNumber(&itup->t_tid);
+			tidblock.blockno = ItemPointerGetBlockNumber(&itup->t_tid);
+			tidblock.partid = (RelationIsGlobalIndex(rel)) ?
+								BTreeTupleGetPartID(rel, itup) : InvalidOid;
 			match = bsearch(&tidblock, deadblocks, ndeadblocks,
-							sizeof(BlockNumber), _bt_blk_cmp);
+							sizeof(BTHeapBlockInfo), _bt_blk_cmp);
 
 			if (!match)
 			{
@@ -2892,6 +2902,7 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 			 * TID's table block is among those pointed to by the TIDs from
 			 * LP_DEAD-bit set tuples on page -- add TID to deltids
 			 */
+			odeltid->partid = tidblock.partid;
 			odeltid->tid = itup->t_tid;
 			odeltid->id = delstate.ndeltids;
 			ostatus->idxoffnum = offnum;
@@ -2904,14 +2915,18 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 		else
 		{
 			int			nitem = BTreeTupleGetNPosting(itup);
+			Oid			partid = (RelationIsGlobalIndex(rel)) ?
+								BTreeTupleGetPartID(rel, itup) : InvalidOid;
 
 			for (int p = 0; p < nitem; p++)
 			{
 				ItemPointer tid = BTreeTupleGetPostingN(itup, p);
 
-				tidblock = ItemPointerGetBlockNumber(tid);
+				tidblock.blockno = ItemPointerGetBlockNumber(&itup->t_tid);
+				tidblock.partid = partid;
+
 				match = bsearch(&tidblock, deadblocks, ndeadblocks,
-								sizeof(BlockNumber), _bt_blk_cmp);
+								sizeof(BTHeapBlockInfo), _bt_blk_cmp);
 
 				if (!match)
 				{
@@ -2923,6 +2938,7 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 				 * TID's table block is among those pointed to by the TIDs
 				 * from LP_DEAD-bit set tuples on page -- add TID to deltids
 				 */
+				odeltid->partid = partid;
 				odeltid->tid = *tid;
 				odeltid->id = delstate.ndeltids;
 				ostatus->idxoffnum = offnum;
@@ -2941,8 +2957,48 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 
 	Assert(delstate.ndeltids >= ndeletable);
 
-	/* Physically delete LP_DEAD tuples (plus any delete-safe extra TIDs) */
-	_bt_delitems_delete_check(rel, buffer, heapRel, &delstate);
+	/*
+	 * For global index we need to delete the items for each partition
+	 * separately.
+	 */
+	if (RelationIsGlobalIndex(rel))
+	{
+		int		ndeltid;
+		int		starttid = 0;
+		Oid		prevpartid = InvalidOid;
+		TM_IndexDeleteOp partdelstate = delstate;
+
+		/*
+		 * Sort the deleted item in part-id order and then process the items
+		 * partition at a time.
+		 */
+		qsort(delstate.deltids, delstate.ndeltids, sizeof(TM_IndexDelete),
+			  _bt_indexdel_cmp);
+
+		prevpartid = delstate.deltids[0].partid;
+		for (ndeltid = 0; ndeltid < delstate.ndeltids; ndeltid++)
+		{
+			if (OidIsValid(prevpartid) &&
+				delstate.deltids[ndeltid].partid != prevpartid)
+			{
+				Relation childRel = table_open(prevpartid, AccessShareLock);
+
+				partdelstate.deltids = &delstate.deltids[starttid];
+				partdelstate.ndeltids = ndeltid - starttid;
+
+				_bt_delitems_delete_check(rel, buffer, childRel,
+										  &partdelstate);
+				starttid = ndeltid;
+			}
+
+			prevpartid = delstate.deltids[ndeltid].partid;
+		}
+	}
+	else
+	{
+		/* Physically delete LP_DEAD tuples (plus any delete-safe extra TIDs) */
+		_bt_delitems_delete_check(rel, buffer, heapRel, &delstate);
+	}
 
 	pfree(delstate.deltids);
 	pfree(delstate.status);
@@ -2967,13 +3023,13 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
  *
  * Returns final array, and sets *nblocks to its final size for caller.
  */
-static BlockNumber *
-_bt_deadblocks(Page page, OffsetNumber *deletable, int ndeletable,
+static BTHeapBlockInfo *
+_bt_deadblocks(Relation rel, Page page, OffsetNumber *deletable, int ndeletable,
 			   IndexTuple newitem, int *nblocks)
 {
 	int			spacentids,
 				ntids;
-	BlockNumber *tidblocks;
+	BTHeapBlockInfo *tidblocks;
 
 	/*
 	 * Accumulate each TID's block in array whose initial size has space for
@@ -2983,7 +3039,7 @@ _bt_deadblocks(Page page, OffsetNumber *deletable, int ndeletable,
 	 */
 	spacentids = ndeletable + 1;
 	ntids = 0;
-	tidblocks = (BlockNumber *) palloc(sizeof(BlockNumber) * spacentids);
+	tidblocks = (BTHeapBlockInfo *) palloc(sizeof(BTHeapBlockInfo) * spacentids);
 
 	/*
 	 * First add the table block for the incoming newitem.  This is the one
@@ -2991,7 +3047,9 @@ _bt_deadblocks(Page page, OffsetNumber *deletable, int ndeletable,
 	 * any known deletable items.
 	 */
 	Assert(!BTreeTupleIsPosting(newitem) && !BTreeTupleIsPivot(newitem));
-	tidblocks[ntids++] = ItemPointerGetBlockNumber(&newitem->t_tid);
+	tidblocks[ntids].blockno = ItemPointerGetBlockNumber(&newitem->t_tid);
+	tidblocks[ntids++].partid = (RelationIsGlobalIndex(rel)) ?
+							BTreeTupleGetPartID(rel, newitem) : InvalidOid;
 
 	for (int i = 0; i < ndeletable; i++)
 	{
@@ -3005,34 +3063,39 @@ _bt_deadblocks(Page page, OffsetNumber *deletable, int ndeletable,
 			if (ntids + 1 > spacentids)
 			{
 				spacentids *= 2;
-				tidblocks = (BlockNumber *)
-					repalloc(tidblocks, sizeof(BlockNumber) * spacentids);
+				tidblocks = (BTHeapBlockInfo *)
+					repalloc(tidblocks, sizeof(BTHeapBlockInfo) * spacentids);
 			}
 
-			tidblocks[ntids++] = ItemPointerGetBlockNumber(&itup->t_tid);
+			tidblocks[ntids].blockno = ItemPointerGetBlockNumber(&itup->t_tid);
+			tidblocks[ntids++].partid = (RelationIsGlobalIndex(rel)) ?
+								BTreeTupleGetPartID(rel, itup) : InvalidOid;
 		}
 		else
 		{
 			int			nposting = BTreeTupleGetNPosting(itup);
+			Oid			partid = (RelationIsGlobalIndex(rel)) ?
+								BTreeTupleGetPartID(rel, itup) : InvalidOid;
 
 			if (ntids + nposting > spacentids)
 			{
 				spacentids = Max(spacentids * 2, ntids + nposting);
-				tidblocks = (BlockNumber *)
-					repalloc(tidblocks, sizeof(BlockNumber) * spacentids);
+				tidblocks = (BTHeapBlockInfo *)
+					repalloc(tidblocks, sizeof(BTHeapBlockInfo) * spacentids);
 			}
 
 			for (int j = 0; j < nposting; j++)
 			{
 				ItemPointer tid = BTreeTupleGetPostingN(itup, j);
 
-				tidblocks[ntids++] = ItemPointerGetBlockNumber(tid);
+				tidblocks[ntids].blockno = ItemPointerGetBlockNumber(tid);
+				tidblocks[ntids++].partid = partid;
 			}
 		}
 	}
 
-	qsort(tidblocks, ntids, sizeof(BlockNumber), _bt_blk_cmp);
-	*nblocks = qunique(tidblocks, ntids, sizeof(BlockNumber), _bt_blk_cmp);
+	qsort(tidblocks, ntids, sizeof(BTHeapBlockInfo), _bt_blk_cmp);
+	*nblocks = qunique(tidblocks, ntids, sizeof(BTHeapBlockInfo), _bt_blk_cmp);
 
 	return tidblocks;
 }
@@ -3043,8 +3106,25 @@ _bt_deadblocks(Page page, OffsetNumber *deletable, int ndeletable,
 static inline int
 _bt_blk_cmp(const void *arg1, const void *arg2)
 {
-	BlockNumber b1 = *((BlockNumber *) arg1);
-	BlockNumber b2 = *((BlockNumber *) arg2);
+	BTHeapBlockInfo *b1 = ((BTHeapBlockInfo *) arg1);
+	BTHeapBlockInfo *b2 = ((BTHeapBlockInfo *) arg2);
+	int	res;
 
-	return pg_cmp_u32(b1, b2);
+	/* first compare partid if they are same those compare the block number. */
+	res = pg_cmp_u32(b1->partid, b2->partid);
+	if (res == 0)
+		res = pg_cmp_u32(b1->blockno, b2->blockno);
+	return res;
+}
+
+/*
+ * _bt_indexdel_cmp() -- qsort comparison function for _bt_simpledel_pass
+ */
+static inline int
+_bt_indexdel_cmp(const void *arg1, const void *arg2)
+{
+	TM_IndexDelete *b1 = ((TM_IndexDelete *) arg1);
+	TM_IndexDelete *b2 = ((TM_IndexDelete *) arg2);
+
+	return pg_cmp_u32(b1->partid, b2->partid);
 }

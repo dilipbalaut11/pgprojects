@@ -210,6 +210,7 @@ typedef struct TM_FailureData
  */
 typedef struct TM_IndexDelete
 {
+	Oid			partid;			/* partition id for global indexes only */
 	ItemPointerData tid;		/* table TID from index tuple */
 	int16		id;				/* Offset into TM_IndexStatus array */
 } TM_IndexDelete;

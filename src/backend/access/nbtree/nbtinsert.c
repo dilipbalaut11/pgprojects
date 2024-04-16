@@ -408,7 +408,7 @@ index_itup_fetch_partrel(Relation indexrel, IndexTuple itup)
 	partid = DatumGetObjectId(datum);
 	Assert(OidIsValid(partid));
 
-	/* TODO: fetch partition relation*/
+	/* TODO: fetch partition relation */
 
 	return partrel;
 }
@@ -2957,48 +2957,7 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 
 	Assert(delstate.ndeltids >= ndeletable);
 
-	/*
-	 * For global index we need to delete the items for each partition
-	 * separately.
-	 */
-	if (RelationIsGlobalIndex(rel))
-	{
-		int		ndeltid;
-		int		starttid = 0;
-		Oid		prevpartid = InvalidOid;
-		TM_IndexDeleteOp partdelstate = delstate;
-
-		/*
-		 * Sort the deleted item in part-id order and then process the items
-		 * partition at a time.
-		 */
-		qsort(delstate.deltids, delstate.ndeltids, sizeof(TM_IndexDelete),
-			  _bt_indexdel_cmp);
-
-		prevpartid = delstate.deltids[0].partid;
-		for (ndeltid = 0; ndeltid < delstate.ndeltids; ndeltid++)
-		{
-			if (OidIsValid(prevpartid) &&
-				delstate.deltids[ndeltid].partid != prevpartid)
-			{
-				Relation childRel = table_open(prevpartid, AccessShareLock);
-
-				partdelstate.deltids = &delstate.deltids[starttid];
-				partdelstate.ndeltids = ndeltid - starttid;
-
-				_bt_delitems_delete_check(rel, buffer, childRel,
-										  &partdelstate);
-				starttid = ndeltid;
-			}
-
-			prevpartid = delstate.deltids[ndeltid].partid;
-		}
-	}
-	else
-	{
-		/* Physically delete LP_DEAD tuples (plus any delete-safe extra TIDs) */
-		_bt_delitems_delete_check(rel, buffer, heapRel, &delstate);
-	}
+	_bt_delitems_delete_check(rel, buffer, heapRel, &delstate);
 
 	pfree(delstate.deltids);
 	pfree(delstate.status);
@@ -3115,16 +3074,4 @@ _bt_blk_cmp(const void *arg1, const void *arg2)
 	if (res == 0)
 		res = pg_cmp_u32(b1->blockno, b2->blockno);
 	return res;
-}
-
-/*
- * _bt_indexdel_cmp() -- qsort comparison function for _bt_simpledel_pass
- */
-static inline int
-_bt_indexdel_cmp(const void *arg1, const void *arg2)
-{
-	TM_IndexDelete *b1 = ((TM_IndexDelete *) arg1);
-	TM_IndexDelete *b2 = ((TM_IndexDelete *) arg2);
-
-	return pg_cmp_u32(b1->partid, b2->partid);
 }

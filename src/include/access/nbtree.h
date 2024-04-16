@@ -21,6 +21,7 @@
 #include "access/xlogreader.h"
 #include "catalog/pg_am_d.h"
 #include "catalog/pg_index.h"
+#include "common/int.h"
 #include "lib/stringinfo.h"
 #include "storage/bufmgr.h"
 #include "storage/shm_toc.h"
@@ -717,6 +718,18 @@ BTreeTupleGetMaxHeapTID(IndexTuple itup)
 	}
 
 	return &itup->t_tid;
+}
+
+/*
+ * _bt_indexdel_cmp() -- qsort comparison function for _bt_simpledel_pass
+ */
+static inline int
+_bt_indexdel_cmp(const void *arg1, const void *arg2)
+{
+	TM_IndexDelete *b1 = ((TM_IndexDelete *) arg1);
+	TM_IndexDelete *b2 = ((TM_IndexDelete *) arg2);
+
+	return pg_cmp_u32(b1->partid, b2->partid);
 }
 
 /*

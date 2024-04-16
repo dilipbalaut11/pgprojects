@@ -5232,6 +5232,7 @@ RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
 	Bitmapset  *summarizedattrs;	/* columns with summarizing indexes */
 	List	   *indexoidlist;
 	List	   *newindexoidlist;
+	List	   *global_indexs = NIL;
 	Oid			relpkindex;
 	Oid			relreplindex;
 	ListCell   *l;
@@ -5257,8 +5258,18 @@ RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
 		}
 	}
 
+	if (relation->rd_rel->relispartition)
+	{
+		Oid parent = get_partition_parent(RelationGetRelid(relation), true);
+		Relation rel = table_open(parent, AccessShareLock);
+
+		global_indexs = RelationGetGlobalIndexList(rel);
+		table_close(rel, AccessShareLock);
+	}
+
 	/* Fast path if definitely no indexes */
-	if (!RelationGetForm(relation)->relhasindex)
+	if (global_indexs == NIL &&
+		!RelationGetForm(relation)->relhasindex)
 		return NULL;
 
 	/*
@@ -5266,6 +5277,8 @@ RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
 	 */
 restart:
 	indexoidlist = RelationGetIndexList(relation);
+	if (global_indexs != NIL)
+		indexoidlist = list_concat_unique_oid(indexoidlist, global_indexs);
 
 	/* Fall out if no indexes (but relhasindex was set) */
 	if (indexoidlist == NIL)
@@ -5410,6 +5423,8 @@ restart:
 	 * over to ensure we deliver up-to-date attribute bitmaps.
 	 */
 	newindexoidlist = RelationGetIndexList(relation);
+	if (global_indexs != NIL)
+		newindexoidlist = list_concat_unique_oid(newindexoidlist, global_indexs);
 	if (equal(indexoidlist, newindexoidlist) &&
 		relpkindex == relation->rd_pkindex &&
 		relreplindex == relation->rd_replidindex)

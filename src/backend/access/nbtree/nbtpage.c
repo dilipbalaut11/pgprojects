@@ -24,6 +24,7 @@
 
 #include "access/nbtree.h"
 #include "access/nbtxlog.h"
+#include "access/table.h"
 #include "access/tableam.h"
 #include "access/transam.h"
 #include "access/xlog.h"
@@ -1509,9 +1510,9 @@ _bt_delitems_cmp(const void *a, const void *b)
  * field (tableam will sort deltids for its own reasons, so we'll need to put
  * it back in leaf-page-wise order afterwards).
  */
-void
-_bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
-						  TM_IndexDeleteOp *delstate)
+static void
+_bt_delitems_delete_check_guts(Relation rel, Buffer buf, Relation heapRel,
+							   TM_IndexDeleteOp *delstate)
 {
 	Page		page = BufferGetPage(buf);
 	TransactionId snapshotConflictHorizon;
@@ -1676,6 +1677,53 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 	/* be tidy */
 	for (int i = 0; i < nupdatable; i++)
 		pfree(updatable[i]);
+}
+
+void
+_bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
+						  TM_IndexDeleteOp *delstate)
+{
+	/* Ask tableam which TIDs are deletable, then physically delete them */
+	/*
+	 * For global index we need to delete the items for each partition
+	 * separately.
+	 */
+	if (RelationIsGlobalIndex(rel))
+	{
+		int		ndeltid;
+		int		starttid = 0;
+		Oid		prevpartid = InvalidOid;
+		TM_IndexDeleteOp partdelstate = *delstate;
+
+		/*
+		 * Sort the deleted item in part-id order and then process the items
+		 * partition at a time.
+		 */
+		qsort(delstate->deltids, delstate->ndeltids, sizeof(TM_IndexDelete),
+			  _bt_indexdel_cmp);
+
+		prevpartid = delstate->deltids[0].partid;
+		for (ndeltid = 0; ndeltid < delstate->ndeltids; ndeltid++)
+		{
+			if (OidIsValid(prevpartid) &&
+				delstate->deltids[ndeltid].partid != prevpartid)
+			{
+				Relation childRel = table_open(prevpartid, AccessShareLock);
+
+				partdelstate.deltids = &delstate->deltids[starttid];
+				partdelstate.ndeltids = ndeltid - starttid;
+
+				_bt_delitems_delete_check_guts(rel, buf, childRel,
+											   &partdelstate);
+				starttid = ndeltid;
+				table_close(childRel, AccessShareLock);
+			}
+
+			prevpartid = delstate->deltids[ndeltid].partid;
+		}
+	}
+	else
+		_bt_delitems_delete_check_guts(rel, buf, heapRel, delstate);
 }
 
 /*

@@ -1739,6 +1739,10 @@ check_index_only(RelOptInfo *rel, IndexOptInfo *index)
 	if (!enable_indexonlyscan)
 		return false;
 
+	/* Do not support index only scan fro global index yet. */
+	if (index->global)
+		return false;
+
 	/*
 	 * Check that all needed attributes of the relation are available from the
 	 * index.

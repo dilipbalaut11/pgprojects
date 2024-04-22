@@ -1228,6 +1228,14 @@ backtrack:
 				itup = (IndexTuple) PageGetItem(page,
 												PageGetItemId(page, offnum));
 
+				/*
+				 * For global index only call back for the heap relation which
+				 * we are vacuuming.
+				 */
+				if (RelationIsGlobalIndex(rel) &&
+					global_index_itup_fetch_heap_oid(rel, itup) != heaprel->rd_rel->oid)
+					continue;
+
 				Assert(!BTreeTupleIsPivot(itup));
 				if (!BTreeTupleIsPosting(itup))
 				{

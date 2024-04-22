@@ -36,6 +36,7 @@
 #include "access/xact.h"
 #include "catalog/index.h"
 #include "catalog/namespace.h"
+#include "catalog/partition.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_inherits.h"
 #include "commands/cluster.h"
@@ -58,6 +59,7 @@
 #include "utils/guc_hooks.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
+#include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
 
@@ -2275,10 +2277,28 @@ vac_open_indexes(Relation relation, LOCKMODE lockmode,
 	List	   *indexoidlist;
 	ListCell   *indexoidscan;
 	int			i;
+	List		*global_indexs = NIL;
+	Oid			relid = RelationGetRelid(relation);
+	bool		relispartition = get_rel_relispartition(relid);
 
 	Assert(lockmode != NoLock);
 
+	if (relispartition)
+	{
+		Oid			parent = get_partition_parent(relid, false);
+		Relation	rel;
+
+		rel = relation_open(parent, AccessShareLock);
+
+		global_indexs = RelationGetGlobalIndexList(rel);
+		relation_close(rel, AccessShareLock);
+	}
+
 	indexoidlist = RelationGetIndexList(relation);
+
+	/* fast path if no indexes */
+	if (global_indexs != NIL)
+		indexoidlist = list_concat_unique_oid(indexoidlist, global_indexs);
 
 	/* allocate enough memory for all indexes */
 	i = list_length(indexoidlist);

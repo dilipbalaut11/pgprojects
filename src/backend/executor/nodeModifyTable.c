@@ -1893,8 +1893,6 @@ ExecUpdatePrologue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 				   ItemPointer tupleid, HeapTuple oldtuple, TupleTableSlot *slot,
 				   TM_Result *result)
 {
-	Relation	resultRelationDesc = resultRelInfo->ri_RelationDesc;
-
 	if (result)
 		*result = TM_Ok;
 

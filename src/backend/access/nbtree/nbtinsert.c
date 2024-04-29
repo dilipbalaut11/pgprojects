@@ -17,6 +17,7 @@
 
 #include "access/nbtree.h"
 #include "access/nbtxlog.h"
+#include "access/relation.h"
 #include "access/table.h"
 #include "access/transam.h"
 #include "access/xloginsert.h"
@@ -394,25 +395,6 @@ _bt_search_insert(Relation rel, Relation heaprel, BTInsertState insertstate)
 					  BT_WRITE);
 }
 
-static Relation
-index_itup_fetch_partrel(Relation indexrel, IndexTuple itup)
-{
-	Datum		datum;
-	bool		isNull;
-	Oid 		partid;
-	Relation	partrel = NULL;
-	int 		indnatts = IndexRelationGetNumberOfKeyAttributes(indexrel);
-	TupleDesc	tupleDesc = RelationGetDescr(indexrel);
-
-	datum = index_getattr(itup, indnatts, tupleDesc, &isNull);
-	partid = DatumGetObjectId(datum);
-	Assert(OidIsValid(partid));
-
-	/* TODO: fetch partition relation */
-
-	return partrel;
-}
-
 /*
  *	_bt_check_unique() -- Check for violation of unique index constraint
  *
@@ -456,6 +438,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 	bool		inposting = false;
 	bool		prevalldead = true;
 	int			curposti = 0;
+	Oid			partid = InvalidOid;
 
 	/* Assume unique until we find a duplicate */
 	*is_unique = true;
@@ -574,8 +557,24 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 					htid = *BTreeTupleGetPostingN(curitup, curposti);
 				}
 
+				/*
+				 * If this is a global index then we need to fetch the
+				 * partition relation from the parition id stored inside the
+				 * IndexTuple.
+				 */
 				if (RelationIsGlobalIndex(rel))
-					partrel = index_itup_fetch_partrel(rel, curitup);
+				{
+					Oid	curpartid = IndexTupleFetchPartitionId(rel, curitup);
+
+					if (partid != curpartid)
+					{
+						if (OidIsValid(partid))
+							relation_close(partrel, AccessShareLock);
+
+						partrel = relation_open(partid, AccessShareLock);
+						partid = curpartid;
+					}
+				}
 				else
 					partrel = heapRel;
 
@@ -596,7 +595,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				 * with optimizations like heap's HOT, we have just a single
 				 * index entry for the entire chain.
 				 */
-				else if (table_index_fetch_tuple_check(heapRel, &htid,
+				else if (table_index_fetch_tuple_check(partrel, &htid,
 													   &SnapshotDirty,
 													   &all_dead))
 				{
@@ -654,7 +653,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 					 * entry.
 					 */
 					htid = itup->t_tid;
-					if (table_index_fetch_tuple_check(heapRel, &htid,
+					if (table_index_fetch_tuple_check(partrel, &htid,
 													  SnapshotSelf, NULL))
 					{
 						/* Normal case --- it's still live */
@@ -708,7 +707,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 										RelationGetRelationName(rel)),
 								 key_desc ? errdetail("Key %s already exists.",
 													  key_desc) : 0,
-								 errtableconstraint(heapRel,
+								 errtableconstraint(partrel,
 													RelationGetRelationName(rel))));
 					}
 				}
@@ -801,7 +800,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				 errmsg("failed to re-find tuple within index \"%s\"",
 						RelationGetRelationName(rel)),
 				 errhint("This may be because of a non-immutable index expression."),
-				 errtableconstraint(heapRel,
+				 errtableconstraint(partrel,
 									RelationGetRelationName(rel))));
 
 	if (nbuf != InvalidBuffer)

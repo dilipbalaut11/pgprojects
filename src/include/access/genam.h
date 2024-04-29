@@ -235,7 +235,7 @@ extern SysScanDesc systable_beginscan_ordered(Relation heapRelation,
 extern HeapTuple systable_getnext_ordered(SysScanDesc sysscan,
 										  ScanDirection direction);
 extern void systable_endscan_ordered(SysScanDesc sysscan);
-extern Oid global_index_itup_fetch_heap_oid(Relation index, IndexTuple itup);
+extern Oid IndexTupleFetchPartitionId(Relation index, IndexTuple itup);
 extern Relation GlobalIndexRelLookup(GlobalIndexRelDirectory pdir, Oid relid);
 extern void DestroyGlobalIndexRelDirectory(GlobalIndexRelDirectory pdir);
 extern GlobalIndexRelDirectory CreateGlobalIndexRelDirectory(MemoryContext mcxt);

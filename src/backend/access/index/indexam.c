@@ -768,7 +768,7 @@ index_getnext_slot(IndexScanDesc scan, ScanDirection direction, TupleTableSlot *
 			Assert(scan->xs_want_itup);
 			Assert(scan->xs_itup);
 			itup = scan->xs_itup;
-			heapoid = global_index_itup_fetch_heap_oid(scan->indexRelation, itup);
+			heapoid = IndexTupleFetchPartitionId(scan->indexRelation, itup);
 
 			if (scan->heapRelation &&
 				heapoid == RelationGetRelid(scan->heapRelation))
@@ -1238,21 +1238,27 @@ ResetGlobalIndexRelDirectory(GlobalIndexRelDirectory pdir)
 	}
 }
 
+/*
+ * Fetch partition identifier from a index tuple.  Must be called only for a 
+ * global index.
+ */
 Oid
-global_index_itup_fetch_heap_oid(Relation index, IndexTuple itup)
+IndexTupleFetchPartitionId(Relation index, IndexTuple itup)
 {
+	Oid 		partid;
+	bool		is_null;
 	Datum		datum;
-	bool		isNull;
-	Oid 		heapOid_index;
-	int 		indnatts = IndexRelationGetNumberOfAttributes(index);
+	int 		partidattno = GlobalIndexRelationGetPartIdAttrIdx(index);
 	TupleDesc	tupleDesc = RelationGetDescr(index);
 
 	Assert(RelationIsGlobalIndex(index));
 
-	datum = index_getattr(itup, indnatts, tupleDesc, &isNull);
-	Assert(!isNull);
-	heapOid_index = DatumGetObjectId(datum);
-	Assert(OidIsValid(heapOid_index));
+	datum = index_getattr(itup, partidattno, tupleDesc, &is_null);
+	Assert(!is_null);
 
-	return heapOid_index;
+	/* FIXME: partid instead of OID */
+	partid = DatumGetObjectId(datum);
+	Assert(OidIsValid(partid));
+
+	return partid;
 }

@@ -5184,7 +5184,7 @@ _bt_allequalimage(Relation rel, bool debugmessage)
 	if (RelationIsGlobalIndex(rel))
 	{
 		if (IndexRelationGetNumberOfAttributes(rel) !=
-			GlobalIndexRelationGetNumberOfKeyAttributes(rel))
+			GlobalIndexRelationGetPartIdAttrIdx(rel))
 			return false;
 	}
 	else if (IndexRelationGetNumberOfAttributes(rel) !=

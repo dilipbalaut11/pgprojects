@@ -630,11 +630,21 @@ DefineIndex(Oid tableId,
 								 InvalidOid);
 
 	/*
-	 * If this is a global index then add an additional include column for
-	 * storing partition id.
-	 *
-	 * TODO: For now we do not have concept of partid so just use the tableoid
-	 * system column.
+	 * If this is a global index, we must append a partition identifier to
+	 * uniquely identify the heap tuple. Therefore, in this design, we have
+	 * opted to include the partition-id as the first column in the include
+	 * column list. The rationale behind storing it as the first include column
+	 * is that in various scenarios, we would treat this column as an extended
+	 * index key column.  Essentially, each index tuple must be uniquely
+	 * identified. Therefore, if we encounter duplicate keys, we utilize heap
+	 * tid as a tiebreaker.  However, for global indexes, relying solely on
+	 * heap tid isn't adequate; we also require the partition identifier.
+	 * To address this, we increase the key column length by one, considering
+	 * the partition identifier when uniquely identifying the tuple.  In cases
+	 * where the partition id isn't sufficient (i.e., tuples with duplicate
+	 * keys within the same partition), we resort to storing heap tid as a
+	 * tiebreaker. This straightforward approach ensures that the design
+	 * remains uncomplicated.
 	 */
 	if (stmt->global)
 	{
@@ -646,7 +656,8 @@ DefineIndex(Oid tableId,
 		newparam->indexcolname = NULL;
 		newparam->collation = NIL;
 		newparam->opclass = NIL;
-		stmt->indexIncludingParams = lappend(stmt->indexIncludingParams, newparam);
+		stmt->indexIncludingParams =
+				list_insert_nth(stmt->indexIncludingParams, 0, newparam);
 	}
 
 	/*

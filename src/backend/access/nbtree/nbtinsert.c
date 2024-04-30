@@ -871,8 +871,8 @@ _bt_findinsertloc(Relation rel,
 
 	Assert(P_ISLEAF(opaque) && !P_INCOMPLETE_SPLIT(opaque));
 	Assert(!insertstate->bounds_valid || checkingunique);
-	Assert(!RelationIsGlobalIndex(rel) || OidIsValid(key->partid));
-	Assert(RelationIsGlobalIndex(rel) || !OidIsValid(key->partid));
+	Assert(!RelationIsGlobalIndex(rel) || OidIsValid(itup_key->partid));
+	Assert(RelationIsGlobalIndex(rel) || !OidIsValid(itup_key->partid));
 	Assert(!itup_key->heapkeyspace || itup_key->scantid != NULL);
 	Assert(itup_key->heapkeyspace || itup_key->scantid == NULL);
 	Assert(!itup_key->allequalimage || itup_key->heapkeyspace);
@@ -1177,9 +1177,17 @@ _bt_insertonpg(Relation rel,
 	Assert(!isleaf ||
 		   BTreeTupleGetNAtts(itup, rel) ==
 		   IndexRelationGetNumberOfAttributes(rel));
-	Assert(isleaf ||
+	Assert(isleaf || RelationIsGlobalIndex(rel) ||
 		   BTreeTupleGetNAtts(itup, rel) <=
 		   IndexRelationGetNumberOfKeyAttributes(rel));
+
+	/*
+	 * For global index partition identifier attribute might also be part of
+	 * the pivot tuple.
+	 */
+	Assert(isleaf || !RelationIsGlobalIndex(rel) ||
+		   BTreeTupleGetNAtts(itup, rel) <=
+		   IndexRelationGetNumberOfKeyAttributes(rel) + 1);
 	Assert(!BTreeTupleIsPosting(itup));
 	Assert(MAXALIGN(IndexTupleSize(itup)) == itemsz);
 	/* Caller must always finish incomplete split for us */
@@ -1734,8 +1742,15 @@ _bt_split(Relation rel, Relation heaprel, BTScanInsert itup_key, Buffer buf,
 	afterleftoff = P_HIKEY;
 
 	Assert(BTreeTupleGetNAtts(lefthighkey, rel) > 0);
-	Assert(BTreeTupleGetNAtts(lefthighkey, rel) <=
+	Assert(RelationIsGlobalIndex(rel) || BTreeTupleGetNAtts(lefthighkey, rel) <=
 		   IndexRelationGetNumberOfKeyAttributes(rel));
+
+	/*
+	 * For global index partition identifier attribute might also be part of
+	 * the pivot tuple.
+	 */
+	Assert(!RelationIsGlobalIndex(rel) || BTreeTupleGetNAtts(lefthighkey, rel) <=
+		   IndexRelationGetNumberOfKeyAttributes(rel) + 1);
 	Assert(itemsz == MAXALIGN(IndexTupleSize(lefthighkey)));
 	if (PageAddItem(leftpage, (Item) lefthighkey, itemsz, afterleftoff, false,
 					false) == InvalidOffsetNumber)
@@ -1802,8 +1817,17 @@ _bt_split(Relation rel, Relation heaprel, BTScanInsert itup_key, Buffer buf,
 		itemsz = ItemIdGetLength(itemid);
 		righthighkey = (IndexTuple) PageGetItem(origpage, itemid);
 		Assert(BTreeTupleGetNAtts(righthighkey, rel) > 0);
-		Assert(BTreeTupleGetNAtts(righthighkey, rel) <=
-			   IndexRelationGetNumberOfKeyAttributes(rel));
+		/*
+		 * For global index partition identifier attribute might also be part
+		 * of the pivot tuple.
+		 */
+		Assert(RelationIsGlobalIndex(rel) ||
+			   BTreeTupleGetNAtts(righthighkey, rel) <=
+			   IndexRelationGetNumberOfKeyAttributes(rel));		
+		Assert(!RelationIsGlobalIndex(rel) ||
+			   BTreeTupleGetNAtts(lefthighkey, rel) <=
+			   IndexRelationGetNumberOfKeyAttributes(rel) + 1);
+
 		if (PageAddItem(rightpage, (Item) righthighkey, itemsz, afterrightoff,
 						false, false) == InvalidOffsetNumber)
 		{

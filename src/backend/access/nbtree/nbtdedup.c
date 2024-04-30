@@ -682,7 +682,7 @@ _bt_bottomupdel_finish_pending(Relation rel, Page page, BTDedupState state,
 		 * We are only collecting duplicate for one partition at a time so each
 		 * tuple in BTDedupState will have same partid.
 		 */
-		if (!OidIsValid(partid))
+		if (!OidIsValid(partid) && RelationIsGlobalIndex(rel))
 			partid = BTreeTupleGetPartID(rel, itup);
 
 		if (!BTreeTupleIsPosting(itup))

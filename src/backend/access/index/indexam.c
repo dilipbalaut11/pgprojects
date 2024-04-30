@@ -783,7 +783,7 @@ index_getnext_slot(IndexScanDesc scan, ScanDirection direction, TupleTableSlot *
 				scan->xs_heapfetch = entry->xs_heapfetch;
 			}
 			else if (scan->heapRelation &&
-				heapoid != RelationGetRelid(scan->heapRelation))
+					 heapoid != RelationGetRelid(scan->heapRelation))
 			{
 				Assert(scan->xs_heapfetch);
 				table_index_fetch_reset(scan->xs_heapfetch);

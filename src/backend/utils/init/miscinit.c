@@ -1773,7 +1773,6 @@ ValidatePgVersion(const char *path)
 char	   *session_preload_libraries_string = NULL;
 char	   *shared_preload_libraries_string = NULL;
 char	   *local_preload_libraries_string = NULL;
-bool		enable_global_index_scan = false;
 
 /* Flag telling that we are loading shared_preload_libraries */
 bool		process_shared_preload_libraries_in_progress = false;

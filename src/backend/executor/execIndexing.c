@@ -165,34 +165,48 @@ ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
 				i;
 	RelationPtr relationDescs;
 	IndexInfo **indexInfoArray;
-	List	   *global_indexs = NIL;
-	Oid 	relid = RelationGetRelid(resultRelation);
-	bool	relispartition = get_rel_relispartition(relid);
+	Oid 		relation_oid = RelationGetRelid(resultRelation);
+	List	   *globalIndexList = NIL;
+
 
 	resultRelInfo->ri_NumIndices = 0;
 
-	if (relispartition)
+	/*
+	 * Fetch the top level relation descriptor if this is a parition relation
+	 * because we might have global indexes on the parent.
+	 */
+	if (get_rel_relispartition(relation_oid))
 	{
-		Oid			parent = get_partition_parent(relid, false);
-		Relation	rel;
+		Oid			top_reloid;
+		List	   *ancestors;
+		Relation	parent;
 
-		rel = relation_open(parent, AccessShareLock);
+		/*
+		 * The identity sequence is associated with the topmost partitioned
+		 * table.
+		 */
+		ancestors =	get_partition_ancestors(relation_oid);
+		top_reloid = llast_oid(ancestors);
+		list_free(ancestors);
 
-		global_indexs = RelationGetGlobalIndexList(rel);
-		relation_close(rel, AccessShareLock);
+		parent = relation_open(top_reloid, AccessShareLock);
+		globalIndexList = RelationGetGlobalIndexList(parent);
+		relation_close(parent, AccessShareLock);
 	}
 
 	/* fast path if no indexes */
-	if (global_indexs == NIL &&
-		!RelationGetForm(resultRelation)->relhasindex)
+	if (!RelationGetForm(resultRelation)->relhasindex &&
+		globalIndexList == NIL)
 		return;
 
 	/*
-	 * Get cached list of index OIDs
+	 * Get cached list of index OIDs and append the global index oids with the
+	 * current's table's indexoidlist.
 	 */
 	indexoidlist = RelationGetIndexList(resultRelation);
-	if (global_indexs)
-		indexoidlist = list_concat_unique_oid(indexoidlist, global_indexs);
+	if (globalIndexList)
+		indexoidlist = list_concat_unique_oid(indexoidlist, globalIndexList);
+
 	len = list_length(indexoidlist);
 	if (len == 0)
 		return;

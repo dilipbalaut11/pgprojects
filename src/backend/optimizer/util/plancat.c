@@ -219,8 +219,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	else
 		hasindex = relation->rd_rel->relhasindex;
 
-	if (relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE
-		&& enable_global_index_scan)
+	if (relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
 		global_indexs = RelationGetGlobalIndexList(relation);
 		if (global_indexs)

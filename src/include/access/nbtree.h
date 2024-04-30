@@ -655,37 +655,23 @@ BTreeTupleGetHeapTID(IndexTuple itup)
 	return &itup->t_tid;
 }
 
+/*
+ * Get tiebreaker partition identifier attribute, if any.
+ */
 static inline Oid
 BTreeTupleGetPartID(Relation index, IndexTuple itup)
 {
-	if (BTreeTupleIsPivot(itup))
-	{
-		/* Pivot tuple heap TID representation? */
-		if ((ItemPointerGetOffsetNumberNoCheck(&itup->t_tid) &
-			 BT_PIVOT_HEAP_TID_ATTR) != 0)
-			return *((Oid *) ((char *) itup + IndexTupleSize(itup) -
-							  (sizeof(Oid) + sizeof(ItemPointerData))));
+	/*
+	 * For pivot tuple if we have preserved the partition identifier as
+	 * tiebreaker then fetch it from the tuple, whereas for leaf page tuple
+	 * we always have this attribute in the tuple.
+	 */
+	if (!BTreeTupleIsPivot(itup) || BTreeTupleGetNAtts(itup, index) >
+		IndexRelationGetNumberOfKeyAttributes(index))
+		return IndexTupleFetchPartitionId(index, itup);
 
-		/* Part ID attribute was truncated */
-		return InvalidOid;
-	}
-	else
-	{
-		Datum		datum;
-		bool		isNull;
-		Oid 		partid;
-		int 		indnatts = IndexRelationGetNumberOfAttributes(index);
-		TupleDesc	tupleDesc = RelationGetDescr(index);
-
-		Assert(RelationIsGlobalIndex(index));
-
-		datum = index_getattr(itup, indnatts, tupleDesc, &isNull);
-		Assert(!isNull);
-		partid = DatumGetObjectId(datum);
-		Assert(OidIsValid(heapOid_index));
-
-		return partid;
-	}
+	/* Part ID attribute was truncated */
+	return InvalidOid;
 }
 
 static inline int32

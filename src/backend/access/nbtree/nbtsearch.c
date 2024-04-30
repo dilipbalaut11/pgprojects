@@ -694,7 +694,8 @@ _bt_compare(Relation rel,
 	int			ntupatts;
 	int32		result;
 
-	Assert(_bt_check_natts(rel, key->heapkeyspace, page, offnum));
+	if (!_bt_check_natts(rel, key->heapkeyspace, page, offnum))
+		Assert(_bt_check_natts(rel, key->heapkeyspace, page, offnum));
 	Assert(key->keysz <= IndexRelationGetNumberOfKeyAttributes(rel));
 	Assert(key->heapkeyspace || key->scantid == NULL);
 	Assert(RelationIsGlobalIndex(rel) || !OidIsValid(key->partid));
@@ -841,14 +842,18 @@ _bt_compare(Relation rel,
 	 * with scantid.
 	 */
 	Assert(ntupatts >= IndexRelationGetNumberOfKeyAttributes(rel));
-	result = BTreePartIDCompare(key->partid, BTreeTupleGetPartID(rel, itup));
 
-	/*
-	 * If partid is not same then we are done otherwise compare with tid as
-	 * a next tiebreaker.
-	 */
-	if (result != 0)
-		return result;
+	if (RelationIsGlobalIndex(rel))
+	{
+		result = BTreePartIDCompare(key->partid, BTreeTupleGetPartID(rel, itup));
+
+		/*
+		* If partid is not same then we are done otherwise compare with tid as
+		* a next tiebreaker.
+		*/
+		if (result != 0)
+			return result;
+	}
 
 	result = ItemPointerCompare(key->scantid, heapTid);
 	if (result <= 0 || !BTreeTupleIsPosting(itup))

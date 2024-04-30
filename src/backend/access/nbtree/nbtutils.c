@@ -4989,6 +4989,9 @@ _bt_check_natts(Relation rel, bool heapkeyspace, Page page, OffsetNumber offnum)
 		 BT_PIVOT_HEAP_TID_ATTR) != 0)
 		return false;
 
+	if (RelationIsGlobalIndex(rel))
+		nkeyatts = nkeyatts + 1;
+
 	/* INCLUDE indexes do not support deduplication */
 	if (natts != nkeyatts && BTreeTupleIsPosting(itup))
 		return false;

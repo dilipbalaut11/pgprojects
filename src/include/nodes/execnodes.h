@@ -195,7 +195,6 @@ typedef struct IndexInfo
 	Oid		   *ii_UniqueProcs; /* array with one entry per column */
 	uint16	   *ii_UniqueStrats;	/* array with one entry per column */
 	bool		ii_Unique;
-	bool		ii_Global;
 	bool		ii_NullsNotDistinct;
 	bool		ii_ReadyForInserts;
 	bool		ii_CheckedUnchanged;

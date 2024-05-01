@@ -1203,6 +1203,7 @@ heap_create_with_catalog(const char *relname,
 			 */
 			Assert(relkind != RELKIND_INDEX);
 			Assert(relkind != RELKIND_PARTITIONED_INDEX);
+			Assert(relkind != RELKIND_GLOBAL_INDEX);
 
 			if (relkind == RELKIND_TOASTVALUE)
 			{
@@ -1313,7 +1314,8 @@ heap_create_with_catalog(const char *relname,
 	if (!(relkind == RELKIND_SEQUENCE ||
 		  relkind == RELKIND_TOASTVALUE ||
 		  relkind == RELKIND_INDEX ||
-		  relkind == RELKIND_PARTITIONED_INDEX))
+		  relkind == RELKIND_PARTITIONED_INDEX ||
+		  relkind == RELKIND_GLOBAL_INDEX))
 	{
 		Oid			new_array_oid;
 		ObjectAddress new_type_addr;

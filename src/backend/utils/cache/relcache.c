@@ -483,6 +483,7 @@ RelationParseRelOptions(Relation relation, HeapTuple tuple)
 			break;
 		case RELKIND_INDEX:
 		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_GLOBAL_INDEX:
 			amoptsfn = relation->rd_indam->amoptions;
 			break;
 		default:
@@ -1204,7 +1205,8 @@ retry:
 	 * initialize access method information
 	 */
 	if (relation->rd_rel->relkind == RELKIND_INDEX ||
-		relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+		relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX ||
+		relation->rd_rel->relkind == RELKIND_GLOBAL_INDEX)
 		RelationInitIndexAccessInfo(relation);
 	else if (RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind) ||
 			 relation->rd_rel->relkind == RELKIND_SEQUENCE)
@@ -2091,7 +2093,8 @@ RelationIdGetRelation(Oid relationId)
 			 * a headache for indexes that reload itself depends on.
 			 */
 			if (rd->rd_rel->relkind == RELKIND_INDEX ||
-				rd->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+				rd->rd_rel->relkind == RELKIND_PARTITIONED_INDEX ||
+				rd->rd_rel->relkind == RELKIND_GLOBAL_INDEX)
 				RelationReloadIndexInfo(rd);
 			else
 				RelationClearRelation(rd, true);
@@ -2262,7 +2265,8 @@ RelationReloadIndexInfo(Relation relation)
 
 	/* Should be called only for invalidated, live indexes */
 	Assert((relation->rd_rel->relkind == RELKIND_INDEX ||
-			relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX) &&
+			relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX ||
+			relation->rd_rel->relkind == RELKIND_GLOBAL_INDEX) &&
 		   !relation->rd_isvalid &&
 		   relation->rd_droppedSubid == InvalidSubTransactionId);
 
@@ -2609,7 +2613,8 @@ RelationClearRelation(Relation relation, bool rebuild)
 	 * index, and we check for pg_index updates too.
 	 */
 	if ((relation->rd_rel->relkind == RELKIND_INDEX ||
-		 relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX) &&
+		 relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX ||
+		 relation->rd_rel->relkind == RELKIND_GLOBAL_INDEX) &&
 		relation->rd_refcnt > 0 &&
 		relation->rd_indexcxt != NULL)
 	{

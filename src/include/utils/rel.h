@@ -712,7 +712,7 @@ RelationCloseSmgr(Relation relation)
 	 !IsCatalogRelation(relation))
 
 #define RelationIsGlobalIndex(relation) \
-	((relation)->rd_index->indisglobal == true)
+	((relation)->rd_rel->relkind == RELKIND_GLOBAL_INDEX)
 
 /* routines in utils/cache/relcache.c */
 extern void RelationIncrementReferenceCount(Relation rel);

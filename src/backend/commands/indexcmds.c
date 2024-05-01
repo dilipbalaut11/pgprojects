@@ -238,7 +238,7 @@ CheckIndexCompatible(Oid oldId,
 	 */
 	indexInfo = makeIndexInfo(numberOfAttributes, numberOfAttributes,
 							  accessMethodId, NIL, NIL, false, false,
-							  false, false, amsummarizing, false);
+							  false, false, amsummarizing);
 	typeIds = palloc_array(Oid, numberOfAttributes);
 	collationIds = palloc_array(Oid, numberOfAttributes);
 	opclassIds = palloc_array(Oid, numberOfAttributes);
@@ -935,8 +935,7 @@ DefineIndex(Oid tableId,
 							  stmt->nulls_not_distinct,
 							  !concurrent,
 							  concurrent,
-							  amissummarizing,
-							  stmt->global);
+							  amissummarizing);
 
 	typeIds = palloc_array(Oid, numberOfAttributes);
 	collationIds = palloc_array(Oid, numberOfAttributes);
@@ -1204,6 +1203,8 @@ DefineIndex(Oid tableId,
 		flags |= INDEX_CREATE_PARTITIONED;
 	if (stmt->primary)
 		flags |= INDEX_CREATE_IS_PRIMARY;
+	if (stmt->global)
+		flags |= INDEX_CREATE_GLOBAL;
 
 	/*
 	 * If the table is partitioned, and recursion was declined but partitions
@@ -2899,7 +2900,8 @@ RangeVarCallbackForReindexIndex(const RangeVar *relation,
 	if (!relkind)
 		return;
 	if (relkind != RELKIND_INDEX &&
-		relkind != RELKIND_PARTITIONED_INDEX)
+		relkind != RELKIND_PARTITIONED_INDEX &&
+		relkind != RELKIND_GLOBAL_INDEX)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("\"%s\" is not an index", relation->relname)));
@@ -3727,6 +3729,7 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 
 		case RELKIND_PARTITIONED_TABLE:
 		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_GLOBAL_INDEX:
 		default:
 			/* Return error if type of relation is not supported */
 			ereport(ERROR,
@@ -4316,7 +4319,8 @@ IndexSetParentIndex(Relation partitionIdx, Oid parentOid)
 
 	/* Make sure this is an index */
 	Assert(partitionIdx->rd_rel->relkind == RELKIND_INDEX ||
-		   partitionIdx->rd_rel->relkind == RELKIND_PARTITIONED_INDEX);
+		   partitionIdx->rd_rel->relkind == RELKIND_PARTITIONED_INDEX ||
+		   partitionIdx->rd_rel->relkind == RELKIND_GLOBAL_INDEX);
 
 	/*
 	 * Scan pg_inherits for rows linking our index to some parent.

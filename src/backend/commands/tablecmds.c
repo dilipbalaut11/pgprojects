@@ -305,6 +305,12 @@ static const struct dropmsgstrings dropmsgstringarray[] = {
 		gettext_noop("index \"%s\" does not exist, skipping"),
 		gettext_noop("\"%s\" is not an index"),
 	gettext_noop("Use DROP INDEX to remove an index.")},
+	{RELKIND_GLOBAL_INDEX,
+		ERRCODE_UNDEFINED_OBJECT,
+		gettext_noop("index \"%s\" does not exist"),
+		gettext_noop("index \"%s\" does not exist, skipping"),
+		gettext_noop("\"%s\" is not an index"),
+	gettext_noop("Use DROP INDEX to remove an index.")},
 	{'\0', 0, NULL, NULL, NULL, NULL}
 };
 
@@ -3658,6 +3664,7 @@ renameatt_check(Oid myrelid, Form_pg_class classform, bool recursing)
 		relkind != RELKIND_COMPOSITE_TYPE &&
 		relkind != RELKIND_INDEX &&
 		relkind != RELKIND_PARTITIONED_INDEX &&
+		relkind != RELKIND_GLOBAL_INDEX &&
 		relkind != RELKIND_FOREIGN_TABLE &&
 		relkind != RELKIND_PARTITIONED_TABLE)
 		ereport(ERROR,
@@ -4088,7 +4095,8 @@ RenameRelation(RenameStmt *stmt)
 		 */
 		relkind = get_rel_relkind(relid);
 		obj_is_index = (relkind == RELKIND_INDEX ||
-						relkind == RELKIND_PARTITIONED_INDEX);
+						relkind == RELKIND_PARTITIONED_INDEX ||
+						relkind == RELKIND_GLOBAL_INDEX);
 		if (obj_is_index || is_index_stmt == obj_is_index)
 			break;
 
@@ -4153,7 +4161,8 @@ RenameRelationInternal(Oid myrelid, const char *newrelname, bool is_internal, bo
 	 */
 	Assert(!is_index ||
 		   is_index == (targetrelation->rd_rel->relkind == RELKIND_INDEX ||
-						targetrelation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX));
+						targetrelation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX ||
+						targetrelation->rd_rel->relkind == RELKIND_GLOBAL_INDEX));
 
 	/*
 	 * Update pg_class tuple with new relname.  (Scribbling on reltup is OK
@@ -4180,7 +4189,8 @@ RenameRelationInternal(Oid myrelid, const char *newrelname, bool is_internal, bo
 	 * Also rename the associated constraint, if any.
 	 */
 	if (targetrelation->rd_rel->relkind == RELKIND_INDEX ||
-		targetrelation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+		targetrelation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX ||
+		targetrelation->rd_rel->relkind == RELKIND_GLOBAL_INDEX)
 	{
 		Oid			constraintId = get_index_constraint(myrelid);
 
@@ -4265,6 +4275,7 @@ CheckTableNotInUse(Relation rel, const char *stmt)
 
 	if (rel->rd_rel->relkind != RELKIND_INDEX &&
 		rel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX &&
+		rel->rd_rel->relkind != RELKIND_GLOBAL_INDEX &&
 		AfterTriggerPendingOnRel(RelationGetRelid(rel)))
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_IN_USE),
@@ -6661,6 +6672,7 @@ ATSimplePermissions(AlterTableType cmdtype, Relation rel, int allowed_targets)
 			actual_target = ATT_MATVIEW;
 			break;
 		case RELKIND_INDEX:
+		case RELKIND_GLOBAL_INDEX:
 			actual_target = ATT_INDEX;
 			break;
 		case RELKIND_PARTITIONED_INDEX:
@@ -8698,6 +8710,7 @@ ATExecSetStatistics(Relation rel, const char *colName, int16 colNum, Node *newVa
 	 */
 	if (rel->rd_rel->relkind != RELKIND_INDEX &&
 		rel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX &&
+		rel->rd_rel->relkind != RELKIND_GLOBAL_INDEX &&
 		!colName)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -8767,7 +8780,8 @@ ATExecSetStatistics(Relation rel, const char *colName, int16 colNum, Node *newVa
 						colName)));
 
 	if (rel->rd_rel->relkind == RELKIND_INDEX ||
-		rel->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+		rel->rd_rel->relkind == RELKIND_PARTITIONED_INDEX ||
+		rel->rd_rel->relkind == RELKIND_GLOBAL_INDEX)
 	{
 		if (attnum > rel->rd_index->indnkeyatts)
 			ereport(ERROR,
@@ -13460,7 +13474,8 @@ RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 					char		relKind = get_rel_relkind(foundObject.objectId);
 
 					if (relKind == RELKIND_INDEX ||
-						relKind == RELKIND_PARTITIONED_INDEX)
+						relKind == RELKIND_PARTITIONED_INDEX ||
+						relKind == RELKIND_GLOBAL_INDEX)
 					{
 						Assert(foundObject.objectSubId == 0);
 						RememberIndexForRebuilding(foundObject.objectId, tab);
@@ -14591,6 +14606,7 @@ ATExecChangeOwner(Oid relationOid, Oid newOwnerId, bool recursing, LOCKMODE lock
 		if (tuple_class->relkind != RELKIND_COMPOSITE_TYPE &&
 			tuple_class->relkind != RELKIND_INDEX &&
 			tuple_class->relkind != RELKIND_PARTITIONED_INDEX &&
+			tuple_class->relkind != RELKIND_GLOBAL_INDEX &&
 			tuple_class->relkind != RELKIND_TOASTVALUE)
 			changeDependencyOnOwner(RelationRelationId, relationOid,
 									newOwnerId);
@@ -15042,6 +15058,7 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 			break;
 		case RELKIND_INDEX:
 		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_GLOBAL_INDEX:
 			(void) index_reloptions(rel->rd_indam->amoptions, newOptions, true);
 			break;
 		default:
@@ -15411,7 +15428,8 @@ AlterTableMoveAll(AlterTableMoveAllStmt *stmt)
 			 relForm->relkind != RELKIND_PARTITIONED_TABLE) ||
 			(stmt->objtype == OBJECT_INDEX &&
 			 relForm->relkind != RELKIND_INDEX &&
-			 relForm->relkind != RELKIND_PARTITIONED_INDEX) ||
+			 relForm->relkind != RELKIND_PARTITIONED_INDEX &&
+			 relForm->relkind != RELKIND_GLOBAL_INDEX) ||
 			(stmt->objtype == OBJECT_MATVIEW &&
 			 relForm->relkind != RELKIND_MATVIEW))
 			continue;
@@ -17855,8 +17873,8 @@ RangeVarCallbackForAlterRelation(const RangeVar *rv, Oid relid, Oid oldrelid,
 				 errmsg("\"%s\" is not a composite type", rv->relname)));
 
 	if (reltype == OBJECT_INDEX && relkind != RELKIND_INDEX &&
-		relkind != RELKIND_PARTITIONED_INDEX
-		&& !IsA(stmt, RenameStmt))
+		relkind != RELKIND_PARTITIONED_INDEX &&
+		relkind != RELKIND_GLOBAL_INDEX && !IsA(stmt, RenameStmt))
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("\"%s\" is not an index", rv->relname)));
@@ -17879,7 +17897,8 @@ RangeVarCallbackForAlterRelation(const RangeVar *rv, Oid relid, Oid oldrelid,
 	 */
 	if (IsA(stmt, AlterObjectSchemaStmt))
 	{
-		if (relkind == RELKIND_INDEX || relkind == RELKIND_PARTITIONED_INDEX)
+		if (relkind == RELKIND_INDEX || relkind == RELKIND_PARTITIONED_INDEX ||
+			relkind == RELKIND_GLOBAL_INDEX)
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg("cannot change schema of index \"%s\"",
@@ -19674,7 +19693,8 @@ RangeVarCallbackForAttachIndex(const RangeVar *rv, Oid relOid, Oid oldRelOid,
 		return;					/* concurrently dropped, so nothing to do */
 	classform = (Form_pg_class) GETSTRUCT(tuple);
 	if (classform->relkind != RELKIND_PARTITIONED_INDEX &&
-		classform->relkind != RELKIND_INDEX)
+		classform->relkind != RELKIND_INDEX &&
+		classform->relkind != RELKIND_GLOBAL_INDEX)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 				 errmsg("\"%s\" is not an index", rv->relname)));

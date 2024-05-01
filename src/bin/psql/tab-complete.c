@@ -774,7 +774,8 @@ static const SchemaQuery Query_for_list_of_indexes = {
 	.catname = "pg_catalog.pg_class c",
 	.selcondition =
 	"c.relkind IN (" CppAsString2(RELKIND_INDEX) ", "
-	CppAsString2(RELKIND_PARTITIONED_INDEX) ")",
+	CppAsString2(RELKIND_PARTITIONED_INDEX) ", "
+	CppAsString2(RELKIND_GLOBAL_INDEX)")",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
 	.result = "c.relname",

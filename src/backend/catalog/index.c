@@ -652,7 +652,6 @@ UpdateIndexRelation(Oid indexoid,
 	values[Anum_pg_index_indisready - 1] = BoolGetDatum(isready);
 	values[Anum_pg_index_indislive - 1] = BoolGetDatum(true);
 	values[Anum_pg_index_indisreplident - 1] = BoolGetDatum(false);
-	values[Anum_pg_index_indisglobal - 1] = BoolGetDatum(indexInfo->ii_Global);
 	values[Anum_pg_index_indkey - 1] = PointerGetDatum(indkey);
 	values[Anum_pg_index_indcollation - 1] = PointerGetDatum(indcollation);
 	values[Anum_pg_index_indclass - 1] = PointerGetDatum(indclass);
@@ -763,6 +762,7 @@ index_create(Relation heapRelation,
 	bool		invalid = (flags & INDEX_CREATE_INVALID) != 0;
 	bool		concurrent = (flags & INDEX_CREATE_CONCURRENT) != 0;
 	bool		partitioned = (flags & INDEX_CREATE_PARTITIONED) != 0;
+	bool		global = (flags & INDEX_CREATE_GLOBAL) != 0;
 	char		relkind;
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
@@ -774,7 +774,13 @@ index_create(Relation heapRelation,
 	/* partitioned indexes must never be "built" by themselves */
 	Assert(!partitioned || (flags & INDEX_CREATE_SKIP_BUILD));
 
-	relkind = partitioned ? RELKIND_PARTITIONED_INDEX : RELKIND_INDEX;
+	if (global)
+		relkind = RELKIND_GLOBAL_INDEX;
+	else if (partitioned)
+		relkind = RELKIND_PARTITIONED_INDEX;
+	else
+		relkind = RELKIND_INDEX;
+
 	is_exclusion = (indexInfo->ii_ExclusionOps != NULL);
 
 	pg_class = table_open(RelationRelationId, RowExclusiveLock);
@@ -1399,8 +1405,7 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId,
 							oldInfo->ii_NullsNotDistinct,
 							false,	/* not ready for inserts */
 							true,
-							indexRelation->rd_indam->amsummarizing,
-							oldInfo->ii_Global);
+							indexRelation->rd_indam->amsummarizing);
 
 	/*
 	 * Extract the list of column names and the column numbers for the new
@@ -2437,8 +2442,7 @@ BuildIndexInfo(Relation index)
 					   indexStruct->indnullsnotdistinct,
 					   indexStruct->indisready,
 					   false,
-					   index->rd_indam->amsummarizing,
-					   indexStruct->indisglobal);
+					   index->rd_indam->amsummarizing);
 
 	/* fill in attribute numbers */
 	for (i = 0; i < numAtts; i++)
@@ -2497,8 +2501,7 @@ BuildDummyIndexInfo(Relation index)
 					   indexStruct->indnullsnotdistinct,
 					   indexStruct->indisready,
 					   false,
-					   index->rd_indam->amsummarizing,
-					   false);
+					   index->rd_indam->amsummarizing);
 
 	/* fill in attribute numbers */
 	for (i = 0; i < numAtts; i++)

@@ -1180,7 +1180,8 @@ typedef struct BTOptions
 } BTOptions;
 
 #define BTGetFillFactor(relation) \
-	(AssertMacro(relation->rd_rel->relkind == RELKIND_INDEX && \
+	(AssertMacro((relation->rd_rel->relkind == RELKIND_INDEX || \
+				  relation->rd_rel->relkind == RELKIND_GLOBAL_INDEX) && \
 				 relation->rd_rel->relam == BTREE_AM_OID), \
 	 (relation)->rd_options ? \
 	 ((BTOptions *) (relation)->rd_options)->fillfactor : \
@@ -1188,7 +1189,8 @@ typedef struct BTOptions
 #define BTGetTargetPageFreeSpace(relation) \
 	(BLCKSZ * (100 - BTGetFillFactor(relation)) / 100)
 #define BTGetDeduplicateItems(relation) \
-	(AssertMacro(relation->rd_rel->relkind == RELKIND_INDEX && \
+	(AssertMacro((relation->rd_rel->relkind == RELKIND_INDEX || \
+				  relation->rd_rel->relkind == RELKIND_GLOBAL_INDEX) && \
 				 relation->rd_rel->relam == BTREE_AM_OID), \
 	((relation)->rd_options ? \
 	 ((BTOptions *) (relation)->rd_options)->deduplicate_items : true))

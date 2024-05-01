@@ -1843,7 +1843,8 @@ ExecGrant_Relation(InternalGrant *istmt)
 
 		/* Not sensible to grant on an index */
 		if (pg_class_tuple->relkind == RELKIND_INDEX ||
-			pg_class_tuple->relkind == RELKIND_PARTITIONED_INDEX)
+			pg_class_tuple->relkind == RELKIND_PARTITIONED_INDEX ||
+			pg_class_tuple->relkind == RELKIND_GLOBAL_INDEX)
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg("\"%s\" is an index",
@@ -4417,6 +4418,7 @@ recordExtObjInitPriv(Oid objoid, Oid classoid)
 		 */
 		if (pg_class_tuple->relkind == RELKIND_INDEX ||
 			pg_class_tuple->relkind == RELKIND_PARTITIONED_INDEX ||
+			pg_class_tuple->relkind == RELKIND_GLOBAL_INDEX ||
 			pg_class_tuple->relkind == RELKIND_COMPOSITE_TYPE)
 		{
 			ReleaseSysCache(tuple);
@@ -4576,6 +4578,7 @@ removeExtObjInitPriv(Oid objoid, Oid classoid)
 		 */
 		if (pg_class_tuple->relkind == RELKIND_INDEX ||
 			pg_class_tuple->relkind == RELKIND_PARTITIONED_INDEX ||
+			pg_class_tuple->relkind == RELKIND_GLOBAL_INDEX ||
 			pg_class_tuple->relkind == RELKIND_COMPOSITE_TYPE)
 		{
 			ReleaseSysCache(tuple);

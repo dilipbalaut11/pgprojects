@@ -2945,7 +2945,7 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 			{
 				ItemPointer tid = BTreeTupleGetPostingN(itup, p);
 
-				tidblock.blockno = ItemPointerGetBlockNumber(&itup->t_tid);
+				tidblock.blockno = ItemPointerGetBlockNumber(tid);
 				tidblock.partid = partid;
 
 				match = bsearch(&tidblock, deadblocks, ndeadblocks,

@@ -1061,7 +1061,7 @@ RemoveConstraintById(Oid conId)
 		 * only if we're not dropping it.
 		 */
 		pkcols = dropping_pk ? NULL :
-			RelationGetIndexAttrBitmap(tablerel,
+			RelationGetIndexAttrBitmap(tablerel, false,
 									   INDEX_ATTR_BITMAP_PRIMARY_KEY);
 
 		foreach(lc, unconstrained_cols)
@@ -1100,7 +1100,7 @@ RemoveConstraintById(Oid conId)
 			 */
 			if (attForm->attidentity != '\0')
 				continue;
-			ircols = RelationGetIndexAttrBitmap(tablerel,
+			ircols = RelationGetIndexAttrBitmap(tablerel, false,
 												INDEX_ATTR_BITMAP_IDENTITY_KEY);
 			if (bms_is_member(attnum - FirstLowInvalidHeapAttributeNumber,
 							  ircols))

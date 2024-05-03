@@ -279,12 +279,12 @@ logicalrep_rel_mark_updatable(LogicalRepRelMapEntry *entry)
 
 	entry->updatable = true;
 
-	idkey = RelationGetIndexAttrBitmap(entry->localrel,
+	idkey = RelationGetIndexAttrBitmap(entry->localrel, false,
 									   INDEX_ATTR_BITMAP_IDENTITY_KEY);
 	/* fallback to PK if no replica identity */
 	if (idkey == NULL)
 	{
-		idkey = RelationGetIndexAttrBitmap(entry->localrel,
+		idkey = RelationGetIndexAttrBitmap(entry->localrel, false,
 										   INDEX_ATTR_BITMAP_PRIMARY_KEY);
 
 		/*

@@ -2713,7 +2713,7 @@ MergeAttributes(List *columns, const List *supers, char relpersistence,
 		 * attnotnull on columns that have a not-null constraint that's not
 		 * marked NO INHERIT.
 		 */
-		pkattrs = RelationGetIndexAttrBitmap(relation,
+		pkattrs = RelationGetIndexAttrBitmap(relation, false,
 											 INDEX_ATTR_BITMAP_PRIMARY_KEY);
 		nnconstrs = RelationGetNotNullConstraints(RelationGetRelid(relation), true);
 		foreach(lc1, nnconstrs)
@@ -7790,7 +7790,8 @@ ATExecDropNotNull(Relation rel, const char *colName, bool recurse,
 		/*
 		 * If the column is in a primary key, throw a specific error message.
 		 */
-		pkcols = RelationGetIndexAttrBitmap(rel, INDEX_ATTR_BITMAP_PRIMARY_KEY);
+		pkcols = RelationGetIndexAttrBitmap(rel, false,
+											INDEX_ATTR_BITMAP_PRIMARY_KEY);
 		if (bms_is_member(attnum - FirstLowInvalidHeapAttributeNumber,
 						  pkcols))
 			ereport(ERROR,
@@ -7798,7 +7799,8 @@ ATExecDropNotNull(Relation rel, const char *colName, bool recurse,
 					errmsg("column \"%s\" is in a primary key", colName));
 
 		/* Also throw an error if the column is in the replica identity */
-		ircols = RelationGetIndexAttrBitmap(rel, INDEX_ATTR_BITMAP_IDENTITY_KEY);
+		ircols = RelationGetIndexAttrBitmap(rel, false,
+											INDEX_ATTR_BITMAP_IDENTITY_KEY);
 		if (bms_is_member(attnum - FirstLowInvalidHeapAttributeNumber, ircols))
 			ereport(ERROR,
 					errcode(ERRCODE_INVALID_TABLE_DEFINITION),
@@ -13197,9 +13199,10 @@ dropconstraint_internal(Relation rel, HeapTuple constraintTup, DropBehavior beha
 		 * only if we're not dropping it.
 		 */
 		pkcols = dropping_pk ? NULL :
-			RelationGetIndexAttrBitmap(rel,
+			RelationGetIndexAttrBitmap(rel, false,
 									   INDEX_ATTR_BITMAP_PRIMARY_KEY);
-		ircols = RelationGetIndexAttrBitmap(rel, INDEX_ATTR_BITMAP_IDENTITY_KEY);
+		ircols = RelationGetIndexAttrBitmap(rel, false,
+											INDEX_ATTR_BITMAP_IDENTITY_KEY);
 
 		foreach_int(attnum, unconstrained_cols)
 		{
@@ -17203,7 +17206,7 @@ ATInheritAdjustNotNulls(Relation parent_rel, Relation child_rel, int inhcount)
 	if (!parent_rel->rd_rel->relhasindex)
 		return;
 
-	pkattnos = RelationGetIndexAttrBitmap(parent_rel,
+	pkattnos = RelationGetIndexAttrBitmap(parent_rel, false,
 										  INDEX_ATTR_BITMAP_PRIMARY_KEY);
 	if (pkattnos != NULL)
 	{
@@ -20913,7 +20916,7 @@ GetParentedForeignKeyRefs(Relation partition)
 	 * scan.
 	 */
 	if (RelationGetIndexList(partition) == NIL ||
-		bms_is_empty(RelationGetIndexAttrBitmap(partition,
+		bms_is_empty(RelationGetIndexAttrBitmap(partition, false,
 												INDEX_ATTR_BITMAP_KEY)))
 		return NIL;
 

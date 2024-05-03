@@ -66,6 +66,7 @@ typedef enum IndexAttrBitmapKind
 } IndexAttrBitmapKind;
 
 extern Bitmapset *RelationGetIndexAttrBitmap(Relation relation,
+											 bool check_global_index,
 											 IndexAttrBitmapKind attrKind);
 
 extern Bitmapset *RelationGetIdentityKeyBitmap(Relation relation);

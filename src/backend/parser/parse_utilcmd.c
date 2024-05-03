@@ -1214,7 +1214,7 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 			donecols = bms_add_member(donecols, cooked->attnum);
 		}
 
-		pkcols = RelationGetIndexAttrBitmap(relation,
+		pkcols = RelationGetIndexAttrBitmap(relation, false,
 											INDEX_ATTR_BITMAP_PRIMARY_KEY);
 		while ((x = bms_next_member(pkcols, x)) >= 0)
 		{

@@ -5233,7 +5233,8 @@ RelationGetIndexPredicate(Relation relation)
  * be bms_free'd when not needed anymore.
  */
 Bitmapset *
-RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
+RelationGetIndexAttrBitmap(Relation relation, bool check_global_index,
+						   IndexAttrBitmapKind attrKind)
 {
 	Bitmapset  *uindexattrs;	/* columns in unique indexes */
 	Bitmapset  *pkindexattrs;	/* columns in the primary index */
@@ -5268,7 +5269,7 @@ RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
 		}
 	}
 
-	if (relation->rd_rel->relispartition)
+	if (check_global_index)
 	{
 		Oid parent = get_partition_parent(RelationGetRelid(relation), true);
 		Relation rel = table_open(parent, AccessShareLock);

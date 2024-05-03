@@ -1,0 +1,106 @@
+--
+-- GLOBAL index tests
+--
+CREATE TABLE range_parted (
+	a int,
+	b int
+) PARTITION BY RANGE (a);
+--create some partitions and insert data
+CREATE TABLE range_parted_1 PARTITION OF range_parted FOR VALUES FROM (1) TO (100000);
+CREATE TABLE range_parted_2 PARTITION OF range_parted FOR VALUES FROM (100000) TO (200000);
+CREATE TABLE range_parted_3 PARTITION OF range_parted FOR VALUES FROM (200000) TO (300000);
+INSERT INTO range_parted SELECT i,i%100 FROM generate_series(1,299999) AS i;
+--Create global index
+CREATE INDEX global_idx ON range_parted(b) global;
+INSERT INTO range_parted SELECT i,i%200 FROM generate_series(1,299999) AS i;
+EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 7;
+                     QUERY PLAN                     
+----------------------------------------------------
+ Global Index Scan using global_idx on range_parted
+   Index Cond: (b = 7)
+(2 rows)
+
+SELECT * FROM range_parted WHERE b = 7 LIMIT 10;
+   a    | b 
+--------+---
+      7 | 7
+ 100007 | 7
+ 200007 | 7
+    107 | 7
+ 100107 | 7
+ 200107 | 7
+    207 | 7
+ 200207 | 7
+ 100207 | 7
+    307 | 7
+(10 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 110;
+                     QUERY PLAN                     
+----------------------------------------------------
+ Global Index Scan using global_idx on range_parted
+   Index Cond: (b = 110)
+(2 rows)
+
+SELECT * FROM range_parted WHERE b = 110 LIMIT 10;
+  a   |  b  
+------+-----
+  110 | 110
+  310 | 110
+  510 | 110
+  710 | 110
+  910 | 110
+ 1110 | 110
+ 1310 | 110
+ 1510 | 110
+ 1710 | 110
+ 1910 | 110
+(10 rows)
+
+SELECT * FROM range_parted WHERE b = 250 LIMIT 10;
+ a | b 
+---+---
+(0 rows)
+
+UPDATE range_parted SET b=b+100;
+EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 250;
+                     QUERY PLAN                     
+----------------------------------------------------
+ Global Index Scan using global_idx on range_parted
+   Index Cond: (b = 250)
+(2 rows)
+
+SELECT * FROM range_parted WHERE b = 250 LIMIT 10;
+  a   |  b  
+------+-----
+  150 | 250
+  350 | 250
+  550 | 250
+  750 | 250
+  950 | 250
+ 1150 | 250
+ 1350 | 250
+ 1550 | 250
+ 1750 | 250
+ 1950 | 250
+(10 rows)
+
+--attach partition
+CREATE TABLE range_parted_4(a int, b int);
+INSERT INTO range_parted_4 SELECT i,i%300 + 100 FROM generate_series(300000,300300) as i;
+ALTER TABLE range_parted ATTACH PARTITION range_parted_4 FOR VALUES FROM (300000) to (400000);
+EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 350;
+                     QUERY PLAN                     
+----------------------------------------------------
+ Global Index Scan using global_idx on range_parted
+   Index Cond: (b = 350)
+(2 rows)
+
+SELECT * FROM range_parted WHERE b = 350 LIMIT 10;
+   a    |  b  
+--------+-----
+ 300250 | 350
+(1 row)
+
+-- Cleanup
+DROP TABLE range_parted;

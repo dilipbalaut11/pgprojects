@@ -21,18 +21,18 @@ EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 7;
 (2 rows)
 
 SELECT * FROM range_parted WHERE b = 7 LIMIT 10;
-   a    | b 
---------+---
-      7 | 7
- 100007 | 7
- 200007 | 7
-    107 | 7
- 100107 | 7
- 200107 | 7
-    207 | 7
- 200207 | 7
- 100207 | 7
-    307 | 7
+  a  | b 
+-----+---
+   7 | 7
+ 107 | 7
+ 207 | 7
+ 307 | 7
+ 407 | 7
+ 507 | 7
+ 607 | 7
+ 707 | 7
+ 807 | 7
+ 907 | 7
 (10 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 110;

@@ -3105,11 +3105,13 @@ index_build(Relation heapRelation,
 	}
 
 	/*
-	 * Update heap and index pg_class rows
+	 * Update heap and index pg_class rows.  If building global index for a
+	 * partitioned table then don't update the stats for the heap relation.
 	 */
-	index_update_stats(heapRelation,
-					   true,
-					   stats->heap_tuples);
+	if (RELKIND_HAS_STORAGE(heapRelation->rd_rel->relkind))
+		index_update_stats(heapRelation,
+						true,
+						stats->heap_tuples);
 
 	index_update_stats(indexRelation,
 					   false,

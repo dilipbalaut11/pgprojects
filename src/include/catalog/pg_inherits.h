@@ -18,6 +18,7 @@
 #ifndef PG_INHERITS_H
 #define PG_INHERITS_H
 
+#include "access/xlogdefs.h"
 #include "catalog/genbki.h"
 #include "catalog/pg_inherits_d.h"
 
@@ -33,6 +34,7 @@ CATALOG(pg_inherits,2611,InheritsRelationId)
 {
 	Oid			inhrelid BKI_LOOKUP(pg_class);
 	Oid			inhparent BKI_LOOKUP(pg_class);
+	int64		inhpartid;
 	int32		inhseqno;
 	bool		inhdetachpending;
 } FormData_pg_inherits;
@@ -58,7 +60,7 @@ extern bool has_subclass(Oid relationId);
 extern bool has_superclass(Oid relationId);
 extern bool typeInheritsFrom(Oid subclassTypeId, Oid superclassTypeId);
 extern void StoreSingleInheritance(Oid relationId, Oid parentOid,
-								   int32 seqNumber);
+								   int32 seqNumber, PartitionId partid);
 extern bool DeleteInheritsTuple(Oid inhrelid, Oid inhparent,
 								bool expect_detach_pending,
 								const char *childname);

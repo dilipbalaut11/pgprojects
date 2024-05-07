@@ -1145,6 +1145,8 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		/* Update the pg_class entry. */
 		StorePartitionBound(rel, parent, bound);
 
+		/* Insert partid to reloid mapping */
+
 		table_close(parent, NoLock);
 	}
 
@@ -3526,9 +3528,16 @@ StoreCatalogInheritance1(Oid relationId, Oid parentOid,
 {
 	ObjectAddress childobject,
 				parentobject;
+	PartitionId	partid;;
+
+	/*
+	 * TODO: We may avoid generating partition id if the partition is not a
+	 * base relation.
+	 */
+	partid = GetNewPartitionId();
 
 	/* store the pg_inherits row */
-	StoreSingleInheritance(relationId, parentOid, seqNumber);
+	StoreSingleInheritance(relationId, parentOid, seqNumber, partid);
 
 	/*
 	 * Store a dependency too

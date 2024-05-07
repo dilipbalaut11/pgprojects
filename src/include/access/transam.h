@@ -195,6 +195,7 @@ FullTransactionIdAdvance(FullTransactionId *dest)
 #define FirstGenbkiObjectId		10000
 #define FirstUnpinnedObjectId	12000
 #define FirstNormalObjectId		16384
+#define FirstNormalPartID		 1000
 
 /*
  * TransamVariables is a data structure in shared memory that is used to track
@@ -213,6 +214,12 @@ typedef struct TransamVariablesData
 	 */
 	Oid			nextOid;		/* next OID to assign */
 	uint32		oidCount;		/* OIDs available before must do XLOG work */
+
+	/*
+	 * These fields are protected by PartIdGenLock.
+	 */
+	PartitionId	nextPartId;		/* next PartId to assign */
+	uint32		partidCount;	/* PartIds available before must do XLOG work */
 
 	/*
 	 * These fields are protected by XidGenLock.
@@ -293,6 +300,7 @@ extern void SetTransactionIdLimit(TransactionId oldest_datfrozenxid,
 extern void AdvanceOldestClogXid(TransactionId oldest_datfrozenxid);
 extern bool ForceTransactionIdLimitUpdate(void);
 extern Oid	GetNewObjectId(void);
+PartitionId GetNewPartitionId(void);
 extern void StopGeneratingPinnedObjectIds(void);
 
 #ifdef USE_ASSERT_CHECKING

@@ -30,6 +30,9 @@
 /* Number of OIDs to prefetch (preallocate) per XLOG write */
 #define VAR_OID_PREFETCH		8192
 
+/* Number of PartIds to prefetch (preallocate) per XLOG write */
+#define VAR_PARTID_PREFETCH		8192
+
 /* pointer to variables struct in shared memory */
 TransamVariablesData *TransamVariables = NULL;
 
@@ -652,6 +655,38 @@ void
 StopGeneratingPinnedObjectIds(void)
 {
 	SetNextObjectId(FirstUnpinnedObjectId);
+}
+
+/*
+ * GetNewPartitionId -- allocate a partition identified
+ */
+PartitionId
+GetNewPartitionId(void)
+{
+	PartitionId			result;
+
+	/* safety check, we should never get this far in a HS standby */
+	if (RecoveryInProgress())
+		elog(ERROR, "cannot assign Partition ID during recovery");
+
+	/* FIXME use PartIDGenLock */
+	LWLockAcquire(PartidGenLock, LW_EXCLUSIVE);
+
+	/* If we run out of logged for use partids then we must log more */
+	if (TransamVariables->partidCount == 0)
+	{
+		XLogPutNextPartID(TransamVariables->nextPartId + VAR_PARTID_PREFETCH);
+		TransamVariables->partidCount = VAR_PARTID_PREFETCH;
+	}
+
+	result = TransamVariables->nextPartId;
+
+	(TransamVariables->nextPartId)++;
+	(TransamVariables->partidCount)--;
+
+	LWLockRelease(PartidGenLock);
+
+	return result;
 }
 
 

@@ -505,7 +505,8 @@ typeInheritsFrom(Oid subclassTypeId, Oid superclassTypeId)
  * Create a single pg_inherits row with the given data
  */
 void
-StoreSingleInheritance(Oid relationId, Oid parentOid, int32 seqNumber)
+StoreSingleInheritance(Oid relationId, Oid parentOid, int32 seqNumber,
+					   PartitionId partid)
 {
 	Datum		values[Natts_pg_inherits];
 	bool		nulls[Natts_pg_inherits];
@@ -519,6 +520,7 @@ StoreSingleInheritance(Oid relationId, Oid parentOid, int32 seqNumber)
 	 */
 	values[Anum_pg_inherits_inhrelid - 1] = ObjectIdGetDatum(relationId);
 	values[Anum_pg_inherits_inhparent - 1] = ObjectIdGetDatum(parentOid);
+	values[Anum_pg_inherits_inhpartid - 1] = ObjectIdGetDatum(partid);
 	values[Anum_pg_inherits_inhseqno - 1] = Int32GetDatum(seqNumber);
 	values[Anum_pg_inherits_inhdetachpending - 1] = BoolGetDatum(false);
 

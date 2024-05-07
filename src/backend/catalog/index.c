@@ -1069,7 +1069,8 @@ index_create(Relation heapRelation,
 	/* update pg_inherits and the parent's relhassubclass, if needed */
 	if (OidIsValid(parentIndexRelid))
 	{
-		StoreSingleInheritance(indexRelationId, parentIndexRelid, 1);
+		StoreSingleInheritance(indexRelationId, parentIndexRelid, 1,
+							   InvalidPartitionId);
 		SetRelationHasSubclass(parentIndexRelid, true);
 	}
 
@@ -1786,7 +1787,8 @@ index_concurrently_swap(Oid newIndexId, Oid oldIndexId, const char *oldName)
 		Oid			parentIndexRelid = linitial_oid(ancestors);
 
 		DeleteInheritsTuple(oldIndexId, parentIndexRelid, false, NULL);
-		StoreSingleInheritance(newIndexId, parentIndexRelid, 1);
+		StoreSingleInheritance(newIndexId, parentIndexRelid, 1,
+							   InvalidPartitionId);
 
 		list_free(ancestors);
 	}

@@ -21,6 +21,13 @@
 typedef uint64 XLogRecPtr;
 
 /*
+ * FIXME: where to declare this.
+ */
+typedef uint64 PartitionId;
+#define InvalidPartitionId	0
+#define PartitionIdInValid(partid)	((partid) == InvalidPartitionId)
+
+/*
  * Zero is used indicate an invalid pointer. Bootstrap skips the first possible
  * WAL segment, initializing the first WAL page at WAL segment size, so no XLOG
  * record can begin at zero.

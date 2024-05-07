@@ -4470,7 +4470,7 @@ IndexSetParentIndex(Relation partitionIdx, Oid parentOid)
 		}
 		else
 		{
-			StoreSingleInheritance(partRelid, parentOid, 1);
+			StoreSingleInheritance(partRelid, parentOid, 1, InvalidPartitionId);
 			fix_dependencies = true;
 		}
 	}

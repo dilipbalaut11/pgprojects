@@ -5049,6 +5049,7 @@ BootStrapXLOG(void)
 		FullTransactionIdFromEpochAndXid(0, FirstNormalTransactionId);
 	checkPoint.nextOid = FirstGenbkiObjectId;
 	checkPoint.nextMulti = FirstMultiXactId;
+	checkPoint.nextPartId = FirstNormalPartID;
 	checkPoint.nextMultiOffset = 0;
 	checkPoint.oldestXid = FirstNormalTransactionId;
 	checkPoint.oldestXidDB = Template1DbOid;
@@ -5062,6 +5063,8 @@ BootStrapXLOG(void)
 	TransamVariables->nextXid = checkPoint.nextXid;
 	TransamVariables->nextOid = checkPoint.nextOid;
 	TransamVariables->oidCount = 0;
+	TransamVariables->nextPartId = checkPoint.nextPartId;
+	TransamVariables->partidCount = 0;
 	MultiXactSetNextMXact(checkPoint.nextMulti, checkPoint.nextMultiOffset);
 	AdvanceOldestClogXid(checkPoint.oldestXid);
 	SetTransactionIdLimit(checkPoint.oldestXid, checkPoint.oldestXidDB);
@@ -5531,6 +5534,8 @@ StartupXLOG(void)
 	TransamVariables->nextXid = checkPoint.nextXid;
 	TransamVariables->nextOid = checkPoint.nextOid;
 	TransamVariables->oidCount = 0;
+	TransamVariables->nextPartId = checkPoint.nextPartId;
+	TransamVariables->partidCount = 0;
 	MultiXactSetNextMXact(checkPoint.nextMulti, checkPoint.nextMultiOffset);
 	AdvanceOldestClogXid(checkPoint.oldestXid);
 	SetTransactionIdLimit(checkPoint.oldestXid, checkPoint.oldestXidDB);
@@ -7044,6 +7049,12 @@ CreateCheckPoint(int flags)
 		checkPoint.nextOid += TransamVariables->oidCount;
 	LWLockRelease(OidGenLock);
 
+	LWLockAcquire(PartidGenLock, LW_SHARED);
+	checkPoint.nextPartId = TransamVariables->nextPartId;
+	if (!shutdown)
+		checkPoint.nextPartId += TransamVariables->partidCount;
+	LWLockRelease(PartidGenLock);
+
 	MultiXactGetCheckptMulti(shutdown,
 							 &checkPoint.nextMulti,
 							 &checkPoint.nextMultiOffset,
@@ -7968,6 +7979,17 @@ XLogPutNextOid(Oid nextOid)
 }
 
 /*
+ * Write a NEXTPARTID log record
+ */
+void
+XLogPutNextPartID(PartitionId nextPartid)
+{
+	XLogBeginInsert();
+	XLogRegisterData((char *) (&nextPartid), sizeof(PartitionId));
+	(void) XLogInsert(RM_XLOG_ID, XLOG_NEXTPARTID);
+}
+
+/*
  * Write an XLOG SWITCH record.
  *
  * Here we just blindly issue an XLogInsert request for the record.
@@ -8182,6 +8204,23 @@ xlog_redo(XLogReaderState *record)
 		TransamVariables->oidCount = 0;
 		LWLockRelease(OidGenLock);
 	}
+	if (info == XLOG_NEXTPARTID)
+	{
+		PartitionId		nextPartId;
+
+		/*
+		 * We used to try to take the maximum of TransamVariables->nextOid and
+		 * the recorded nextOid, but that fails if the OID counter wraps
+		 * around.  Since no OID allocation should be happening during replay
+		 * anyway, better to just believe the record exactly.  We still take
+		 * OidGenLock while setting the variable, just in case.
+		 */
+		memcpy(&nextPartId, XLogRecGetData(record), sizeof(Oid));
+		LWLockAcquire(PartidGenLock, LW_EXCLUSIVE);
+		TransamVariables->nextPartId = nextPartId;
+		TransamVariables->partidCount = 0;
+		LWLockRelease(PartidGenLock);
+	}
 	else if (info == XLOG_CHECKPOINT_SHUTDOWN)
 	{
 		CheckPoint	checkPoint;
@@ -8196,6 +8235,10 @@ xlog_redo(XLogReaderState *record)
 		TransamVariables->nextOid = checkPoint.nextOid;
 		TransamVariables->oidCount = 0;
 		LWLockRelease(OidGenLock);
+		LWLockAcquire(PartidGenLock, LW_EXCLUSIVE);
+		TransamVariables->nextPartId = checkPoint.nextPartId;
+		TransamVariables->partidCount = 0;
+		LWLockRelease(PartidGenLock);
 		MultiXactSetNextMXact(checkPoint.nextMulti,
 							  checkPoint.nextMultiOffset);
 

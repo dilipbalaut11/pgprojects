@@ -241,6 +241,13 @@ ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
 		ii = BuildIndexInfo(indexDesc);
 
 		/*
+		 * If this is a global index then get the partition id of this partition
+		 * with respect to this global index.
+		 */
+		 if (RelationIsGlobalIndex(indexDesc))
+			ii->ii_partid = IndexGetRelationPartID(indexDesc, relation_oid);
+
+		/*
 		 * If the indexes are to be used for speculative insertion, add extra
 		 * information required by unique index entries.
 		 */

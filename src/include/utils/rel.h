@@ -19,6 +19,7 @@
 #include "catalog/catalog.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_index.h"
+#include "catalog/pg_index_partitions.h"
 #include "catalog/pg_publication.h"
 #include "nodes/bitmapset.h"
 #include "partitioning/partdefs.h"
@@ -216,7 +217,7 @@ typedef struct RelationData
 	uint16	   *rd_exclstrats;	/* exclusion ops' strategy numbers, if any */
 	Oid		   *rd_indcollation;	/* OIDs of index collations */
 	bytea	  **rd_opcoptions;	/* parsed opclass-specific options */
-
+	IndexPartitionInfo	rd_indexpartinfo;
 	/*
 	 * rd_amcache is available for index and table AMs to cache private data
 	 * about the relation.  This must be just a cache since it may get reset

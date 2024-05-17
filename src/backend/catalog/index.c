@@ -1288,6 +1288,15 @@ index_create(Relation heapRelation,
 	}
 
 	/*
+	 * For global index recursively process the whole partition tree starting
+	 * from the parent relation on which we are creating this global index
+	 * and allocate partition id for each leaf partition and also insert an
+	 * entry into the global index to partition id mapping table.
+	 */
+	if (global)
+		CreateIndexPartitionIdRecurse(heapRelation, indexRelation);
+
+	/*
 	 * Close the index; but we keep the lock that we acquired above until end
 	 * of transaction.  Closing the heap is caller's responsibility.
 	 */

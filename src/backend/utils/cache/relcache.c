@@ -1571,6 +1571,9 @@ RelationInitIndexAccessInfo(Relation relation)
 
 	(void) RelationGetIndexAttOptions(relation, false);
 
+	if (RelationIsGlobalIndex(relation))
+		BuildIndexPartitionInfo(relation, indexcxt);
+
 	/*
 	 * expressions, predicate, exclusion caches will be filled later
 	 */

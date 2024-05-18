@@ -24,9 +24,6 @@
 #include "utils/fmgroids.h"
 #include "utils/rel.h"
 
-#define		InvalidIndexPartitionId		0
-#define		FirstValidIndexPartitionId	1
-
 /*
  * Get the next partition id to be allocated for the input index relation.
  * also update this value in the cache for the next allocation.
@@ -64,7 +61,7 @@ InsertIndexPartitionEntry(Relation irel, Oid reloid, int32 partid)
 	bool		nulls[Natts_pg_index_partitions];
 	HeapTuple	tuple;
 	Relation	rel;
-	Oid			indexoid = irel->rd_rel->oid;
+	Oid			indexoid = RelationGetRelid(irel);
 
 	rel = table_open(IndexPartitionsRelationId, RowExclusiveLock);
 
@@ -152,8 +149,8 @@ BuildIndexPartitionInfo(Relation relation, MemoryContext context)
 
 	scan = systable_beginscan(rel, IndexIdPartitionsIndexId, true,
 							  NULL, 1, &key);
-	tuple = systable_getnext(scan);
-	if (HeapTupleIsValid(tuple))
+
+	while ((tuple = systable_getnext(scan)) != NULL)
 	{
 		Form_pg_index_partitions form = (Form_pg_index_partitions) GETSTRUCT(tuple);
 		IndexPartitionInfoEntry *entry;
@@ -167,6 +164,7 @@ BuildIndexPartitionInfo(Relation relation, MemoryContext context)
 		if (form->partid > maxpartid)
 			maxpartid = form->partid;
 	}
+
 	map->max_partid = maxpartid;
 	relation->rd_indexpartinfo = map;
 	systable_endscan(scan);
@@ -176,16 +174,21 @@ BuildIndexPartitionInfo(Relation relation, MemoryContext context)
 }
 
 /*
- * Get the the parition id for the geven partition relation oid for the input
+ * Get the the parition id for the given partition relation oid for the input
  * global index relation.
  */
 int32
 IndexGetRelationPartID(Relation irel, Oid reloid)
 {
-	IndexPartitionInfo	map = irel->rd_indexpartinfo;
+	IndexPartitionInfo	map;
 	HASH_SEQ_STATUS		hash_seq;
 	int32				partid = InvalidIndexPartitionId;
 	IndexPartitionInfoEntry *entry;
+
+	if (irel->rd_indexpartinfo == NULL)
+		BuildIndexPartitionInfo(irel, CurrentMemoryContext);
+
+	map = irel->rd_indexpartinfo;
 
 	hash_seq_init(&hash_seq, map->pdir_hash);
 
@@ -200,4 +203,20 @@ IndexGetRelationPartID(Relation irel, Oid reloid)
 	}
 
 	return partid;
+}
+
+/*
+ * Get the the reloid for the given partid for the input global index relation.
+ */
+Oid
+IndexGetPartitionReloid(Relation irel, int32 partid)
+{
+	IndexPartitionInfo	map = irel->rd_indexpartinfo;
+	IndexPartitionInfoEntry *entry;
+	bool		found;
+
+	entry = hash_search(map->pdir_hash, &partid, HASH_FIND, &found);
+	Assert(found);
+
+	return entry->reloid;
 }

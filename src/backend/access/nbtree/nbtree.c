@@ -1233,7 +1233,7 @@ backtrack:
 				 * we are vacuuming.
 				 */
 				if (RelationIsGlobalIndex(rel) &&
-					IndexTupleFetchPartitionId(rel, itup) != heaprel->rd_rel->oid)
+					IndexTupleFetchPartRelid(rel, itup) != heaprel->rd_rel->oid)
 					continue;
 
 				Assert(!BTreeTupleIsPivot(itup));

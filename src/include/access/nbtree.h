@@ -658,7 +658,7 @@ BTreeTupleGetHeapTID(IndexTuple itup)
 /*
  * Get tiebreaker partition identifier attribute, if any.
  */
-static inline Oid
+static inline int32
 BTreeTupleGetPartID(Relation index, IndexTuple itup)
 {
 	/*
@@ -668,10 +668,23 @@ BTreeTupleGetPartID(Relation index, IndexTuple itup)
 	 */
 	if (!BTreeTupleIsPivot(itup) || BTreeTupleGetNAtts(itup, index) >
 		IndexRelationGetNumberOfKeyAttributes(index))
-		return IndexTupleFetchPartitionId(index, itup);
+		return IndexTupleFetchPartID(index, itup);
 
 	/* Part ID attribute was truncated */
-	return InvalidOid;
+	return InvalidIndexPartitionId;
+}
+
+/*
+ * Get tiebreaker partition identifier attribute, if any.
+ */
+static inline Oid
+BTreeTupleGetPartitionRelid(Relation index, IndexTuple itup)
+{
+	int32	partid = BTreeTupleGetPartID(index, itup);
+
+	Assert(IndexPartIdIsValid(partid));
+
+	return IndexGetPartitionReloid(index, partid);
 }
 
 static inline int32
@@ -715,7 +728,7 @@ _bt_indexdel_cmp(const void *arg1, const void *arg2)
 	TM_IndexDelete *b1 = ((TM_IndexDelete *) arg1);
 	TM_IndexDelete *b2 = ((TM_IndexDelete *) arg2);
 
-	return pg_cmp_u32(b1->partid, b2->partid);
+	return pg_cmp_u32(b1->reloid, b2->reloid);
 }
 
 /*
@@ -831,7 +844,7 @@ typedef struct BTScanInsertData
 	bool		anynullkeys;
 	bool		nextkey;
 	bool		backward;		/* backward index scan? */
-	Oid			partid;			/* tiebreaker only for global indexes */
+	int32		partid;			/* tiebreaker only for global indexes */
 	ItemPointer scantid;		/* tiebreaker for scankeys */
 	int			keysz;			/* Size of scankeys array */
 	ScanKeyData scankeys[INDEX_MAX_KEYS];	/* Must appear last */

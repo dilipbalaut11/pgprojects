@@ -1692,7 +1692,7 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 	{
 		int		ndeltid;
 		int		starttid = 0;
-		Oid		prevpartid = InvalidOid;
+		Oid		prevrelid = InvalidOid;
 		TM_IndexDeleteOp partdelstate = *delstate;
 
 		/*
@@ -1702,13 +1702,13 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 		qsort(delstate->deltids, delstate->ndeltids, sizeof(TM_IndexDelete),
 			  _bt_indexdel_cmp);
 
-		prevpartid = delstate->deltids[0].partid;
+		prevrelid = delstate->deltids[0].reloid;
 		for (ndeltid = 0; ndeltid < delstate->ndeltids; ndeltid++)
 		{
-			if (OidIsValid(prevpartid) &&
-				delstate->deltids[ndeltid].partid != prevpartid)
+			if (OidIsValid(prevrelid) &&
+				delstate->deltids[ndeltid].reloid != prevrelid)
 			{
-				Relation childRel = table_open(prevpartid, AccessShareLock);
+				Relation childRel = table_open(prevrelid, AccessShareLock);
 
 				partdelstate.deltids = &delstate->deltids[starttid];
 				partdelstate.ndeltids = ndeltid - starttid;
@@ -1719,7 +1719,7 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 				table_close(childRel, AccessShareLock);
 			}
 
-			prevpartid = delstate->deltids[ndeltid].partid;
+			prevrelid = delstate->deltids[ndeltid].reloid;
 		}
 	}
 	else

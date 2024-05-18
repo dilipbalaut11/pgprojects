@@ -489,6 +489,14 @@ _bt_spools_heapscan(Relation heap, Relation index, BTBuildState *buildstate,
 			Oid			childRelid = part_oids[i];
 			Relation	childrel;
 
+			/*
+			 * FIXME: there should be better way to centralize this mechanism
+			 * of fetching the partition id.
+			 * If this is a global index then get the partition id of this
+			 * partition with respect to this global index.
+			 */
+			indexInfo->ii_partid = IndexGetRelationPartID(index, childRelid);
+
 			childrel = table_open(childRelid, AccessShareLock);
 			reltuples += table_index_build_scan(childrel, index, indexInfo, true,
 												true, _bt_build_callback,

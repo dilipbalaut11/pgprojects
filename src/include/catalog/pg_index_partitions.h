@@ -67,8 +67,13 @@ typedef struct IndexPartitionInfoEntry
 	Oid			reloid;		/* payload */
 } IndexPartitionInfoEntry;
 
+#define		InvalidIndexPartitionId		0
+#define		FirstValidIndexPartitionId	1
+#define		IndexPartIdIsValid(partid)	((bool) ((partid) != InvalidIndexPartitionId))
+
 extern void CreateIndexPartitionIdRecurse(Relation rel, Relation irel);
 extern void BuildIndexPartitionInfo(Relation relation, MemoryContext context);
 extern int32 IndexGetRelationPartID(Relation irel, Oid reloid);
+extern Oid IndexGetPartitionReloid(Relation irel, int32 partid);
 
 #endif							/* PG_INDEX_PARTITIONS_H */

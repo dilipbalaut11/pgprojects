@@ -33,7 +33,7 @@
 
 typedef struct BTHeapBlockInfo
 {
-	Oid			partid;
+	Oid			reloid;
 	BlockNumber	blockno;
 } BTHeapBlockInfo;
 
@@ -116,7 +116,7 @@ _bt_doinsert(Relation rel, IndexTuple itup,
 	BTInsertStateData insertstate;
 	BTScanInsert itup_key;
 	BTStack		stack;
-	Oid			partid;
+	int32		partid;
 	bool		checkingunique = (checkUnique != UNIQUE_CHECK_NO);
 
 	/* we need an insertion scan key to do our search, so build one */
@@ -128,7 +128,7 @@ _bt_doinsert(Relation rel, IndexTuple itup,
 		{
 			/* No (heapkeyspace) scantid until uniqueness established */
 			partid = itup_key->partid;
-			itup_key->partid = InvalidOid;
+			itup_key->partid = InvalidIndexPartitionId;
 			itup_key->scantid = NULL;
 		}
 		else
@@ -464,7 +464,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 	Assert(!insertstate->bounds_valid || insertstate->low == offset);
 	Assert(!itup_key->anynullkeys);
 	Assert(itup_key->scantid == NULL);
-	Assert(!OidIsValid(itup_key->partid));
+	Assert(!IndexPartIdIsValid(itup_key->partid));
 	for (;;)
 	{
 		/*
@@ -564,7 +564,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				 */
 				if (RelationIsGlobalIndex(rel))
 				{
-					Oid	curpartid = IndexTupleFetchPartitionId(rel, curitup);
+					Oid	curpartid = IndexTupleFetchPartRelid(rel, curitup);
 
 					if (partid != curpartid)
 					{
@@ -871,8 +871,8 @@ _bt_findinsertloc(Relation rel,
 
 	Assert(P_ISLEAF(opaque) && !P_INCOMPLETE_SPLIT(opaque));
 	Assert(!insertstate->bounds_valid || checkingunique);
-	Assert(!RelationIsGlobalIndex(rel) || OidIsValid(itup_key->partid));
-	Assert(RelationIsGlobalIndex(rel) || !OidIsValid(itup_key->partid));
+	Assert(!RelationIsGlobalIndex(rel) || IndexPartIdIsValid(itup_key->partid));
+	Assert(RelationIsGlobalIndex(rel) || !IndexPartIdIsValid(itup_key->partid));
 	Assert(!itup_key->heapkeyspace || itup_key->scantid != NULL);
 	Assert(itup_key->heapkeyspace || itup_key->scantid == NULL);
 	Assert(!itup_key->allequalimage || itup_key->heapkeyspace);
@@ -2910,8 +2910,8 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 		if (!BTreeTupleIsPosting(itup))
 		{
 			tidblock.blockno = ItemPointerGetBlockNumber(&itup->t_tid);
-			tidblock.partid = (RelationIsGlobalIndex(rel)) ?
-								BTreeTupleGetPartID(rel, itup) : InvalidOid;
+			tidblock.reloid = (RelationIsGlobalIndex(rel)) ?
+						BTreeTupleGetPartitionRelid(rel, itup) : InvalidOid;
 			match = bsearch(&tidblock, deadblocks, ndeadblocks,
 							sizeof(BTHeapBlockInfo), _bt_blk_cmp);
 
@@ -2925,7 +2925,7 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 			 * TID's table block is among those pointed to by the TIDs from
 			 * LP_DEAD-bit set tuples on page -- add TID to deltids
 			 */
-			odeltid->partid = tidblock.partid;
+			odeltid->reloid = tidblock.reloid;
 			odeltid->tid = itup->t_tid;
 			odeltid->id = delstate.ndeltids;
 			ostatus->idxoffnum = offnum;
@@ -2938,15 +2938,15 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 		else
 		{
 			int			nitem = BTreeTupleGetNPosting(itup);
-			Oid			partid = (RelationIsGlobalIndex(rel)) ?
-								BTreeTupleGetPartID(rel, itup) : InvalidOid;
+			Oid			reloid = (RelationIsGlobalIndex(rel)) ?
+						BTreeTupleGetPartitionRelid(rel, itup) : InvalidOid;
 
 			for (int p = 0; p < nitem; p++)
 			{
 				ItemPointer tid = BTreeTupleGetPostingN(itup, p);
 
 				tidblock.blockno = ItemPointerGetBlockNumber(tid);
-				tidblock.partid = partid;
+				tidblock.reloid = reloid;
 
 				match = bsearch(&tidblock, deadblocks, ndeadblocks,
 								sizeof(BTHeapBlockInfo), _bt_blk_cmp);
@@ -2961,7 +2961,7 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 				 * TID's table block is among those pointed to by the TIDs
 				 * from LP_DEAD-bit set tuples on page -- add TID to deltids
 				 */
-				odeltid->partid = partid;
+				odeltid->reloid = reloid;
 				odeltid->tid = *tid;
 				odeltid->id = delstate.ndeltids;
 				ostatus->idxoffnum = offnum;
@@ -3030,8 +3030,8 @@ _bt_deadblocks(Relation rel, Page page, OffsetNumber *deletable, int ndeletable,
 	 */
 	Assert(!BTreeTupleIsPosting(newitem) && !BTreeTupleIsPivot(newitem));
 	tidblocks[ntids].blockno = ItemPointerGetBlockNumber(&newitem->t_tid);
-	tidblocks[ntids++].partid = (RelationIsGlobalIndex(rel)) ?
-							BTreeTupleGetPartID(rel, newitem) : InvalidOid;
+	tidblocks[ntids++].reloid = (RelationIsGlobalIndex(rel)) ?
+						BTreeTupleGetPartitionRelid(rel, newitem) : InvalidOid;
 
 	for (int i = 0; i < ndeletable; i++)
 	{
@@ -3050,14 +3050,14 @@ _bt_deadblocks(Relation rel, Page page, OffsetNumber *deletable, int ndeletable,
 			}
 
 			tidblocks[ntids].blockno = ItemPointerGetBlockNumber(&itup->t_tid);
-			tidblocks[ntids++].partid = (RelationIsGlobalIndex(rel)) ?
-								BTreeTupleGetPartID(rel, itup) : InvalidOid;
+			tidblocks[ntids++].reloid = (RelationIsGlobalIndex(rel)) ?
+							BTreeTupleGetPartitionRelid(rel, itup) : InvalidOid;
 		}
 		else
 		{
 			int			nposting = BTreeTupleGetNPosting(itup);
-			Oid			partid = (RelationIsGlobalIndex(rel)) ?
-								BTreeTupleGetPartID(rel, itup) : InvalidOid;
+			Oid			reloid = (RelationIsGlobalIndex(rel)) ?
+						BTreeTupleGetPartitionRelid(rel, itup) : InvalidOid;
 
 			if (ntids + nposting > spacentids)
 			{
@@ -3071,7 +3071,7 @@ _bt_deadblocks(Relation rel, Page page, OffsetNumber *deletable, int ndeletable,
 				ItemPointer tid = BTreeTupleGetPostingN(itup, j);
 
 				tidblocks[ntids].blockno = ItemPointerGetBlockNumber(tid);
-				tidblocks[ntids++].partid = partid;
+				tidblocks[ntids++].reloid = reloid;
 			}
 		}
 	}
@@ -3093,7 +3093,7 @@ _bt_blk_cmp(const void *arg1, const void *arg2)
 	int	res;
 
 	/* first compare partid if they are same those compare the block number. */
-	res = pg_cmp_u32(b1->partid, b2->partid);
+	res = pg_cmp_u32(b1->reloid, b2->reloid);
 	if (res == 0)
 		res = pg_cmp_u32(b1->blockno, b2->blockno);
 	return res;

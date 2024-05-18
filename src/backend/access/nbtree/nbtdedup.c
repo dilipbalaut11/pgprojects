@@ -664,7 +664,7 @@ _bt_bottomupdel_finish_pending(Relation rel, Page page, BTDedupState state,
 							   TM_IndexDeleteOp *delstate)
 {
 	bool		dupinterval = (state->nitems > 1);
-	Oid			partid = InvalidOid;
+	Oid			reloid = InvalidOid;
 
 	Assert(state->nitems > 0);
 	Assert(state->nitems <= state->nhtids);
@@ -682,13 +682,13 @@ _bt_bottomupdel_finish_pending(Relation rel, Page page, BTDedupState state,
 		 * We are only collecting duplicate for one partition at a time so each
 		 * tuple in BTDedupState will have same partid.
 		 */
-		if (!OidIsValid(partid) && RelationIsGlobalIndex(rel))
-			partid = BTreeTupleGetPartID(rel, itup);
+		if (!OidIsValid(reloid) && RelationIsGlobalIndex(rel))
+			reloid = BTreeTupleGetPartitionRelid(rel, itup);
 
 		if (!BTreeTupleIsPosting(itup))
 		{
 			/* Simple case: A plain non-pivot tuple */
-			ideltid->partid = partid;
+			ideltid->reloid = reloid;
 			ideltid->tid = itup->t_tid;
 			ideltid->id = delstate->ndeltids;
 			istatus->idxoffnum = offnum;
@@ -747,7 +747,7 @@ _bt_bottomupdel_finish_pending(Relation rel, Page page, BTDedupState state,
 			{
 				ItemPointer htid = BTreeTupleGetPostingN(itup, p);
 
-				ideltid->partid = partid;
+				ideltid->reloid = reloid;
 				ideltid->tid = *htid;
 				ideltid->id = delstate->ndeltids;
 				istatus->idxoffnum = offnum;

@@ -169,7 +169,7 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 	if (RelationIsGlobalIndex(rel) && itup)
 		key->partid = BTreeTupleGetPartID(rel, itup);
 	else
-		key->partid = InvalidOid;
+		key->partid = InvalidIndexPartitionId;
 
 	skey = key->scankeys;
 	for (i = 0; i < indnkeyatts; i++)

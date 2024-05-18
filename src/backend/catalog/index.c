@@ -1060,6 +1060,19 @@ index_create(Relation heapRelation,
 						!concurrent && !invalid,
 						!concurrent);
 
+	/* Create the mapping in pg_index_partitions table */
+	if (RelationIsGlobalIndex(indexRelation))
+	{
+		CreateIndexPartitionIdRecurse(heapRelation, indexRelation);
+
+		/*
+		 * Cache got built while we were inserting the tuple in system table
+		 * so this might not be complete so clean this up and let it get build
+		 * whenever needed.
+		 */
+		indexRelation->rd_indexpartinfo = NULL;
+	}
+
 	/*
 	 * Register relcache invalidation on the indexes' heap relation, to
 	 * maintain consistency of its index list
@@ -1284,17 +1297,9 @@ index_create(Relation heapRelation,
 	}
 	else
 	{
+		indexRelation->rd_indexpartinfo = NULL;
 		index_build(heapRelation, indexRelation, indexInfo, false, true);
 	}
-
-	/*
-	 * For global index recursively process the whole partition tree starting
-	 * from the parent relation on which we are creating this global index
-	 * and allocate partition id for each leaf partition and also insert an
-	 * entry into the global index to partition id mapping table.
-	 */
-	if (global)
-		CreateIndexPartitionIdRecurse(heapRelation, indexRelation);
 
 	/*
 	 * Close the index; but we keep the lock that we acquired above until end
@@ -2749,7 +2754,17 @@ FormIndexDatum(IndexInfo *indexInfo,
 		Datum		iDatum;
 		bool		isNull;
 
-		if (keycol < 0)
+		/*
+		 * If we have a valid partid store that means this is a global index
+		 * and the attribute us table oid attribute then store the partid as
+		 * datum.
+		 */
+		if (indexInfo->ii_partid != 0 && (keycol == TableOidAttributeNumber))
+		{
+			iDatum = indexInfo->ii_partid;
+			isNull = false;
+		}
+		else if (keycol < 0)
 			iDatum = slot_getsysattr(slot, keycol, &isNull);
 		else if (keycol != 0)
 		{

@@ -769,7 +769,7 @@ index_getnext_slot(IndexScanDesc scan, ScanDirection direction, TupleTableSlot *
 			Assert(scan->xs_want_itup);
 			Assert(scan->xs_itup);
 			itup = scan->xs_itup;
-			heapoid = IndexTupleFetchPartitionId(scan->indexRelation, itup);
+			heapoid = IndexTupleFetchPartRelid(scan->indexRelation, itup);
 
 			if (scan->heapRelation &&
 				heapoid == RelationGetRelid(scan->heapRelation))
@@ -1240,13 +1240,13 @@ ResetGlobalIndexRelDirectory(GlobalIndexRelDirectory pdir)
 }
 
 /*
- * Fetch partition identifier from a index tuple.  Must be called only for a 
+ * Fetch partition identifier from a index tuple.  Must be called only for a
  * global index.
  */
-Oid
-IndexTupleFetchPartitionId(Relation index, IndexTuple itup)
+int32
+IndexTupleFetchPartID(Relation index, IndexTuple itup)
 {
-	Oid 		partid;
+	int32 		partid;
 	bool		is_null;
 	Datum		datum;
 	int 		partidattno = GlobalIndexRelationGetPartIdAttrIdx(index);
@@ -1257,9 +1257,21 @@ IndexTupleFetchPartitionId(Relation index, IndexTuple itup)
 	datum = index_getattr(itup, partidattno, tupleDesc, &is_null);
 	Assert(!is_null);
 
-	/* FIXME: partid instead of OID */
-	partid = DatumGetObjectId(datum);
-	Assert(OidIsValid(partid));
+	partid = DatumGetInt32(datum);
 
 	return partid;
+}
+
+/*
+ * Fetch partition identifier from a index tuple.  Must be called only for a
+ * global index.
+ */
+Oid
+IndexTupleFetchPartRelid(Relation index, IndexTuple itup)
+{
+	int32 		partid = IndexTupleFetchPartID(index, itup);
+
+	Assert(IndexPartIdIsValid(partid));
+
+	return IndexGetPartitionReloid(index, partid);
 }

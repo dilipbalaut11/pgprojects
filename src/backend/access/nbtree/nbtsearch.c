@@ -698,7 +698,7 @@ _bt_compare(Relation rel,
 		Assert(_bt_check_natts(rel, key->heapkeyspace, page, offnum));
 	Assert(key->keysz <= IndexRelationGetNumberOfKeyAttributes(rel));
 	Assert(key->heapkeyspace || key->scantid == NULL);
-	Assert(RelationIsGlobalIndex(rel) || !OidIsValid(key->partid));
+	Assert(RelationIsGlobalIndex(rel) || !IndexPartIdIsValid(key->partid));
 
 	/*
 	 * Force result ">" if target item is first data item on an internal page
@@ -1333,7 +1333,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	 */
 	_bt_metaversion(rel, &inskey.heapkeyspace, &inskey.allequalimage);
 	inskey.anynullkeys = false; /* unused */
-	inskey.partid = InvalidOid;
+	inskey.partid = InvalidIndexPartitionId;
 	inskey.scantid = NULL;
 	inskey.keysz = keysz;
 	switch (strat_total)

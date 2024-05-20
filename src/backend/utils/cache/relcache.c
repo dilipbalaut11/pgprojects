@@ -33,6 +33,7 @@
 #include "access/htup_details.h"
 #include "access/multixact.h"
 #include "access/parallel.h"
+#include "access/relation.h"
 #include "access/reloptions.h"
 #include "access/sysattr.h"
 #include "access/table.h"
@@ -6943,4 +6944,32 @@ RelationGetGlobalIndexList(Relation relation)
 	}
 
 	return global_indexs;
+}
+
+/*
+ * Traverse the tree upwards and get all the global index presents in this
+ * relation's ancestors.
+ */
+List *
+RelationGetAllGlobalIndexList(Oid relation_oid)
+{
+	List	   *ancestors;
+	ListCell   *lc;
+	List	   *allglobalindexlist = NIL;
+
+	ancestors =	get_partition_ancestors(relation_oid);
+
+	foreach(lc, ancestors)
+	{
+		Oid			ancestor = lfirst_oid(lc);
+		List	   *globalindexlist;
+		Relation	parent = relation_open(ancestor, AccessShareLock);
+
+		globalindexlist = RelationGetGlobalIndexList(parent);
+		allglobalindexlist = list_concat_unique_oid(allglobalindexlist,
+													globalindexlist);
+		relation_close(parent, AccessShareLock);
+	}
+	list_free(ancestors);
+	return allglobalindexlist;
 }

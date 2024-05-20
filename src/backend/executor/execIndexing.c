@@ -176,25 +176,7 @@ ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
 	 * because we might have global indexes on the parent.
 	 */
 	if (get_rel_relispartition(relation_oid))
-	{
-		List	   *ancestors;
-		ListCell   *lc;
-
-		ancestors =	get_partition_ancestors(relation_oid);
-
-		foreach(lc, ancestors)
-		{
-			Oid			ancestor = lfirst_oid(lc);
-			List	   *globalindexlist;
-			Relation	parent = relation_open(ancestor, AccessShareLock);
-
-			globalindexlist = RelationGetGlobalIndexList(parent);
-			allglobalindexlist = list_concat_unique_oid(allglobalindexlist,
-														globalindexlist);
-			relation_close(parent, AccessShareLock);
-		}
-		list_free(ancestors);
-	}
+		allglobalindexlist = RelationGetAllGlobalIndexList(relation_oid);
 
 	/* fast path if no indexes */
 	if (!RelationGetForm(resultRelation)->relhasindex &&

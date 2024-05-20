@@ -75,5 +75,6 @@ extern void CreateIndexPartitionIdRecurse(Relation rel, Relation irel);
 extern void BuildIndexPartitionInfo(Relation relation, MemoryContext context);
 extern int32 IndexGetRelationPartID(Relation irel, Oid reloid);
 extern Oid IndexGetPartitionReloid(Relation irel, int32 partid);
-
+extern int32 IndexGetNextPartitionID(Relation irel);
+extern void InsertIndexPartitionEntry(Relation irel, Oid reloid, int32 partid);
 #endif							/* PG_INDEX_PARTITIONS_H */

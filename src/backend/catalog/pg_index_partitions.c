@@ -28,7 +28,7 @@
  * Get the next partition id to be allocated for the input index relation.
  * also update this value in the cache for the next allocation.
  */
-static int32
+int32
 IndexGetNextPartitionID(Relation irel)
 {
 	int32 partid;
@@ -54,7 +54,7 @@ IndexGetNextPartitionID(Relation irel)
 /*
  * Create a single pg_index_partitions row with the given data
  */
-static void
+void
 InsertIndexPartitionEntry(Relation irel, Oid reloid, int32 partid)
 {
 	Datum		values[Natts_pg_index_partitions];

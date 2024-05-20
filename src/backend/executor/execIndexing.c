@@ -166,7 +166,7 @@ ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
 	RelationPtr relationDescs;
 	IndexInfo **indexInfoArray;
 	Oid 		relation_oid = RelationGetRelid(resultRelation);
-	List	   *globalIndexList = NIL;
+	List	   *allglobalindexlist = NIL;
 
 
 	resultRelInfo->ri_NumIndices = 0;
@@ -177,26 +177,28 @@ ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
 	 */
 	if (get_rel_relispartition(relation_oid))
 	{
-		Oid			top_reloid;
 		List	   *ancestors;
-		Relation	parent;
+		ListCell   *lc;
 
-		/*
-		 * The identity sequence is associated with the topmost partitioned
-		 * table.
-		 */
 		ancestors =	get_partition_ancestors(relation_oid);
-		top_reloid = llast_oid(ancestors);
-		list_free(ancestors);
 
-		parent = relation_open(top_reloid, AccessShareLock);
-		globalIndexList = RelationGetGlobalIndexList(parent);
-		relation_close(parent, AccessShareLock);
+		foreach(lc, ancestors)
+		{
+			Oid			ancestor = lfirst_oid(lc);
+			List	   *globalindexlist;
+			Relation	parent = relation_open(ancestor, AccessShareLock);
+
+			globalindexlist = RelationGetGlobalIndexList(parent);
+			allglobalindexlist = list_concat_unique_oid(allglobalindexlist,
+														globalindexlist);
+			relation_close(parent, AccessShareLock);
+		}
+		list_free(ancestors);
 	}
 
 	/* fast path if no indexes */
 	if (!RelationGetForm(resultRelation)->relhasindex &&
-		globalIndexList == NIL)
+		allglobalindexlist == NIL)
 		return;
 
 	/*
@@ -204,8 +206,8 @@ ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
 	 * current's table's indexoidlist.
 	 */
 	indexoidlist = RelationGetIndexList(resultRelation);
-	if (globalIndexList)
-		indexoidlist = list_concat_unique_oid(indexoidlist, globalIndexList);
+	if (allglobalindexlist)
+		indexoidlist = list_concat_unique_oid(indexoidlist, allglobalindexlist);
 
 	len = list_length(indexoidlist);
 	if (len == 0)

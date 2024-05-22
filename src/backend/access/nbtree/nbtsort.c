@@ -350,6 +350,43 @@ btbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 }
 
 /*
+ * Recursively process the partition childs and insert data from the leaf
+ * relation into the global index.
+ */
+static double
+_bt_table_process_partitions(IndexInfo *indexInfo, Relation rel,
+							 BTBuildState *buildstate, Relation irel)
+{
+	PartitionDesc pd = RelationGetPartitionDesc(rel, true);
+	double		reltuples = 0;
+
+	for (int i = 0; i < pd->nparts; i++)
+	{
+		Relation	partRel;
+
+		partRel = table_open(pd->oids[i], AccessShareLock);
+
+		if (partRel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+			reltuples += _bt_table_process_partitions(indexInfo, partRel, buildstate, irel);
+		else if (partRel->rd_rel->relkind == RELKIND_RELATION)
+		{
+			/*
+			 * If this is a global index then get the partition id of this
+			 * partition with respect to this global index.
+			 */
+			indexInfo->ii_partid = IndexGetRelationPartID(irel, pd->oids[i]);
+
+			reltuples += table_index_build_scan(partRel, irel, indexInfo, true,
+												true, _bt_build_callback,
+												(void *) buildstate, NULL);
+		}
+
+		table_close(partRel, AccessShareLock);
+	}
+	return reltuples;
+}
+
+/*
  * Create and initialize one or two spool structures, and save them in caller's
  * buildstate argument.  May also fill-in fields within indexInfo used by index
  * builds.
@@ -477,33 +514,7 @@ _bt_spools_heapscan(Relation heap, Relation index, BTBuildState *buildstate,
 	 * build this global index.
 	 */
 	if (heap->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-	{
-		PartitionDesc partdesc = RelationGetPartitionDesc(heap, true);
-		Oid			 *part_oids = palloc_array(Oid, partdesc->nparts);
-
-		/* Make a local copy of partdesc->oids[], just for safety */
-		memcpy(part_oids, partdesc->oids, sizeof(Oid) * partdesc->nparts);
-
-		for (int i = 0; i < partdesc->nparts; i++)
-		{
-			Oid			childRelid = part_oids[i];
-			Relation	childrel;
-
-			/*
-			 * FIXME: there should be better way to centralize this mechanism
-			 * of fetching the partition id.
-			 * If this is a global index then get the partition id of this
-			 * partition with respect to this global index.
-			 */
-			indexInfo->ii_partid = IndexGetRelationPartID(index, childRelid);
-
-			childrel = table_open(childRelid, AccessShareLock);
-			reltuples += table_index_build_scan(childrel, index, indexInfo, true,
-												true, _bt_build_callback,
-												(void *) buildstate, NULL);
-			table_close(childrel, AccessShareLock);
-		}
-	}
+		reltuples += _bt_table_process_partitions(indexInfo, heap, buildstate, index);
 	/* Fill spool using either serial or parallel heap scan */
 	else if (!buildstate->btleader)
 		reltuples = table_index_build_scan(heap, index, indexInfo, true, true,

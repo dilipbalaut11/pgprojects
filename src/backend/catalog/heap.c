@@ -232,6 +232,26 @@ static const FormData_pg_attribute a6 = {
 static const FormData_pg_attribute *const SysAtt[] = {&a1, &a2, &a3, &a4, &a5, &a6};
 
 /*
+ * The "partitionid" is a special purpose attribute this attribute is not have
+ * entry in the pg_attribute table.  But this is just used for getting the
+ * centralized of getting FormData_pg_attribute entry for partition id
+ * attribute.
+ */
+static const FormData_pg_attribute partitionid_attr = {
+	.attname = {"partitionid"},
+	.atttypid = INT4OID,
+	.attlen = sizeof(int32),
+	.attnum = PartitionIdAttributeNumber,
+	.attcacheoff = -1,
+	.atttypmod = -1,
+	.attbyval = true,
+	.attalign = TYPALIGN_INT,
+	.attstorage = TYPSTORAGE_PLAIN,
+	.attnotnull = true,
+	.attislocal = true,
+};
+
+/*
  * This function returns a Form_pg_attribute pointer for a system attribute.
  * Note that we elog if the presented attno is invalid, which would only
  * happen if there's a problem upstream.
@@ -239,6 +259,12 @@ static const FormData_pg_attribute *const SysAtt[] = {&a1, &a2, &a3, &a4, &a5, &
 const FormData_pg_attribute *
 SystemAttributeDefinition(AttrNumber attno)
 {
+	/*
+	 * If we are fetching the partition id attribute then directly return the
+	 * partitionid_attr variable.
+	 */
+	if (attno == partitionid_attr.attnum)
+		return &partitionid_attr;
 	if (attno >= 0 || attno < -(int) lengthof(SysAtt))
 		elog(ERROR, "invalid system attribute number %d", attno);
 	return SysAtt[-attno - 1];

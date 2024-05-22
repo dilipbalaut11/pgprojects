@@ -2759,7 +2759,7 @@ FormIndexDatum(IndexInfo *indexInfo,
 		 * and the attribute us table oid attribute then store the partid as
 		 * datum.
 		 */
-		if (indexInfo->ii_partid != 0 && (keycol == TableOidAttributeNumber))
+		if (keycol == PartitionIdAttributeNumber)
 		{
 			iDatum = indexInfo->ii_partid;
 			isNull = false;

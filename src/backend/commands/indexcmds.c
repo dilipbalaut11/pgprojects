@@ -24,6 +24,7 @@
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
+#include "catalog/heap.h"
 #include "catalog/index.h"
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
@@ -651,7 +652,7 @@ DefineIndex(Oid tableId,
 		IndexElem	*newparam;
 
 		newparam = makeNode(IndexElem);
-		newparam->name = pstrdup("tableoid");
+		newparam->name = pstrdup("partitionid");
 		newparam->expr = NULL;
 		newparam->indexcolname = NULL;
 		newparam->collation = NIL;
@@ -1947,9 +1948,21 @@ ComputeIndexAttrs(IndexInfo *indexInfo,
 		Oid			attcollation;
 
 		/*
-		 * Process the column-or-expression to be indexed.
+		 * Process the column-or-expression to be indexed.  If we are fetching
+		 * the "partitionid" attribute then directly fetch the attribute entry
+		 * using SystemAttributeDefinition.
 		 */
-		if (attribute->name != NULL)
+		if ((attribute->name != NULL) &&
+			strcmp(attribute->name, "partitionid") == 0)
+		{
+			const FormData_pg_attribute *attform;
+
+			attform = SystemAttributeDefinition(PartitionIdAttributeNumber);
+			indexInfo->ii_IndexAttrNumbers[attn] = attform->attnum;
+			atttype = attform->atttypid;
+			attcollation = attform->attcollation;
+		}
+		else if (attribute->name != NULL)
 		{
 			/* Simple index attribute */
 			HeapTuple	atttuple;

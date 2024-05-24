@@ -6220,7 +6220,9 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 				 * We need to invalidate the entry for this index so that
 				 * everyone update the cache information of the partid to relid
 				 * mapping.
-				 * FIXME: what is the cleaner way to do this?
+				 * FIXME: Whether we can get a partitioned relation here??
+				 * then we should traverse its tree and all the leaf partitions
+				 * by calling CreateIndexPartitionIdRecurse()
 				 */
 				indexDesc = index_open(indexOid, RowExclusiveLock);
 				partid = IndexGetNextPartitionID(indexDesc);
@@ -19104,6 +19106,7 @@ ATExecDetachPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	Relation	partRel;
 	ObjectAddress address;
 	Oid			defaultPartOid;
+	List	   *global_index;
 
 	/*
 	 * We must lock the default partition, because detaching this partition
@@ -19151,6 +19154,27 @@ ATExecDetachPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		RemoveInheritance(partRel, rel, false);
 	else
 		MarkInheritDetached(partRel, rel);
+
+	/*
+	 * Get the list of all the global index from the parent relation to all the
+	 * way upto the root node.  And detach this partRel from all those global
+	 * indexes.
+	 */
+	global_index = RelationGetAllGlobalIndexList(RelationGetRelid(rel));
+
+	if (global_index != NIL)
+	{
+		ListCell *l;
+
+		IndexPartitionDetachRecurse(partRel, global_index);
+
+		foreach(l, global_index)
+		{
+			Oid		indexoid = lfirst_oid(l);
+
+			CacheInvalidateRelcacheByRelid(indexoid);
+		}
+	}
 
 	/*
 	 * Ensure that foreign keys still hold after this detach.  This keeps

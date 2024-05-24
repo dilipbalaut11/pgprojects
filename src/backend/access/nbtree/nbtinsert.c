@@ -571,7 +571,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 						if (OidIsValid(partid))
 							relation_close(partrel, AccessShareLock);
 
-						partrel = relation_open(partid, AccessShareLock);
+						partrel = relation_open(curpartid, AccessShareLock);
 						partid = curpartid;
 					}
 				}

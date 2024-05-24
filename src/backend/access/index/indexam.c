@@ -771,6 +771,9 @@ index_getnext_slot(IndexScanDesc scan, ScanDirection direction, TupleTableSlot *
 			itup = scan->xs_itup;
 			heapoid = IndexTupleFetchPartRelid(scan->indexRelation, itup);
 
+			if (!OidIsValid(heapoid))
+				continue;
+
 			if (scan->heapRelation &&
 				heapoid == RelationGetRelid(scan->heapRelation))
 			{

@@ -77,4 +77,5 @@ extern int32 IndexGetRelationPartID(Relation irel, Oid reloid);
 extern Oid IndexGetPartitionReloid(Relation irel, int32 partid);
 extern int32 IndexGetNextPartitionID(Relation irel);
 extern void InsertIndexPartitionEntry(Relation irel, Oid reloid, int32 partid);
+extern void IndexPartitionDetachRecurse(Relation rel, List *global_indexs);
 #endif							/* PG_INDEX_PARTITIONS_H */

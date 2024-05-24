@@ -2751,9 +2751,8 @@ FormIndexDatum(IndexInfo *indexInfo,
 		bool		isNull;
 
 		/*
-		 * If we have a valid partid store that means this is a global index
-		 * and the attribute us table oid attribute then store the partid as
-		 * datum.
+		 * If the attribute number is partition id attribute then directly
+		 * fetch it from the indexInfo.
 		 */
 		if (keycol == PartitionIdAttributeNumber)
 		{

@@ -156,6 +156,9 @@ BuildIndexPartitionInfo(Relation relation, MemoryContext context)
 		IndexPartitionInfoEntry *entry;
 		bool		found;
 
+		if (!OidIsValid(form->reloid))
+			continue;
+
 		entry = hash_search(map->pdir_hash, &form->partid, HASH_ENTER, &found);
 		Assert(!found);
 		entry->reloid = form->reloid;
@@ -216,7 +219,92 @@ IndexGetPartitionReloid(Relation irel, int32 partid)
 	bool		found;
 
 	entry = hash_search(map->pdir_hash, &partid, HASH_FIND, &found);
-	Assert(found);
+	if (!found)
+		return InvalidOid;
 
 	return entry->reloid;
+}
+
+/*
+ * Detach a input 'reloid' from then global index with Oid 'indexoid'.
+ * Basically this just remove mapping from pg_index_partitions catalog.
+ *
+ * FIXME: instead of detaching reloid one by one can we pass the array of
+ * reloids to be detached?
+ */
+static void
+UpdateIndexPartitionEntry(Oid indexoid, Oid reloid)
+{
+	Relation	catalogRelation;
+	SysScanDesc scan;
+	ScanKeyData key;
+	HeapTuple	tuple;
+	/*
+	 * Find pg_inherits entries by inhparent.  (We need to scan them all in
+	 * order to verify that no other partition is pending detach.)
+	 */
+	catalogRelation = table_open(IndexPartitionsRelationId, RowExclusiveLock);
+	ScanKeyInit(&key,
+				Anum_pg_index_partitions_indexoid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(indexoid));
+
+	scan = systable_beginscan(catalogRelation, IndexIdPartitionsIndexId, true,
+							  NULL, 1, &key);
+
+	while ((tuple = systable_getnext(scan)) != NULL)
+	{
+		Form_pg_index_partitions form = (Form_pg_index_partitions) GETSTRUCT(tuple);
+		HeapTuple	newtup;
+
+		if (form->reloid != reloid)
+			continue;
+
+			newtup = heap_copytuple(tuple);
+			((Form_pg_index_partitions) GETSTRUCT(newtup))->reloid = InvalidOid;
+
+			CatalogTupleUpdate(catalogRelation,
+							   &tuple->t_self,
+							   newtup);
+			heap_freetuple(newtup);
+	}
+
+	/* Done */
+	systable_endscan(scan);
+	table_close(catalogRelation, RowExclusiveLock);	
+}
+/*
+ * IndexPartitionDetach
+ */
+void
+IndexPartitionDetachRecurse(Relation rel, List *global_indexs)
+{
+	PartitionDesc pd;
+
+	/* FIXME: handle other relkind?*/
+	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		pd = RelationGetPartitionDesc(rel, true);
+
+		for (int i = 0; i < pd->nparts; i++)
+		{
+			Relation	partRel;
+
+			partRel = table_open(pd->oids[i], ShareRowExclusiveLock);
+
+			IndexPartitionDetachRecurse(partRel, global_indexs);
+			table_close(partRel, ShareRowExclusiveLock);
+		}
+	}
+	else if (rel->rd_rel->relkind == RELKIND_RELATION)
+	{
+		ListCell *l;
+
+		foreach(l, global_indexs)
+		{
+			Oid		indexoid = lfirst_oid(l);
+
+			UpdateIndexPartitionEntry(indexoid, RelationGetRelid(rel));
+		}
+	}
 }

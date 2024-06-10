@@ -564,7 +564,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				 */
 				if (RelationIsGlobalIndex(rel))
 				{
-					Oid	curpartid = IndexTupleFetchPartRelid(rel, curitup);
+					Oid	curpartid = index_tuple_fetch_partrelid(rel, curitup);
 
 					if (partid != curpartid)
 					{

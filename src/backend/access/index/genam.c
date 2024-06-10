@@ -125,16 +125,16 @@ RelationGetIndexScan(Relation indexRelation, int nkeys, int norderbys)
 
 	if (RelationIsGlobalIndex(indexRelation))
 	{
-		scan->xs_am_global_index = true;
+		scan->xs_global_index = true;
 		scan->xs_want_itup = true;
-		scan->xs_globalindex_rel_directory =
-			CreateGlobalIndexRelDirectory(CurrentMemoryContext);
+		scan->xs_global_index_cache =
+			create_globalindex_partition_cache(CurrentMemoryContext);
 	}
 	else
 	{
-		scan->xs_am_global_index = false;
+		scan->xs_global_index = false;
 		scan->xs_want_itup = false;
-		scan->xs_globalindex_rel_directory = NULL;
+		scan->xs_global_index_cache = NULL;
 	}
 
 	return scan;

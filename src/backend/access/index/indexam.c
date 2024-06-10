@@ -112,25 +112,27 @@ do { \
  * partition which we already have scanned once then we should use the same
  * xs_heapfetch and that we can get from the cache.
  */
-typedef struct GlobalIndexRelDirectoryData
+typedef struct GlobalIndexPartitionCacheData
 {
 	MemoryContext pdir_mcxt;
 	HTAB	*pdir_hash;
-} GlobalIndexRelDirectoryData;
+} GlobalIndexPartitionCacheData;
 
-typedef struct GlobalIndexRelDirectoryEntry
+typedef struct GlobalIndexPartitionCacheEntry
 {
 	Oid 		reloid;
-	Relation	rel;
-	IndexFetchTableData *xs_heapfetch;
-} GlobalIndexRelDirectoryEntry;
+	Relation	relation;
+	IndexFetchTableData *heapfetch;
+} GlobalIndexPartitionCacheEntry;
 
 static IndexScanDesc index_beginscan_internal(Relation indexRelation,
 											  int nkeys, int norderbys, Snapshot snapshot,
 											  ParallelIndexScanDesc pscan, bool temp_snap);
 static inline void validate_relation_kind(Relation r);
-static GlobalIndexRelDirectoryEntry *GlobalIndexRelEntryLookup(GlobalIndexRelDirectory pdir, Oid relid, bool heapfetch);
-static void ResetGlobalIndexRelDirectory(GlobalIndexRelDirectory pdir);
+static GlobalIndexPartitionCacheEntry *globalindex_partition_entry_lookup(
+											GlobalIndexPartitionCache pdir,
+											Oid relid);
+static void globalindex_partition_cache_reset(GlobalIndexPartitionCache pdir);
 
 /* ----------------------------------------------------------------
  *				   index_ interface functions
@@ -300,7 +302,7 @@ index_beginscan(Relation heapRelation,
 	 * tid from the index as that time we will get more clarity about the
 	 * partition the tid belongs to.
 	 */
-	if (scan->xs_am_global_index)
+	if (scan->xs_global_index)
 	{
 		scan->heapRelation = NULL;
 		scan->xs_heapfetch = NULL;
@@ -399,12 +401,12 @@ index_rescan(IndexScanDesc scan,
 	Assert(norderbys == scan->numberOfOrderBys);
 
 	/* Release resources (like buffer pins) from table accesses */
-	if (scan->xs_am_global_index)
+	if (scan->xs_global_index)
 	{
 		scan->xs_heapfetch = NULL;
 		scan->heapRelation = NULL;
-		if (scan->xs_globalindex_rel_directory)
-			ResetGlobalIndexRelDirectory(scan->xs_globalindex_rel_directory);
+		if (scan->xs_global_index_cache)
+			globalindex_partition_cache_reset(scan->xs_global_index_cache);
 	}
 	else if (scan->xs_heapfetch)
 		table_index_fetch_reset(scan->xs_heapfetch);
@@ -427,11 +429,11 @@ index_endscan(IndexScanDesc scan)
 	CHECK_SCAN_PROCEDURE(amendscan);
 
 	/* Release resources (like buffer pins) from table accesses */
-	if (scan->xs_am_global_index)
+	if (scan->xs_global_index)
 	{
 		scan->xs_heapfetch = NULL;
-		if (scan->xs_globalindex_rel_directory)
-			DestroyGlobalIndexRelDirectory(scan->xs_globalindex_rel_directory);
+		if (scan->xs_global_index_cache)
+			globalindex_partition_cache_destroy(scan->xs_global_index_cache);
 	}
 	else if (scan->xs_heapfetch)
  	{
@@ -491,11 +493,11 @@ index_restrpos(IndexScanDesc scan)
 	/* release resources (like buffer pins) from table accesses */
 	if (scan->xs_heapfetch)
 		table_index_fetch_reset(scan->xs_heapfetch);
-	if (scan->xs_am_global_index)
+	if (scan->xs_global_index)
 	{
 		scan->xs_heapfetch = NULL;
-		if (scan->xs_globalindex_rel_directory)
-			DestroyGlobalIndexRelDirectory(scan->xs_globalindex_rel_directory);
+		if (scan->xs_global_index_cache)
+			globalindex_partition_cache_destroy(scan->xs_global_index_cache);
 	}
 	else if (scan->xs_heapfetch)
  		table_index_fetch_reset(scan->xs_heapfetch);
@@ -760,43 +762,42 @@ index_getnext_slot(IndexScanDesc scan, ScanDirection direction, TupleTableSlot *
 		 * For global index we need to fetch the heapoid of the parittion
 		 * relation and fetch the tuple from that relation.
 		 */
-		if (scan->xs_am_global_index)
+		if (scan->xs_global_index)
 		{
 			IndexTuple	itup;
-			Oid			heapoid;
-			GlobalIndexRelDirectoryEntry *entry;
+			Oid			relid;
+			GlobalIndexPartitionCacheEntry *entry;
 
 			Assert(scan->xs_want_itup);
 			Assert(scan->xs_itup);
 			itup = scan->xs_itup;
-			heapoid = IndexTupleFetchPartRelid(scan->indexRelation, itup);
+			relid = index_tuple_fetch_partrelid(scan->indexRelation, itup);
 
-			if (!OidIsValid(heapoid))
+			if (!OidIsValid(relid))
 				continue;
 
-			if (scan->heapRelation &&
-				heapoid == RelationGetRelid(scan->heapRelation))
+			if (scan->heapRelation == NULL)
 			{
-				Assert(scan->xs_heapfetch);
-			}
-			else if (scan->heapRelation == NULL)
-			{
-				Assert(scan->xs_heapfetch == NULL);
-				entry = GlobalIndexRelEntryLookup(scan->xs_globalindex_rel_directory, heapoid, true);
-				scan->heapRelation = entry->rel;
-				scan->xs_heapfetch = entry->xs_heapfetch;
+				entry = globalindex_partition_entry_lookup(
+										scan->xs_global_index_cache, relid);
+
+				scan->heapRelation = entry->relation;
+				scan->xs_heapfetch = entry->heapfetch;
 			}
 			else if (scan->heapRelation &&
-					 heapoid != RelationGetRelid(scan->heapRelation))
+					 relid != RelationGetRelid(scan->heapRelation))
 			{
-				Assert(scan->xs_heapfetch);
 				table_index_fetch_reset(scan->xs_heapfetch);
-				entry = GlobalIndexRelEntryLookup(scan->xs_globalindex_rel_directory, heapoid, true);
-				scan->heapRelation = entry->rel;
-				scan->xs_heapfetch = entry->xs_heapfetch;
+				entry = globalindex_partition_entry_lookup(
+										scan->xs_global_index_cache, relid);
+				scan->heapRelation = entry->relation;
+				scan->xs_heapfetch = entry->heapfetch;
 			}
 			else
-				Assert(false);
+			{
+				Assert(scan->xs_heapfetch);
+				Assert(scan->heapRelation);
+			}
 		}
 
 		if (index_fetch_heap(scan, slot))
@@ -1143,32 +1144,31 @@ index_opclass_options(Relation indrel, AttrNumber attnum, Datum attoptions,
 	return build_local_reloptions(&relopts, attoptions, validate);
 }
 
-GlobalIndexRelDirectory
-CreateGlobalIndexRelDirectory(MemoryContext mcxt)
+GlobalIndexPartitionCache
+create_globalindex_partition_cache(MemoryContext mcxt)
 {
 	MemoryContext oldcontext = MemoryContextSwitchTo(mcxt);
-	GlobalIndexRelDirectory pdir;
+	GlobalIndexPartitionCache pdir;
 	HASHCTL		ctl;
 
 	MemSet(&ctl, 0, sizeof(HASHCTL));
 	ctl.keysize = sizeof(Oid);
-	ctl.entrysize = sizeof(GlobalIndexRelDirectoryEntry);
+	ctl.entrysize = sizeof(GlobalIndexPartitionCacheEntry);
 	ctl.hcxt = mcxt;
 
-	pdir = palloc(sizeof(GlobalIndexRelDirectoryData));
+	pdir = palloc(sizeof(GlobalIndexPartitionCacheData));
 	pdir->pdir_mcxt = mcxt;
-	pdir->pdir_hash = hash_create("GlobalIndex Rel Directory", 256, &ctl,
+	pdir->pdir_hash = hash_create("globalIndex partitionId cache", 256, &ctl,
 								  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 
 	MemoryContextSwitchTo(oldcontext);
 	return pdir;
 }
 
-static GlobalIndexRelDirectoryEntry *
-GlobalIndexRelEntryLookup(GlobalIndexRelDirectory pdir, Oid relid,
-						  bool heapfetch)
+static GlobalIndexPartitionCacheEntry *
+globalindex_partition_entry_lookup(GlobalIndexPartitionCache pdir, Oid relid)
 {
-	GlobalIndexRelDirectoryEntry *pde;
+	GlobalIndexPartitionCacheEntry *pde;
 	bool		found;
 	Relation	part_rel;
 
@@ -1176,69 +1176,48 @@ GlobalIndexRelEntryLookup(GlobalIndexRelDirectory pdir, Oid relid,
 	Assert(pdir);
 	pde = hash_search(pdir->pdir_hash, &relid, HASH_FIND, &found);
 	if (found)
-	{
-		Assert(pde->rel);
-		if (heapfetch)
-			Assert(pde->xs_heapfetch);
-
 		return pde;
-	}
 	else
 	{
 		pde = hash_search(pdir->pdir_hash, &relid, HASH_ENTER, &found);
 		part_rel = relation_open(relid, AccessShareLock);
-		pde->rel = part_rel;
-		if (heapfetch)
-			pde->xs_heapfetch = table_index_fetch_begin(part_rel);
-		else
-			pde->xs_heapfetch = NULL;
+		pde->relation = part_rel;
+		pde->heapfetch = table_index_fetch_begin(part_rel);
 	}
 
 	return pde;
 }
 
-Relation
-GlobalIndexRelLookup(GlobalIndexRelDirectory pdir, Oid relid)
-{
-	GlobalIndexRelDirectoryEntry *pde;
-
-	Assert(pdir);
-	pde = GlobalIndexRelEntryLookup(pdir, relid, false);
-	Assert(pde);
-
-	return pde->rel;
-}
-
 void
-DestroyGlobalIndexRelDirectory(GlobalIndexRelDirectory pdir)
+globalindex_partition_cache_destroy(GlobalIndexPartitionCache pdir)
 {
 	HASH_SEQ_STATUS status;
-	GlobalIndexRelDirectoryEntry *pde;
+	GlobalIndexPartitionCacheEntry *pde;
 
 	hash_seq_init(&status, pdir->pdir_hash);
 	while ((pde = hash_seq_search(&status)) != NULL)
 	{
-		if (pde->xs_heapfetch)
+		if (pde->heapfetch)
 		{
-			table_index_fetch_end(pde->xs_heapfetch);
-			pde->xs_heapfetch = NULL;
+			table_index_fetch_end(pde->heapfetch);
+			pde->heapfetch = NULL;
 		}
 
-		relation_close(pde->rel, NoLock);
+		relation_close(pde->relation, NoLock);
 	}
 }
 
 static void
-ResetGlobalIndexRelDirectory(GlobalIndexRelDirectory pdir)
+globalindex_partition_cache_reset(GlobalIndexPartitionCache pdir)
 {
 	HASH_SEQ_STATUS status;
-	GlobalIndexRelDirectoryEntry *entry;
+	GlobalIndexPartitionCacheEntry *entry;
 
 	hash_seq_init(&status, pdir->pdir_hash);
 	while ((entry = hash_seq_search(&status)))
 	{
-		if (entry->xs_heapfetch)
-			table_index_fetch_reset(entry->xs_heapfetch);
+		if (entry->heapfetch)
+			table_index_fetch_reset(entry->heapfetch);
 	}
 }
 
@@ -1247,7 +1226,7 @@ ResetGlobalIndexRelDirectory(GlobalIndexRelDirectory pdir)
  * global index.
  */
 int32
-IndexTupleFetchPartID(Relation index, IndexTuple itup)
+index_tuple_fetch_partid(Relation index, IndexTuple itup)
 {
 	int32 		partid;
 	bool		is_null;
@@ -1270,9 +1249,9 @@ IndexTupleFetchPartID(Relation index, IndexTuple itup)
  * global index.
  */
 Oid
-IndexTupleFetchPartRelid(Relation index, IndexTuple itup)
+index_tuple_fetch_partrelid(Relation index, IndexTuple itup)
 {
-	int32 		partid = IndexTupleFetchPartID(index, itup);
+	int32 		partid = index_tuple_fetch_partid(index, itup);
 
 	Assert(IndexPartIdIsValid(partid));
 

@@ -668,7 +668,7 @@ BTreeTupleGetPartID(Relation index, IndexTuple itup)
 	 */
 	if (!BTreeTupleIsPivot(itup) || BTreeTupleGetNAtts(itup, index) >
 		IndexRelationGetNumberOfKeyAttributes(index))
-		return IndexTupleFetchPartID(index, itup);
+		return index_tuple_fetch_partid(index, itup);
 
 	/* Part ID attribute was truncated */
 	return InvalidIndexPartitionId;

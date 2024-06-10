@@ -3224,11 +3224,14 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 	 * relcache flush happening midway through.
 	 */
 	hot_attrs = RelationGetIndexAttrBitmap(relation,
+										   relation->rd_rel->relispartition,
 										   INDEX_ATTR_BITMAP_HOT_BLOCKING);
-	sum_attrs = RelationGetIndexAttrBitmap(relation,
+	sum_attrs = RelationGetIndexAttrBitmap(relation, false,
 										   INDEX_ATTR_BITMAP_SUMMARIZED);
-	key_attrs = RelationGetIndexAttrBitmap(relation, INDEX_ATTR_BITMAP_KEY);
-	id_attrs = RelationGetIndexAttrBitmap(relation,
+	key_attrs = RelationGetIndexAttrBitmap(relation,
+										   relation->rd_rel->relispartition,
+										   INDEX_ATTR_BITMAP_KEY);
+	id_attrs = RelationGetIndexAttrBitmap(relation, false,
 										  INDEX_ATTR_BITMAP_IDENTITY_KEY);
 	interesting_attrs = NULL;
 	interesting_attrs = bms_add_members(interesting_attrs, hot_attrs);
@@ -8692,7 +8695,7 @@ ExtractReplicaIdentity(Relation relation, HeapTuple tp, bool key_required,
 		return NULL;
 
 	/* find out the replica identity columns */
-	idattrs = RelationGetIndexAttrBitmap(relation,
+	idattrs = RelationGetIndexAttrBitmap(relation, false,
 										 INDEX_ATTR_BITMAP_IDENTITY_KEY);
 
 	/*

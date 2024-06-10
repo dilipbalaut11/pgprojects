@@ -20004,7 +20004,7 @@ GetParentedForeignKeyRefs(Relation partition)
 	 * scan.
 	 */
 	if (RelationGetIndexList(partition) == NIL ||
-		bms_is_empty(RelationGetIndexAttrBitmap(partition,
+		bms_is_empty(RelationGetIndexAttrBitmap(partition, false,
 												INDEX_ATTR_BITMAP_KEY)))
 		return NIL;
 

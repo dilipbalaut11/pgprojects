@@ -2359,7 +2359,7 @@ ExecUpdateLockMode(EState *estate, ResultRelInfo *relinfo)
 	 * concurrency.
 	 */
 	updatedCols = ExecGetAllUpdatedCols(relinfo, estate);
-	keyCols = RelationGetIndexAttrBitmap(relinfo->ri_RelationDesc,
+	keyCols = RelationGetIndexAttrBitmap(relinfo->ri_RelationDesc, false,
 										 INDEX_ATTR_BITMAP_KEY);
 
 	if (bms_overlap(keyCols, updatedCols))

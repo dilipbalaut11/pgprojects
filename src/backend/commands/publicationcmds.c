@@ -311,7 +311,7 @@ pub_rf_contains_invalid_column(Oid pubid, Relation relation, List *ancestors,
 		context.relid = relid;
 
 		/* Remember columns that are part of the REPLICA IDENTITY */
-		bms = RelationGetIndexAttrBitmap(relation,
+		bms = RelationGetIndexAttrBitmap(relation, false,
 										 INDEX_ATTR_BITMAP_IDENTITY_KEY);
 
 		context.bms_replident = bms;
@@ -382,7 +382,7 @@ pub_collist_contains_invalid_column(Oid pubid, Relation relation, List *ancestor
 		columns = pub_collist_to_bitmapset(NULL, datum, NULL);
 
 		/* Remember columns that are part of the REPLICA IDENTITY */
-		idattrs = RelationGetIndexAttrBitmap(relation,
+		idattrs = RelationGetIndexAttrBitmap(relation, false,
 											 INDEX_ATTR_BITMAP_IDENTITY_KEY);
 
 		/*

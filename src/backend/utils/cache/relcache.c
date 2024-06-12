@@ -6919,18 +6919,29 @@ ResOwnerReleaseRelation(Datum res)
 	RelationCloseCleanup((Relation) res);
 }
 
+/*
+ * Get the list of OIDs of all the global indexes present on this relation.
+ */
 List *
 RelationGetGlobalIndexList(Relation relation)
 {
 	ListCell	*l;
-	List		*indexs = NIL;
+	List		*indexlist = NIL;
 	List		*global_indexs = NIL;
 
-	indexs = RelationGetIndexList(relation);
-	if (indexs == NIL)
+	/* Fast path if definitely no indexes. */
+	if (!RelationGetForm(relation)->relhasindex)
 		return NIL;
 
-	foreach(l, indexs)
+	/* Get list of all the indexes on this relation. */
+	indexlist = RelationGetIndexList(relation);
+	if (indexlist == NIL)
+		return NIL;
+
+	/*
+	 * Process all the indexes to collect the list of all global index OIDs.
+	 */
+	foreach(l, indexlist)
 	{
 		Oid			indexOid = lfirst_oid(l);
 		Relation	indexDesc;
@@ -6947,18 +6958,23 @@ RelationGetGlobalIndexList(Relation relation)
 }
 
 /*
- * Traverse the tree upwards and get all the global index presents in this
- * relation's ancestors.
+ * Retrieve the complete list of global indexes found across all ancestors of
+ * this relation.
  */
 List *
-RelationGetAllGlobalIndexList(Oid relation_oid)
+RelationGetAncestorsGlobalIndexList(Relation relation)
 {
 	List	   *ancestors;
 	ListCell   *lc;
 	List	   *allglobalindexlist = NIL;
 
-	ancestors =	get_partition_ancestors(relation_oid);
+	/* Get the list of all the ancestor relations. */
+	ancestors =	get_partition_ancestors(RelationGetRelid(relation));
 
+	/*
+	 * Loop through all the ancestor relations and fetch the global indexes
+	 * from each of them and append to a common global index list.
+	 */
 	foreach(lc, ancestors)
 	{
 		Oid			ancestor = lfirst_oid(lc);
@@ -6972,4 +6988,27 @@ RelationGetAllGlobalIndexList(Oid relation_oid)
 	}
 	list_free(ancestors);
 	return allglobalindexlist;
+}
+
+/*
+ * Retrieve the list of all indexes/global indexes on this relation, including
+ * the global indexes on all its ancestors.
+ */
+List *
+RelationGetAllIndexList(Relation relation)
+{
+	List	   *globalindexlist = NIL;
+	List	   *indexlist = NIL;
+
+	/* Get all the indexes of this relation if there are any. */
+	if (RelationGetForm(relation)->relhasindex)
+		indexlist = RelationGetIndexList(relation);
+
+	/* Get all the global indexes on all its ancestors. */
+	if (get_rel_relispartition(RelationGetRelid(relation)))
+		globalindexlist = RelationGetAncestorsGlobalIndexList(relation);
+
+	indexlist = list_concat_unique_oid(indexlist, globalindexlist);
+
+	return indexlist;
 }

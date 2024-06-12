@@ -165,31 +165,14 @@ ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
 				i;
 	RelationPtr relationDescs;
 	IndexInfo **indexInfoArray;
-	Oid 		relation_oid = RelationGetRelid(resultRelation);
-	List	   *allglobalindexlist = NIL;
-
 
 	resultRelInfo->ri_NumIndices = 0;
 
 	/*
-	 * Fetch the top level relation descriptor if this is a parition relation
-	 * because we might have global indexes on the parent.
+	 * Get list of all the indexes including the global indexes of all its
+	 * ancestors.
 	 */
-	if (get_rel_relispartition(relation_oid))
-		allglobalindexlist = RelationGetAllGlobalIndexList(relation_oid);
-
-	/* fast path if no indexes */
-	if (!RelationGetForm(resultRelation)->relhasindex &&
-		allglobalindexlist == NIL)
-		return;
-
-	/*
-	 * Get cached list of index OIDs and append the global index oids with the
-	 * current's table's indexoidlist.
-	 */
-	indexoidlist = RelationGetIndexList(resultRelation);
-	if (allglobalindexlist)
-		indexoidlist = list_concat_unique_oid(indexoidlist, allglobalindexlist);
+	indexoidlist = RelationGetAllIndexList(resultRelation);
 
 	len = list_length(indexoidlist);
 	if (len == 0)
@@ -229,7 +212,7 @@ ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
 		 * with respect to this global index.
 		 */
 		 if (RelationIsGlobalIndex(indexDesc))
-			ii->ii_partid = IndexGetRelationPartID(indexDesc, relation_oid);
+			ii->ii_partid = IndexGetRelationPartID(indexDesc, RelationGetRelid(resultRelation));
 
 		/*
 		 * If the indexes are to be used for speculative insertion, add extra

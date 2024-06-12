@@ -2281,28 +2281,14 @@ vac_open_indexes(Relation relation, LOCKMODE lockmode,
 	List	   *indexoidlist;
 	ListCell   *indexoidscan;
 	int			i;
-	List		*global_indexs = NIL;
-	Oid			relid = RelationGetRelid(relation);
-	bool		relispartition = get_rel_relispartition(relid);
 
 	Assert(lockmode != NoLock);
 
-	if (relispartition)
-	{
-		Oid			parent = get_partition_parent(relid, false);
-		Relation	rel;
-
-		rel = relation_open(parent, AccessShareLock);
-
-		global_indexs = RelationGetGlobalIndexList(rel);
-		relation_close(rel, AccessShareLock);
-	}
-
-	indexoidlist = RelationGetIndexList(relation);
-
-	/* fast path if no indexes */
-	if (global_indexs != NIL)
-		indexoidlist = list_concat_unique_oid(indexoidlist, global_indexs);
+	/*
+	 * Get list of all the indexes including the global indexes of all its
+	 * ancestors.
+	 */
+	indexoidlist = RelationGetAllIndexList(relation);
 
 	/* allocate enough memory for all indexes */
 	i = list_length(indexoidlist);

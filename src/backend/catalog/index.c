@@ -3128,13 +3128,19 @@ index_build(Relation heapRelation,
 	}
 
 	/*
-	 * Update heap and index pg_class rows.  If building global index for a
-	 * partitioned table then don't update the stats for the heap relation.
+	 * Update the pg_class rows for the heap and index. If this is a
+	 * partitioned relation, meaning we are building a global index, we don't
+	 * need to update the tuple stats for the heap relation. In this case, just
+	 * update the relhasindex flag.
 	 */
-	if (RELKIND_HAS_STORAGE(heapRelation->rd_rel->relkind))
+	if (heapRelation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 		index_update_stats(heapRelation,
-						true,
-						stats->heap_tuples);
+						   true,
+						   -1);
+	else
+		index_update_stats(heapRelation,
+						   true,
+						   stats->heap_tuples);
 
 	index_update_stats(indexRelation,
 					   false,

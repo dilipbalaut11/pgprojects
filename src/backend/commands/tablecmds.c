@@ -6082,7 +6082,9 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 	{
 		needscan = true;
 		partqualstate = ExecPrepareExpr(tab->partition_constraint, estate);
-		global_indexs = RelationGetAllGlobalIndexList(tab->relid);
+
+		/* TODO: update comments */
+		global_indexs = RelationGetAncestorsGlobalIndexList(oldrel);
 	}
 
 	foreach(l, tab->newvals)
@@ -19154,13 +19156,11 @@ ATExecDetachPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		RemoveInheritance(partRel, rel, false);
 	else
 		MarkInheritDetached(partRel, rel);
-
 	/*
-	 * Get the list of all the global index from the parent relation to all the
-	 * way upto the root node.  And detach this partRel from all those global
-	 * indexes.
+	 * Retrieve the list of all global indexes from the parent relation up to
+	 * the root node, and detach this relation from all those global indexes.
 	 */
-	global_index = RelationGetAllGlobalIndexList(RelationGetRelid(rel));
+	global_index = RelationGetAncestorsGlobalIndexList(rel);
 
 	if (global_index != NIL)
 	{

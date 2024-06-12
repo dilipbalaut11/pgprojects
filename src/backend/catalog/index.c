@@ -1063,7 +1063,7 @@ index_create(Relation heapRelation,
 	/* Create the mapping in pg_index_partitions table */
 	if (RelationIsGlobalIndex(indexRelation))
 	{
-		CreateIndexPartitionIdRecurse(heapRelation, indexRelation);
+		IndexPartitionAttachRecurse(NULL, heapRelation, indexRelation);
 
 		/*
 		 * Cache got built while we were inserting the tuple in system table

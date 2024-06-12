@@ -84,35 +84,6 @@ InsertIndexPartitionEntry(Relation irel, Oid reloid, int32 partid)
 }
 
 /*
- * Recursively process the table and allocate the partition id for each leaf
- * partition for this global index and insert the entry into the
- * pg_index_partitions table.
- */
-void
-CreateIndexPartitionIdRecurse(Relation rel, Relation irel)
-{
-	PartitionDesc pd = RelationGetPartitionDesc(rel, true);
-
-	for (int i = 0; i < pd->nparts; i++)
-	{
-		Relation	partRel;
-
-		partRel = table_open(pd->oids[i], ShareRowExclusiveLock);
-
-		if (partRel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-			CreateIndexPartitionIdRecurse(partRel, irel);
-		else if (partRel->rd_rel->relkind == RELKIND_RELATION)
-		{
-			int32	partid = IndexGetNextPartitionID(irel);
-
-			InsertIndexPartitionEntry(irel, partRel->rd_rel->oid, partid);
-		}
-
-		table_close(partRel, ShareRowExclusiveLock);
-	}
-}
-
-/*
  * Initialize index-access-method support data for an index relation
  */
 void
@@ -274,7 +245,8 @@ UpdateIndexPartitionEntry(Oid indexoid, Oid reloid)
 	table_close(catalogRelation, RowExclusiveLock);
 }
 /*
- * IndexPartitionDetach
+ * IndexPartitionDetachRecurse - Recursively detach the given partition and all
+ * its children from the given list of global indexes.
  */
 void
 IndexPartitionDetachRecurse(Relation rel, List *global_indexs)

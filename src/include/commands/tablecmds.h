@@ -107,4 +107,6 @@ extern void RangeVarCallbackOwnsRelation(const RangeVar *relation,
 extern bool PartConstraintImpliedByRelConstraint(Relation scanrel,
 												 List *partConstraint);
 
+extern void IndexPartitionAttachRecurse(List **wqueue, Relation rel,
+										Relation irel);
 #endif							/* TABLECMDS_H */

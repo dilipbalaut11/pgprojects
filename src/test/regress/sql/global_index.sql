@@ -32,5 +32,31 @@ INSERT INTO range_parted_4 SELECT i,i%300 + 100 FROM generate_series(300000,3003
 ALTER TABLE range_parted ATTACH PARTITION range_parted_4 FOR VALUES FROM (300000) to (400000);
 EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 350;
 SELECT * FROM range_parted WHERE b = 350 LIMIT 10;
+
+CREATE TABLE range_parted_5(a int, b int) PARTITION BY RANGE (a);
+CREATE TABLE range_parted_5_1 PARTITION OF range_parted_5 FOR VALUES FROM (400000) TO (450000);
+CREATE TABLE range_parted_5_2 PARTITION OF range_parted_5 FOR VALUES FROM (450000) TO (460000);
+INSERT INTO range_parted_5 SELECT i,i%100 + 500 FROM generate_series(400000,459999) AS i;
+CREATE INDEX global_idx_1 ON range_parted_5(b) global;
+EXPLAIN (COSTS OFF) SELECT * FROM range_parted_5 WHERE b = 550;
+SELECT * FROM range_parted_5 WHERE b = 550 LIMIT 5;
+
+--attach to the top partition
+ALTER TABLE range_parted ATTACH PARTITION range_parted_5 FOR VALUES FROM (400000) to (500000);
+EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 550;
+SELECT * FROM range_parted WHERE b = 550 LIMIT 5;
+
+-- Attach to level-1 partition (test with multi level global index)
+CREATE TABLE range_parted_6(a int, b int);
+INSERT INTO range_parted_6 SELECT i,i%100 + 600 FROM generate_series(460000,490000) AS i;
+ALTER TABLE range_parted_5 ATTACH PARTITION range_parted_6 FOR VALUES FROM (460000) to (500000);
+EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 650;
+SELECT * FROM range_parted WHERE b = 650 LIMIT 5;
+
+--Detach partitions
+ALTER TABLE range_parted DETACH PARTITION range_parted_5;
+EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 550;
+SELECT * FROM range_parted WHERE b = 550 LIMIT 5;
+
 -- Cleanup
 DROP TABLE range_parted;

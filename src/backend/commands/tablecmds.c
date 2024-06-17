@@ -18467,7 +18467,16 @@ IndexPartitionAttachRecurse(List **wqueue, Relation rel, Relation irel)
 }
 
 /*
- * Attach all leaf partitions to the ancestors global indexes.
+ * AttachToGlobalIndexes - Attach base relation(s) to ancestor's global indexes
+ *
+ * Thi will create the mapping for the attached relation to all the global
+ * indexes present on the partitioned table we are attaching to, as well as all
+ * its ancestors.  This process involves assigning a partition ID for each
+ * global index that exists on the ancestors and making an entry into the
+ * pg_index_partitions table. If the relation we are attaching is also
+ * partitioned, we need to recursively traverse all its children to create
+ * mappings for the base relations.  Note that this mapping is only required
+ * for the base relations, as only they can contain tuples.
  */
 static void
 AttachToGlobalIndexes(List **wqueue, Relation rel)

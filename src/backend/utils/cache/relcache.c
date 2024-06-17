@@ -6987,6 +6987,7 @@ RelationGetAncestorsGlobalIndexList(Relation relation)
 		relation_close(parent, AccessShareLock);
 	}
 	list_free(ancestors);
+
 	return allglobalindexlist;
 }
 

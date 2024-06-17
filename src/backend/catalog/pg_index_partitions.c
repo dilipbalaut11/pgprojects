@@ -28,10 +28,10 @@
  * Get the next partition id to be allocated for the input index relation.
  * also update this value in the cache for the next allocation.
  */
-int32
+PartitionId
 IndexGetNextPartitionID(Relation irel)
 {
-	int32 partid;
+	PartitionId partid;
 
 	if (irel->rd_indexpartinfo == NULL)
 		BuildIndexPartitionInfo(irel, CurrentMemoryContext);
@@ -55,7 +55,7 @@ IndexGetNextPartitionID(Relation irel)
  * Create a single pg_index_partitions row with the given data
  */
 void
-InsertIndexPartitionEntry(Relation irel, Oid reloid, int32 partid)
+InsertIndexPartitionEntry(Relation irel, Oid reloid, PartitionId partid)
 {
 	Datum		values[Natts_pg_index_partitions];
 	bool		nulls[Natts_pg_index_partitions];
@@ -70,7 +70,7 @@ InsertIndexPartitionEntry(Relation irel, Oid reloid, int32 partid)
 	 */
 	values[Anum_pg_index_partitions_indexoid - 1] = ObjectIdGetDatum(indexoid);
 	values[Anum_pg_index_partitions_reloid - 1] = ObjectIdGetDatum(reloid);
-	values[Anum_pg_index_partitions_partid - 1] = Int32GetDatum(partid);
+	values[Anum_pg_index_partitions_partid - 1] = PartitionIdGetDatum(partid);
 
 	memset(nulls, 0, sizeof(nulls));
 
@@ -93,7 +93,7 @@ BuildIndexPartitionInfo(Relation relation, MemoryContext context)
 	ScanKeyData key;
 	HeapTuple	tuple;
 	Relation	rel;
-	int32		maxpartid = InvalidIndexPartitionId;
+	PartitionId	maxpartid = InvalidIndexPartitionId;
 	IndexPartitionInfo	map;
 	MemoryContext oldcontext;
 	HASHCTL		ctl;
@@ -151,12 +151,12 @@ BuildIndexPartitionInfo(Relation relation, MemoryContext context)
  * Get the the parition id for the given partition relation oid for the input
  * global index relation.
  */
-int32
-IndexGetRelationPartID(Relation irel, Oid reloid)
+PartitionId
+IndexGetRelationPartitionId(Relation irel, Oid reloid)
 {
 	IndexPartitionInfo	map;
 	HASH_SEQ_STATUS		hash_seq;
-	int32				partid = InvalidIndexPartitionId;
+	PartitionId			partid = InvalidIndexPartitionId;
 	IndexPartitionInfoEntry *entry;
 
 	if (irel->rd_indexpartinfo == NULL)
@@ -183,7 +183,7 @@ IndexGetRelationPartID(Relation irel, Oid reloid)
  * Get the the reloid for the given partid for the input global index relation.
  */
 Oid
-IndexGetPartitionReloid(Relation irel, int32 partid)
+IndexGetPartitionReloid(Relation irel, PartitionId partid)
 {
 	IndexPartitionInfo	map = irel->rd_indexpartinfo;
 	IndexPartitionInfoEntry *entry;

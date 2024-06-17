@@ -374,7 +374,8 @@ _bt_table_process_partitions(IndexInfo *indexInfo, Relation rel,
 			 * If this is a global index then get the partition id of this
 			 * partition with respect to this global index.
 			 */
-			indexInfo->ii_partid = IndexGetRelationPartID(irel, pd->oids[i]);
+			indexInfo->ii_partid =
+						IndexGetRelationPartitionId(irel, pd->oids[i]);
 
 			reltuples += table_index_build_scan(partRel, irel, indexInfo, true,
 												true, _bt_build_callback,

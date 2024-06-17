@@ -236,7 +236,7 @@ extern HeapTuple systable_getnext_ordered(SysScanDesc sysscan,
 										  ScanDirection direction);
 extern void systable_endscan_ordered(SysScanDesc sysscan);
 extern Oid index_tuple_fetch_partrelid(Relation index, IndexTuple itup);
-extern int32 index_tuple_fetch_partid(Relation index, IndexTuple itup);
+extern PartitionId index_tuple_fetch_partid(Relation index, IndexTuple itup);
 extern Relation globalindex_partition_rel_lookup(GlobalIndexPartitionCache pdir, Oid relid);
 extern void globalindex_partition_cache_destroy(GlobalIndexPartitionCache pdir);
 extern GlobalIndexPartitionCache create_globalindex_partition_cache(MemoryContext mcxt);

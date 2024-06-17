@@ -1225,10 +1225,10 @@ globalindex_partition_cache_reset(GlobalIndexPartitionCache pdir)
  * Fetch partition identifier from a index tuple.  Must be called only for a
  * global index.
  */
-int32
+PartitionId
 index_tuple_fetch_partid(Relation index, IndexTuple itup)
 {
-	int32 		partid;
+	PartitionId partid;
 	bool		is_null;
 	Datum		datum;
 	int 		partidattno = GlobalIndexRelationGetPartIdAttrIdx(index);
@@ -1239,7 +1239,7 @@ index_tuple_fetch_partid(Relation index, IndexTuple itup)
 	datum = index_getattr(itup, partidattno, tupleDesc, &is_null);
 	Assert(!is_null);
 
-	partid = DatumGetInt32(datum);
+	partid = DatumGetPartitionId(datum);
 
 	return partid;
 }
@@ -1251,7 +1251,7 @@ index_tuple_fetch_partid(Relation index, IndexTuple itup)
 Oid
 index_tuple_fetch_partrelid(Relation index, IndexTuple itup)
 {
-	int32 		partid = index_tuple_fetch_partid(index, itup);
+	PartitionId 	partid = index_tuple_fetch_partid(index, itup);
 
 	Assert(IndexPartIdIsValid(partid));
 

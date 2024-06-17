@@ -845,7 +845,7 @@ _bt_compare(Relation rel,
 
 	if (RelationIsGlobalIndex(rel))
 	{
-		result = BTreePartIDCompare(key->partid, BTreeTupleGetPartID(rel, itup));
+		result = BTreeHeapOidCompare(key->partid, BTreeTupleGetPartID(rel, itup));
 
 		/*
 		* If partid is not same then we are done otherwise compare with tid as

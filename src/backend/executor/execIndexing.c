@@ -212,7 +212,8 @@ ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
 		 * with respect to this global index.
 		 */
 		 if (RelationIsGlobalIndex(indexDesc))
-			ii->ii_partid = IndexGetRelationPartID(indexDesc, RelationGetRelid(resultRelation));
+			ii->ii_partid = IndexGetRelationPartitionId(indexDesc,
+														RelationGetRelid(resultRelation));
 
 		/*
 		 * If the indexes are to be used for speculative insertion, add extra

@@ -116,7 +116,7 @@ _bt_doinsert(Relation rel, IndexTuple itup,
 	BTInsertStateData insertstate;
 	BTScanInsert itup_key;
 	BTStack		stack;
-	int32		partid;
+	PartitionId	partid;
 	bool		checkingunique = (checkUnique != UNIQUE_CHECK_NO);
 
 	/* we need an insertion scan key to do our search, so build one */
@@ -438,7 +438,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 	bool		inposting = false;
 	bool		prevalldead = true;
 	int			curposti = 0;
-	Oid			partid = InvalidOid;
+	Oid			heapoid = InvalidOid;
 
 	/* Assume unique until we find a duplicate */
 	*is_unique = true;
@@ -564,15 +564,15 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				 */
 				if (RelationIsGlobalIndex(rel))
 				{
-					Oid	curpartid = index_tuple_fetch_partrelid(rel, curitup);
+					Oid	curheapoid = index_tuple_fetch_partrelid(rel, curitup);
 
-					if (partid != curpartid)
+					if (heapoid != curheapoid)
 					{
-						if (OidIsValid(partid))
+						if (OidIsValid(heapoid))
 							relation_close(partrel, AccessShareLock);
 
-						partrel = relation_open(curpartid, AccessShareLock);
-						partid = curpartid;
+						partrel = relation_open(curheapoid, AccessShareLock);
+						heapoid = curheapoid;
 					}
 				}
 				else

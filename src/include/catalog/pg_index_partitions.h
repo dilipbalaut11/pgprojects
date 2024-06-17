@@ -44,8 +44,6 @@ typedef FormData_pg_index_partitions *Form_pg_index_partitions;
 
 DECLARE_UNIQUE_INDEX_PKEY(pg_index_partitions_indexoid_partid_index, 6016, IndexIdPartitionsIndexId, pg_index_partitions, btree(indexoid oid_ops, partid int4_ops));
 
-typedef	int32 PartitionId;
-
 /*
  * Map over the pg_index_partitions table for a particular global index.  This
  * will be used for faster lookup of the next partid to be used for this global
@@ -55,7 +53,7 @@ typedef	int32 PartitionId;
 typedef struct IndexPartitionInfoData
 {
 	MemoryContext	context;	/* memory context for storing the cache data */
-	int32			max_partid;	/* max value of used partid */
+	PartitionId		max_partid;	/* max value of used partid */
 	HTAB		   *pdir_hash;	/* partid to reloid lookup hash */
 } IndexPartitionInfoData;
 
@@ -82,7 +80,7 @@ typedef struct IndexPartitionInfoEntry
 #define PartitionIdAttributeNumber				(-100)
 
 static const FormData_pg_attribute partitionid_attr = {
-	.attname = NULL,
+	.attname = {""},
 	.atttypid = INT4OID,
 	.attlen = sizeof(int32),
 	.attnum = PartitionIdAttributeNumber,
@@ -97,9 +95,9 @@ static const FormData_pg_attribute partitionid_attr = {
 
 extern void CreateIndexPartitionIdRecurse1(Relation rel, Relation irel);
 extern void BuildIndexPartitionInfo(Relation relation, MemoryContext context);
-extern int32 IndexGetRelationPartID(Relation irel, Oid reloid);
-extern Oid IndexGetPartitionReloid(Relation irel, int32 partid);
-extern int32 IndexGetNextPartitionID(Relation irel);
-extern void InsertIndexPartitionEntry(Relation irel, Oid reloid, int32 partid);
+extern PartitionId IndexGetRelationPartitionId(Relation irel, Oid reloid);
+extern Oid IndexGetPartitionReloid(Relation irel, PartitionId partid);
+extern PartitionId IndexGetNextPartitionID(Relation irel);
+extern void InsertIndexPartitionEntry(Relation irel, Oid reloid, PartitionId partid);
 extern void IndexPartitionDetachRecurse(Relation rel, List *global_indexs);
 #endif							/* PG_INDEX_PARTITIONS_H */

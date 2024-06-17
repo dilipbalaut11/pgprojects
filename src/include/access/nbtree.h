@@ -658,7 +658,7 @@ BTreeTupleGetHeapTID(IndexTuple itup)
 /*
  * Get tiebreaker partition identifier attribute, if any.
  */
-static inline int32
+static inline PartitionId
 BTreeTupleGetPartID(Relation index, IndexTuple itup)
 {
 	/*
@@ -680,7 +680,7 @@ BTreeTupleGetPartID(Relation index, IndexTuple itup)
 static inline Oid
 BTreeTupleGetPartitionRelid(Relation index, IndexTuple itup)
 {
-	int32	partid = BTreeTupleGetPartID(index, itup);
+	PartitionId	partid = BTreeTupleGetPartID(index, itup);
 
 	Assert(IndexPartIdIsValid(partid));
 
@@ -688,7 +688,7 @@ BTreeTupleGetPartitionRelid(Relation index, IndexTuple itup)
 }
 
 static inline int32
-BTreePartIDCompare(Oid partid1, Oid partid2)
+BTreeHeapOidCompare(Oid partid1, Oid partid2)
 {
 	if (partid1 < partid2)
 		return -1;
@@ -844,7 +844,7 @@ typedef struct BTScanInsertData
 	bool		anynullkeys;
 	bool		nextkey;
 	bool		backward;		/* backward index scan? */
-	int32		partid;			/* tiebreaker only for global indexes */
+	PartitionId	partid;			/* tiebreaker only for global indexes */
 	ItemPointer scantid;		/* tiebreaker for scankeys */
 	int			keysz;			/* Size of scankeys array */
 	ScanKeyData scankeys[INDEX_MAX_KEYS];	/* Must appear last */

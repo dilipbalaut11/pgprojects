@@ -665,6 +665,8 @@ typedef uint32 MultiXactOffset;
 
 typedef uint32 CommandId;
 
+typedef	uint32 PartitionId;
+
 #define FirstCommandId	((CommandId) 0)
 #define InvalidCommandId	(~(CommandId)0)
 

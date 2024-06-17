@@ -18437,7 +18437,7 @@ IndexPartitionAttachRecurse(List **wqueue, Relation rel, Relation irel)
 	 */
 	if (rel->rd_rel->relkind == RELKIND_RELATION)
 	{
-		int32	partid = IndexGetNextPartitionID(irel);
+		PartitionId	partid = IndexGetNextPartitionID(irel);
 
 		InsertIndexPartitionEntry(irel, RelationGetRelid(rel), partid);
 		if (wqueue != NULL)

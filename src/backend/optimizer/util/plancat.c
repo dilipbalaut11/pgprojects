@@ -1907,7 +1907,13 @@ build_index_tlist(PlannerInfo *root, IndexOptInfo *index,
 			/* simple column */
 			const FormData_pg_attribute *att_tup;
 
-			if (indexkey < 0)
+			/*
+			 * If the attribute number is PartitionIdAttributeNumber then
+			 * directly assign to the predefined partitionid_attr constant.
+			 */
+			if (indexkey == PartitionIdAttributeNumber)
+				att_tup = &partitionid_attr;
+			else if (indexkey < 0)
 				att_tup = SystemAttributeDefinition(indexkey);
 			else
 				att_tup = TupleDescAttr(heapRelation->rd_att, indexkey - 1);

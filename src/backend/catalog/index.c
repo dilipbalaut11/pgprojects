@@ -346,9 +346,12 @@ ConstructTupleDescriptor(Relation heapRelation,
 				elog(ERROR, "invalid column number %d", atnum);
 
 			/*
-			 * For global indexes we are indexing on a system attribute.
+			 * If the attribute number is PartitionIdAttributeNumber then
+			 * directly assign to the predefined partitionid_attr constant.
 			 */
-			if (atnum < 0)
+			if (atnum == PartitionIdAttributeNumber)
+				from = &partitionid_attr;
+			else if (atnum < 0)
 				from = SystemAttributeDefinition(atnum);
 			else
 				from = TupleDescAttr(heapTupDesc,
@@ -2751,8 +2754,8 @@ FormIndexDatum(IndexInfo *indexInfo,
 		bool		isNull;
 
 		/*
-		 * If the attribute number is partition id attribute then directly
-		 * fetch it from the indexInfo.
+		 * If the attribute number is PartitionIdAttributeNumber then directly
+		 * assign to the predefined partitionid_attr constant.
 		 */
 		if (keycol == PartitionIdAttributeNumber)
 		{

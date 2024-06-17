@@ -20,6 +20,7 @@
 
 #include "catalog/genbki.h"
 #include "catalog/pg_index_partitions_d.h"
+#include "catalog/pg_type_d.h"
 #include "utils/hsearch.h"
 
 /* ----------------
@@ -43,6 +44,8 @@ typedef FormData_pg_index_partitions *Form_pg_index_partitions;
 
 DECLARE_UNIQUE_INDEX_PKEY(pg_index_partitions_indexoid_partid_index, 6016, IndexIdPartitionsIndexId, pg_index_partitions, btree(indexoid oid_ops, partid int4_ops));
 
+typedef	int32 PartitionId;
+
 /*
  * Map over the pg_index_partitions table for a particular global index.  This
  * will be used for faster lookup of the next partid to be used for this global
@@ -63,13 +66,34 @@ typedef IndexPartitionInfoData *IndexPartitionInfo;
  */
 typedef struct IndexPartitionInfoEntry
 {
-	int32		partid;		/* key */
+	PartitionId	partid;		/* key */
 	Oid			reloid;		/* payload */
 } IndexPartitionInfoEntry;
 
 #define		InvalidIndexPartitionId		0
 #define		FirstValidIndexPartitionId	1
 #define		IndexPartIdIsValid(partid)	((bool) ((partid) != InvalidIndexPartitionId))
+
+/*
+ * The "partitionid" is a special purpose attribute this attribute is not have
+ * entry in the pg_attribute table.  But this is just used for getting the
+ * FormData_pg_attribute entry for partition id attribute.
+ */
+#define PartitionIdAttributeNumber				(-100)
+
+static const FormData_pg_attribute partitionid_attr = {
+	.attname = NULL,
+	.atttypid = INT4OID,
+	.attlen = sizeof(int32),
+	.attnum = PartitionIdAttributeNumber,
+	.attcacheoff = -1,
+	.atttypmod = -1,
+	.attbyval = true,
+	.attalign = TYPALIGN_INT,
+	.attstorage = TYPSTORAGE_PLAIN,
+	.attnotnull = true,
+	.attislocal = true,
+};
 
 extern void CreateIndexPartitionIdRecurse1(Relation rel, Relation irel);
 extern void BuildIndexPartitionInfo(Relation relation, MemoryContext context);

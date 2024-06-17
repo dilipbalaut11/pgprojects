@@ -26,6 +26,4 @@
 #define TableOidAttributeNumber					(-6)
 #define FirstLowInvalidHeapAttributeNumber		(-7)
 
-#define PartitionIdAttributeNumber				(-100)
-
 #endif							/* SYSATTR_H */

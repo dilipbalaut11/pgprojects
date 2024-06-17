@@ -31,6 +31,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_database.h"
+#include "catalog/pg_index_partitions.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
@@ -647,11 +648,9 @@ DefineIndex(Oid tableId,
 		IndexElem	*newparam;
 
 		newparam = makeNode(IndexElem);
-		newparam->name = pstrdup("partitionid");
+		newparam->name = NULL;
 		newparam->expr = NULL;
-		newparam->indexcolname = NULL;
-		newparam->collation = NIL;
-		newparam->opclass = NIL;
+
 		stmt->indexIncludingParams =
 				list_insert_nth(stmt->indexIncludingParams, 0, newparam);
 	}
@@ -1925,16 +1924,16 @@ ComputeIndexAttrs(IndexInfo *indexInfo,
 		Oid			attcollation;
 
 		/*
-		 * Process the column-or-expression to be indexed.  If we are fetching
-		 * the "partitionid" attribute then directly fetch the attribute entry
-		 * using SystemAttributeDefinition.
+		 * Process the column-or-expression to be indexed.  For partition id
+		 * attribute both name and expr is set as NULL.  And we can directly
+		 * point to the predefine  FormData_pg_attribute for the partition
+		 * id attribute.
 		 */
-		if ((attribute->name != NULL) &&
-			strcmp(attribute->name, "partitionid") == 0)
+		if ((attribute->name == NULL) && (attribute->expr == NULL))
 		{
 			const FormData_pg_attribute *attform;
 
-			attform = SystemAttributeDefinition(PartitionIdAttributeNumber);
+			attform = &partitionid_attr;
 			indexInfo->ii_IndexAttrNumbers[attn] = attform->attnum;
 			atttype = attform->atttypid;
 			attcollation = attform->attcollation;

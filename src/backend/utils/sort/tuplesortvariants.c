@@ -1557,25 +1557,6 @@ comparetup_index_btree_tiebreak(const SortTuple *a, const SortTuple *b,
 									RelationGetRelationName(arg->index.indexRel))));
 	}
 
-
-	/*
-	 * If key values are equal, we sort on partition id.
-	 */
-	if (RelationIsGlobalIndex(arg->index.indexRel))
-	{
-		Oid		partid1;
-		Oid		partid2;
-
-		datum1 = index_getattr(tuple1, keysz + 1, tupDes, &isnull1);
-		partid1 = DatumGetObjectId(datum1);
-
-		datum2 = index_getattr(tuple2, keysz + 1, tupDes, &isnull2);
-		partid2 = DatumGetObjectId(datum2);
-
-		if (partid1 != partid2)
-			return (partid1 < partid2) ? -1 : 1;
-	}
-
 	/*
 	 * If key values are equal, we sort on ItemPointer.  This is required for
 	 * btree indexes, since heap TID is treated as an implicit last key

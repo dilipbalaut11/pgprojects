@@ -994,14 +994,8 @@ _bt_buildadd(BTWriteState *wstate, BTPageState *state, IndexTuple itup,
 		if (state->btps_next == NULL)
 			state->btps_next = _bt_pagestate(wstate, state->btps_level + 1);
 
-		Assert((RelationIsGlobalIndex(wstate->index) ||
-				BTreeTupleGetNAtts(state->btps_lowkey, wstate->index) <=
+		Assert((BTreeTupleGetNAtts(state->btps_lowkey, wstate->index) <=
 				IndexRelationGetNumberOfKeyAttributes(wstate->index) &&
-				BTreeTupleGetNAtts(state->btps_lowkey, wstate->index) > 0) ||
-			   P_LEFTMOST(BTPageGetOpaque(opage)));
-		Assert((!RelationIsGlobalIndex(wstate->index) ||
-				BTreeTupleGetNAtts(state->btps_lowkey, wstate->index) <=
-				IndexRelationGetNumberOfKeyAttributes(wstate->index) + 1 &&
 				BTreeTupleGetNAtts(state->btps_lowkey, wstate->index) > 0) ||
 			   P_LEFTMOST(BTPageGetOpaque(opage)));
 		Assert(BTreeTupleGetNAtts(state->btps_lowkey, wstate->index) == 0 ||
@@ -1146,14 +1140,8 @@ _bt_uppershutdown(BTWriteState *wstate, BTPageState *state)
 		}
 		else
 		{
-			Assert(RelationIsGlobalIndex(wstate->index) ||
-				   (BTreeTupleGetNAtts(s->btps_lowkey, wstate->index) <=
+			Assert((BTreeTupleGetNAtts(s->btps_lowkey, wstate->index) <=
 				   IndexRelationGetNumberOfKeyAttributes(wstate->index) &&
-				   BTreeTupleGetNAtts(s->btps_lowkey, wstate->index) > 0) ||
-				   P_LEFTMOST(opaque));
-			Assert(!RelationIsGlobalIndex(wstate->index) ||
-				   (BTreeTupleGetNAtts(s->btps_lowkey, wstate->index) <=
-				   IndexRelationGetNumberOfKeyAttributes(wstate->index) + 1 &&
 				   BTreeTupleGetNAtts(s->btps_lowkey, wstate->index) > 0) ||
 				   P_LEFTMOST(opaque));
 			Assert(BTreeTupleGetNAtts(s->btps_lowkey, wstate->index) == 0 ||
@@ -1208,15 +1196,6 @@ _bt_load(BTWriteState *wstate, BTSpool *btspool, BTSpool *btspool2)
 
 	deduplicate = wstate->inskey->allequalimage && !btspool->isunique &&
 		BTGetDeduplicateItems(wstate->index);
-
-	/*
-	 * When creating global indexes, include the partition ID as part of the
-	 * sort key along with the index keys. Also, consider this partition ID
-	 * during deduplication, as deduplication should not occur across different
-	 * partitions.
-	 */
-	if (RelationIsGlobalIndex(wstate->index))
-		keysz += 1;
 
 	if (merge)
 	{

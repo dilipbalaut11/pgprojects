@@ -629,9 +629,10 @@ DefineIndex(Oid tableId,
 	/*
 	 * If this is a global index, we must append a partition identifier to
 	 * uniquely identify the heap tuple. Therefore, in this design, we have
-	 * opted to include the partition-id as the first column in the include
-	 * column list. The rationale behind storing it as the first include column
-	 * is that in various scenarios, we would treat this column as an extended
+	 * opted to include the partition-id as the last key column.
+	 *
+	 * The rationale behind storing it as the last key column is that in
+	 * various scenarios, we would treat this column as an extended
 	 * index key column.  Essentially, each index tuple must be uniquely
 	 * identified. Therefore, if we encounter duplicate keys, we utilize heap
 	 * tid as a tiebreaker.  However, for global indexes, relying solely on
@@ -645,14 +646,11 @@ DefineIndex(Oid tableId,
 	 */
 	if (stmt->global)
 	{
-		IndexElem	*newparam;
+		IndexElem	*newparam = makeNode(IndexElem);
 
-		newparam = makeNode(IndexElem);
 		newparam->name = NULL;
 		newparam->expr = NULL;
-
-		stmt->indexIncludingParams =
-				list_insert_nth(stmt->indexIncludingParams, 0, newparam);
+		stmt->indexParams = lappend(stmt->indexParams, newparam);
 	}
 
 	/*

@@ -116,7 +116,6 @@ _bt_doinsert(Relation rel, IndexTuple itup,
 	BTInsertStateData insertstate;
 	BTScanInsert itup_key;
 	BTStack		stack;
-	PartitionId	partid;
 	bool		checkingunique = (checkUnique != UNIQUE_CHECK_NO);
 
 	/* we need an insertion scan key to do our search, so build one */
@@ -127,8 +126,6 @@ _bt_doinsert(Relation rel, IndexTuple itup,
 		if (!itup_key->anynullkeys)
 		{
 			/* No (heapkeyspace) scantid until uniqueness established */
-			partid = itup_key->partid;
-			itup_key->partid = InvalidIndexPartitionId;
 			itup_key->scantid = NULL;
 		}
 		else
@@ -247,8 +244,6 @@ search:
 		/* Uniqueness is established -- restore heap tid as scantid */
 		if (itup_key->heapkeyspace)
 			itup_key->scantid = &itup->t_tid;
-
-		itup_key->partid = partid;
 	}
 
 	if (checkUnique != UNIQUE_CHECK_EXISTING)
@@ -464,7 +459,6 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 	Assert(!insertstate->bounds_valid || insertstate->low == offset);
 	Assert(!itup_key->anynullkeys);
 	Assert(itup_key->scantid == NULL);
-	Assert(!IndexPartIdIsValid(itup_key->partid));
 	for (;;)
 	{
 		/*
@@ -871,8 +865,6 @@ _bt_findinsertloc(Relation rel,
 
 	Assert(P_ISLEAF(opaque) && !P_INCOMPLETE_SPLIT(opaque));
 	Assert(!insertstate->bounds_valid || checkingunique);
-	Assert(!RelationIsGlobalIndex(rel) || IndexPartIdIsValid(itup_key->partid));
-	Assert(RelationIsGlobalIndex(rel) || !IndexPartIdIsValid(itup_key->partid));
 	Assert(!itup_key->heapkeyspace || itup_key->scantid != NULL);
 	Assert(itup_key->heapkeyspace || itup_key->scantid == NULL);
 	Assert(!itup_key->allequalimage || itup_key->heapkeyspace);
@@ -1177,17 +1169,9 @@ _bt_insertonpg(Relation rel,
 	Assert(!isleaf ||
 		   BTreeTupleGetNAtts(itup, rel) ==
 		   IndexRelationGetNumberOfAttributes(rel));
-	Assert(isleaf || RelationIsGlobalIndex(rel) ||
+	Assert(isleaf ||
 		   BTreeTupleGetNAtts(itup, rel) <=
 		   IndexRelationGetNumberOfKeyAttributes(rel));
-
-	/*
-	 * For global index partition identifier attribute might also be part of
-	 * the pivot tuple.
-	 */
-	Assert(isleaf || !RelationIsGlobalIndex(rel) ||
-		   BTreeTupleGetNAtts(itup, rel) <=
-		   IndexRelationGetNumberOfKeyAttributes(rel) + 1);
 	Assert(!BTreeTupleIsPosting(itup));
 	Assert(MAXALIGN(IndexTupleSize(itup)) == itemsz);
 	/* Caller must always finish incomplete split for us */
@@ -1742,15 +1726,8 @@ _bt_split(Relation rel, Relation heaprel, BTScanInsert itup_key, Buffer buf,
 	afterleftoff = P_HIKEY;
 
 	Assert(BTreeTupleGetNAtts(lefthighkey, rel) > 0);
-	Assert(RelationIsGlobalIndex(rel) || BTreeTupleGetNAtts(lefthighkey, rel) <=
+	Assert(BTreeTupleGetNAtts(lefthighkey, rel) <=
 		   IndexRelationGetNumberOfKeyAttributes(rel));
-
-	/*
-	 * For global index partition identifier attribute might also be part of
-	 * the pivot tuple.
-	 */
-	Assert(!RelationIsGlobalIndex(rel) || BTreeTupleGetNAtts(lefthighkey, rel) <=
-		   IndexRelationGetNumberOfKeyAttributes(rel) + 1);
 	Assert(itemsz == MAXALIGN(IndexTupleSize(lefthighkey)));
 	if (PageAddItem(leftpage, (Item) lefthighkey, itemsz, afterleftoff, false,
 					false) == InvalidOffsetNumber)
@@ -1817,17 +1794,8 @@ _bt_split(Relation rel, Relation heaprel, BTScanInsert itup_key, Buffer buf,
 		itemsz = ItemIdGetLength(itemid);
 		righthighkey = (IndexTuple) PageGetItem(origpage, itemid);
 		Assert(BTreeTupleGetNAtts(righthighkey, rel) > 0);
-		/*
-		 * For global index partition identifier attribute might also be part
-		 * of the pivot tuple.
-		 */
-		Assert(RelationIsGlobalIndex(rel) ||
-			   BTreeTupleGetNAtts(righthighkey, rel) <=
-			   IndexRelationGetNumberOfKeyAttributes(rel));		
-		Assert(!RelationIsGlobalIndex(rel) ||
-			   BTreeTupleGetNAtts(lefthighkey, rel) <=
-			   IndexRelationGetNumberOfKeyAttributes(rel) + 1);
-
+		Assert(BTreeTupleGetNAtts(righthighkey, rel) <=
+			   IndexRelationGetNumberOfKeyAttributes(rel));
 		if (PageAddItem(rightpage, (Item) righthighkey, itemsz, afterrightoff,
 						false, false) == InvalidOffsetNumber)
 		{
@@ -2980,6 +2948,7 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 
 	Assert(delstate.ndeltids >= ndeletable);
 
+	/* Physically delete LP_DEAD tuples (plus any delete-safe extra TIDs) */
 	_bt_delitems_delete_check(rel, buffer, heapRel, &delstate);
 
 	pfree(delstate.deltids);

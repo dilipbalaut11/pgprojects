@@ -530,7 +530,7 @@ typedef struct ViewOptions
  *		Returns the partid column number in a global index.
  */
 #define GlobalIndexRelationGetPartIdAttrIdx(relation) \
-		IndexRelationGetNumberOfKeyAttributes(relation) + 1
+		IndexRelationGetNumberOfKeyAttributes(relation)
 
 /*
  * RelationGetDescr

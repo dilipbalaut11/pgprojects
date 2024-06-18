@@ -164,13 +164,6 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 	key->keysz = Min(indnkeyatts, tupnatts);
 	key->scantid = key->heapkeyspace && itup ?
 		BTreeTupleGetHeapTID(itup) : NULL;
-
-	/* For global indexes also fetch the partition ID along with heaptid */
-	if (RelationIsGlobalIndex(rel) && itup)
-		key->partid = BTreeTupleGetPartID(rel, itup);
-	else
-		key->partid = InvalidIndexPartitionId;
-
 	skey = key->scankeys;
 	for (i = 0; i < indnkeyatts; i++)
 	{
@@ -4684,17 +4677,6 @@ _bt_truncate(Relation rel, IndexTuple lastleft, IndexTuple firstright,
 	keepnatts = nkeyatts + 1;
 #endif
 
-	/*
-	 * For global indexes for suffix truncation purpose also consider the
-	 * part-id column as key atrribute so that this will only get truncated
-	 * away if remaining keyspace is sufficient to uniquly identify the
-	 * lastleft and the firstright, otherwise part-id has to be part of the
-	 * tuple and if the part-id is also same then we would include the heaptid
-	 * as well.
-	 */
-	if (RelationIsGlobalIndex(rel))
-		nkeyatts += 1;
-
 	pivot = index_truncate_tuple(itupdesc, firstright,
 								 Min(keepnatts, nkeyatts));
 
@@ -4821,7 +4803,6 @@ _bt_keep_natts(Relation rel, IndexTuple lastleft, IndexTuple firstright,
 	int			nkeyatts = IndexRelationGetNumberOfKeyAttributes(rel);
 	TupleDesc	itupdesc = RelationGetDescr(rel);
 	int			keepnatts;
-	int			ncmpatts;
 	ScanKey		scankey;
 
 	/*
@@ -4832,18 +4813,9 @@ _bt_keep_natts(Relation rel, IndexTuple lastleft, IndexTuple firstright,
 	if (!itup_key->heapkeyspace)
 		return nkeyatts;
 
-	/*
-	 * For global indexes also compare the partid stored right after the key
-	 * attributes.
-	 */
-	if (RelationIsGlobalIndex(rel))
-		ncmpatts = nkeyatts + 1;
-	else
-		ncmpatts = nkeyatts;
-
 	scankey = itup_key->scankeys;
 	keepnatts = 1;
-	for (int attnum = 1; attnum <= ncmpatts; attnum++, scankey++)
+	for (int attnum = 1; attnum <= nkeyatts; attnum++, scankey++)
 	{
 		Datum		datum1,
 					datum2;
@@ -4856,16 +4828,11 @@ _bt_keep_natts(Relation rel, IndexTuple lastleft, IndexTuple firstright,
 		if (isNull1 != isNull2)
 			break;
 
-		if (ncmpatts > nkeyatts)
-		{
-			if (DatumGetObjectId(datum1) != DatumGetObjectId(datum2))
-				break;
-		}
-		else if (!isNull1 &&
-				 DatumGetInt32(FunctionCall2Coll(&scankey->sk_func,
-												 scankey->sk_collation,
-												 datum1,
-												 datum2)) != 0)
+		if (!isNull1 &&
+			DatumGetInt32(FunctionCall2Coll(&scankey->sk_func,
+											scankey->sk_collation,
+											datum1,
+											datum2)) != 0)
 			break;
 
 		keepnatts++;
@@ -4909,13 +4876,6 @@ _bt_keep_natts_fast(Relation rel, IndexTuple lastleft, IndexTuple firstright)
 	TupleDesc	itupdesc = RelationGetDescr(rel);
 	int			keysz = IndexRelationGetNumberOfKeyAttributes(rel);
 	int			keepnatts;
-
-	/*
-	 * For global index compare parition id as well along with the other
-	 * key column for deduplicating.
-	 */
-	if (RelationIsGlobalIndex(rel))
-		keysz = keysz + 1;
 
 	keepnatts = 1;
 	for (int attnum = 1; attnum <= keysz; attnum++)
@@ -4988,9 +4948,6 @@ _bt_check_natts(Relation rel, bool heapkeyspace, Page page, OffsetNumber offnum)
 		(ItemPointerGetOffsetNumberNoCheck(&itup->t_tid) &
 		 BT_PIVOT_HEAP_TID_ATTR) != 0)
 		return false;
-
-	if (RelationIsGlobalIndex(rel))
-		nkeyatts = nkeyatts + 1;
 
 	/* INCLUDE indexes do not support deduplication */
 	if (natts != nkeyatts && BTreeTupleIsPosting(itup))
@@ -5184,13 +5141,7 @@ _bt_allequalimage(Relation rel, bool debugmessage)
 	bool		allequalimage = true;
 
 	/* INCLUDE indexes can never support deduplication */
-	if (RelationIsGlobalIndex(rel))
-	{
-		if (IndexRelationGetNumberOfAttributes(rel) !=
-			GlobalIndexRelationGetPartIdAttrIdx(rel))
-			return false;
-	}
-	else if (IndexRelationGetNumberOfAttributes(rel) !=
+	if (IndexRelationGetNumberOfAttributes(rel) !=
 		IndexRelationGetNumberOfKeyAttributes(rel))
 		return false;
 

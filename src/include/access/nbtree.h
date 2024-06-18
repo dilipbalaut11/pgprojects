@@ -844,7 +844,6 @@ typedef struct BTScanInsertData
 	bool		anynullkeys;
 	bool		nextkey;
 	bool		backward;		/* backward index scan? */
-	PartitionId	partid;			/* tiebreaker only for global indexes */
 	ItemPointer scantid;		/* tiebreaker for scankeys */
 	int			keysz;			/* Size of scankeys array */
 	ScanKeyData scankeys[INDEX_MAX_KEYS];	/* Must appear last */

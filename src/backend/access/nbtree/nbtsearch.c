@@ -593,8 +593,7 @@ _bt_binsrch_insert(Relation rel, BTInsertState insertstate)
  *----------
  */
 static int
-_bt_binsrch_posting(BTScanInsert key, Page page,
-					OffsetNumber offnum)
+_bt_binsrch_posting(BTScanInsert key, Page page, OffsetNumber offnum)
 {
 	IndexTuple	itup;
 	ItemId		itemid;
@@ -694,11 +693,9 @@ _bt_compare(Relation rel,
 	int			ntupatts;
 	int32		result;
 
-	if (!_bt_check_natts(rel, key->heapkeyspace, page, offnum))
-		Assert(_bt_check_natts(rel, key->heapkeyspace, page, offnum));
+	Assert(_bt_check_natts(rel, key->heapkeyspace, page, offnum));
 	Assert(key->keysz <= IndexRelationGetNumberOfKeyAttributes(rel));
 	Assert(key->heapkeyspace || key->scantid == NULL);
-	Assert(RelationIsGlobalIndex(rel) || !IndexPartIdIsValid(key->partid));
 
 	/*
 	 * Force result ">" if target item is first data item on an internal page
@@ -835,26 +832,12 @@ _bt_compare(Relation rel,
 		return 1;
 
 	/*
-	 * TODO: rewrite this comments w.r.t. partid and tid pair.
 	 * Scankey must be treated as equal to a posting list tuple if its scantid
 	 * value falls within the range of the posting list.  In all other cases
 	 * there can only be a single heap TID value, which is compared directly
 	 * with scantid.
 	 */
 	Assert(ntupatts >= IndexRelationGetNumberOfKeyAttributes(rel));
-
-	if (RelationIsGlobalIndex(rel))
-	{
-		result = BTreeHeapOidCompare(key->partid, BTreeTupleGetPartID(rel, itup));
-
-		/*
-		* If partid is not same then we are done otherwise compare with tid as
-		* a next tiebreaker.
-		*/
-		if (result != 0)
-			return result;
-	}
-
 	result = ItemPointerCompare(key->scantid, heapTid);
 	if (result <= 0 || !BTreeTupleIsPosting(itup))
 		return result;
@@ -1333,7 +1316,6 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	 */
 	_bt_metaversion(rel, &inskey.heapkeyspace, &inskey.allequalimage);
 	inskey.anynullkeys = false; /* unused */
-	inskey.partid = InvalidIndexPartitionId;
 	inskey.scantid = NULL;
 	inskey.keysz = keysz;
 	switch (strat_total)

@@ -70,13 +70,6 @@ _bt_dedup_pass(Relation rel, Buffer buf, IndexTuple newitem, Size newitemsz,
 	bool		singlevalstrat = false;
 	int			nkeyatts = IndexRelationGetNumberOfKeyAttributes(rel);
 
-	/*
-	 * For global index compare parition id as well along with the other
-	 * key column for deduplicating.
-	 */
-	if (RelationIsGlobalIndex(rel))
-		nkeyatts = nkeyatts + 1;
-
 	/* Passed-in newitemsz is MAXALIGNED but does not include line pointer */
 	newitemsz += sizeof(ItemIdData);
 
@@ -324,13 +317,6 @@ _bt_bottomupdel_pass(Relation rel, Buffer buf, Relation heapRel,
 	TM_IndexDeleteOp delstate;
 	bool		neverdedup;
 	int			nkeyatts = IndexRelationGetNumberOfKeyAttributes(rel);
-
-	/*
-	 * For global index compare parition id as well along with the other
-	 * key column for deduplicating.
-	 */
-	if (RelationIsGlobalIndex(rel))
-		nkeyatts = nkeyatts + 1;
 
 	/* Passed-in newitemsz is MAXALIGNED but does not include line pointer */
 	newitemsz += sizeof(ItemIdData);

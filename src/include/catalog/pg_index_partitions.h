@@ -57,7 +57,8 @@ CATALOG(pg_index_partitions,6015,IndexPartitionsRelationId)
  */
 typedef FormData_pg_index_partitions *Form_pg_index_partitions;
 
-DECLARE_UNIQUE_INDEX_PKEY(pg_index_partitions_indexoid_partid_index, 6016, IndexIdPartitionsIndexId, pg_index_partitions, btree(indexoid oid_ops, partid int4_ops));
+DECLARE_UNIQUE_INDEX_PKEY(pg_index_partitions_indexoid_partid_index, 6018, IndexPartitionsIndexId, pg_index_partitions, btree(indexoid oid_ops, partid int4_ops));
+DECLARE_INDEX(pg_index_partitions_reloid_index, 6019, IndexPartitionsReloidIndexId, pg_index_partitions, btree(reloid oid_ops));
 
 /*
  * Map over the pg_index_partitions table for a particular global index.  This
@@ -114,5 +115,5 @@ extern PartitionId IndexGetRelationPartitionId(Relation irel, Oid reloid);
 extern Oid IndexGetPartitionReloid(Relation irel, PartitionId partid);
 extern PartitionId IndexGetNextPartitionID(Relation irel);
 extern void InsertIndexPartitionEntry(Relation irel, Oid reloid, PartitionId partid);
-extern void IndexPartitionDetachRecurse(Relation rel, List *global_indexs);
+extern void IndexPartitionDetach(Relation rel);
 #endif							/* PG_INDEX_PARTITIONS_H */

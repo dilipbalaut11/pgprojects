@@ -22,7 +22,11 @@
 #include "catalog/pg_index_partitions.h"
 #include "partitioning/partdesc.h"
 #include "utils/fmgroids.h"
+#include "utils/inval.h"
 #include "utils/rel.h"
+
+static void InvalidateIndexPartitionEntries(Oid reloid, List *indexoids);
+static void IndexPartitionDetachRecurse(Relation rel, List *global_indexes);
 
 /*
  * IndexGetNextPartitionID - Get the next partition ID of the global index
@@ -125,7 +129,7 @@ BuildIndexPartitionInfo(Relation relation, MemoryContext context)
 				BTEqualStrategyNumber, F_OIDEQ,
 				ObjectIdGetDatum(relation->rd_rel->oid));
 
-	scan = systable_beginscan(rel, IndexIdPartitionsIndexId, true,
+	scan = systable_beginscan(rel, IndexPartitionsIndexId, true,
 							  NULL, 1, &key);
 
 	while ((tuple = systable_getnext(scan)) != NULL)
@@ -209,30 +213,59 @@ IndexGetPartitionReloid(Relation irel, PartitionId partid)
 }
 
 /*
- * Detach a input 'reloid' from then global index with Oid 'indexoid'.
- * Basically this just remove mapping from pg_index_partitions catalog.
+ * IndexPartitionDetach - Remove this partition from all ancestor's global indexes
  *
- * FIXME: instead of detaching reloid one by one can we pass the array of
- * reloids to be detached?
+ * Detach all the leaf partitions underneath the given relation from all the
+ * global indexes of its ancestors. If this is a leaf relation itself, then
+ * directly detach it by marking the reloid invalid in the mapping in
+ * pg_index_partitions mapping. 
+ */
+void
+IndexPartitionDetach(Relation rel)
+{
+	List *global_index = RelationGetAncestorsGlobalIndexList(rel);
+
+	if (global_index != NIL)
+	{
+		IndexPartitionDetachRecurse(rel, global_index);
+
+		/*
+		 * Invalidate the index relation cache for all the global indexes so
+		 * that the dropped relation information is reflected in the cache.
+		 */
+		foreach_oid(indexoid, global_index)
+			CacheInvalidateRelcacheByRelid(indexoid);
+	}
+}
+
+/*
+ * InvalidateIndexPartitionEntries - Invalidate pg_index_partitions entries
+ *
+ * Set reloid as Invalid in pg_index_partitions entries with respect to the
+ * given reloid.  If a valid global indexoids list is given then only
+ * invalidate the reloid entires which are related to the input global index
+ * oids.
  */
 static void
-UpdateIndexPartitionEntry(Oid indexoid, Oid reloid)
+InvalidateIndexPartitionEntries(Oid reloid, List *indexoids)
 {
 	Relation	catalogRelation;
 	SysScanDesc scan;
 	ScanKeyData key;
 	HeapTuple	tuple;
+
 	/*
 	 * Find pg_inherits entries by inhparent.  (We need to scan them all in
 	 * order to verify that no other partition is pending detach.)
 	 */
 	catalogRelation = table_open(IndexPartitionsRelationId, RowExclusiveLock);
-	ScanKeyInit(&key,
-				Anum_pg_index_partitions_indexoid,
-				BTEqualStrategyNumber, F_OIDEQ,
-				ObjectIdGetDatum(indexoid));
 
-	scan = systable_beginscan(catalogRelation, IndexIdPartitionsIndexId, true,
+	ScanKeyInit(&key,
+				Anum_pg_index_partitions_reloid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(reloid));
+
+	scan = systable_beginscan(catalogRelation, IndexPartitionsReloidIndexId, true,
 							  NULL, 1, &key);
 
 	while ((tuple = systable_getnext(scan)) != NULL)
@@ -240,16 +273,16 @@ UpdateIndexPartitionEntry(Oid indexoid, Oid reloid)
 		Form_pg_index_partitions form = (Form_pg_index_partitions) GETSTRUCT(tuple);
 		HeapTuple	newtup;
 
-		if (form->reloid != reloid)
+		if (!list_member_oid(indexoids, form->indexoid))
 			continue;
 
-			newtup = heap_copytuple(tuple);
-			((Form_pg_index_partitions) GETSTRUCT(newtup))->reloid = InvalidOid;
+		newtup = heap_copytuple(tuple);
+		((Form_pg_index_partitions) GETSTRUCT(newtup))->reloid = InvalidOid;
 
-			CatalogTupleUpdate(catalogRelation,
-							   &tuple->t_self,
-							   newtup);
-			heap_freetuple(newtup);
+		CatalogTupleUpdate(catalogRelation,
+						   &tuple->t_self,
+						   newtup);
+		heap_freetuple(newtup);
 	}
 
 	/* Done */
@@ -258,14 +291,12 @@ UpdateIndexPartitionEntry(Oid indexoid, Oid reloid)
 }
 
 /*
- * IndexPartitionDetachRecurse - Detach all partitions from global indexes
+ * IndexPartitionDetachRecurse - helper function for IndexPartitionDetach
  *
- * Recursively detach all the leaf partitions underneath the given relation
- * from all the global indexes provided in the global_indexes list. If this
- * is a leaf relation itself, then directly detach it by marking the reloid
- * invalid in the mapping in pg_index_partitions mapping.
+ * Helper function for IndexPartitionDetach for recursively processing the
+ * partitioned table.
  */
-void
+static void
 IndexPartitionDetachRecurse(Relation rel, List *global_indexes)
 {
 	PartitionDesc pd;
@@ -286,14 +317,5 @@ IndexPartitionDetachRecurse(Relation rel, List *global_indexes)
 		}
 	}
 	else if (rel->rd_rel->relkind == RELKIND_RELATION)
-	{
-		ListCell *l;
-
-		foreach(l, global_indexes)
-		{
-			Oid		indexoid = lfirst_oid(l);
-
-			UpdateIndexPartitionEntry(indexoid, RelationGetRelid(rel));
-		}
-	}
+		InvalidateIndexPartitionEntries(RelationGetRelid(rel), global_indexes);
 }

@@ -19196,7 +19196,6 @@ ATExecDetachPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	Relation	partRel;
 	ObjectAddress address;
 	Oid			defaultPartOid;
-	List	   *global_index;
 
 	/*
 	 * We must lock the default partition, because detaching this partition
@@ -19237,23 +19236,10 @@ ATExecDetachPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 						   AccessExclusiveLock);
 
 	/*
-	 * Retrieve the list of all global indexes from its ancestors and detach
-	 * this relation and all its children from those global indexes.
+	 * Detach this relation and all its children from all the ancestor's
+	 * global indexes.
 	 */
-	global_index = RelationGetAncestorsGlobalIndexList(partRel);
-
-	if (global_index != NIL)
-	{
-		/* Recursively detach this partition and all its subpartitions */
-		IndexPartitionDetachRecurse(partRel, global_index);
-
-		/*
-		 * Invalidate the index relation cache for all the global indexes so
-		 * that its gets recreated after we have detached partitions from that.
-		 */
-		foreach_oid(indexoid, global_index)
-			CacheInvalidateRelcacheByRelid(indexoid);
-	}
+	IndexPartitionDetach(partRel);
 
 	/*
 	 * Check inheritance conditions and either delete the pg_inherits row (in

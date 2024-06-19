@@ -1851,6 +1851,15 @@ heap_drop_with_catalog(Oid relid)
 		update_default_partition_oid(parentOid, InvalidOid);
 
 	/*
+	 * Remove reloid mapping from pg_index_partitions.
+	 */
+	if (rel->rd_rel->relkind == RELKIND_RELATION &&
+		get_rel_relispartition(relid))
+	{
+		IndexPartitionDetach(rel);
+	}
+
+	/*
 	 * Schedule unlinking of the relation's physical files at commit.
 	 */
 	if (RELKIND_HAS_STORAGE(rel->rd_rel->relkind))

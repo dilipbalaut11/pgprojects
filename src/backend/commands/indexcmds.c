@@ -628,7 +628,7 @@ DefineIndex(Oid tableId,
 
 	/*
 	 * If this is a global index, we must append a partition identifier to
-	 * uniquely identify the heap tuple. Therefore, in this design, we have
+	 * uniquely identify the heap tuple.  Therefore, in this design, we have
 	 * opted to include the partition-id as the last key column.
 	 *
 	 * The rationale behind storing it as the last key column is that in
@@ -637,12 +637,6 @@ DefineIndex(Oid tableId,
 	 * identified. Therefore, if we encounter duplicate keys, we utilize heap
 	 * tid as a tiebreaker.  However, for global indexes, relying solely on
 	 * heap tid isn't adequate; we also require the partition identifier.
-	 * To address this, we increase the key column length by one, considering
-	 * the partition identifier when uniquely identifying the tuple.  In cases
-	 * where the partition id isn't sufficient (i.e., tuples with duplicate
-	 * keys within the same partition), we resort to storing heap tid as a
-	 * tiebreaker. This straightforward approach ensures that the design
-	 * remains uncomplicated.
 	 */
 	if (stmt->global)
 	{

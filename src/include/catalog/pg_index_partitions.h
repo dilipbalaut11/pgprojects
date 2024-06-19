@@ -26,6 +26,21 @@
 /* ----------------
  *		pg_index_partitions definition.  cpp turns this into
  *		typedef struct FormData_pg_index_partitions
+ *
+ * For each global index and base relation combination, we allocate a new
+ * partition identifier. This is necessary because, in a partition hierarchy,
+ * there can be global indexes at multiple levels. If we detach a sub-partition
+ * tree at any level, all relations below that subtree should be detached from
+ * the global indexes at the upper levels but should remain attached to the
+ * global indexes within the subtree or at lower levels. Therefore, if we use
+ * only one partition ID for each base relation, we cannot invalidate the
+ * partition ID to detach from the global indexes, since it must remain valid
+ * for some global indexes while being invalid for others. To manage this, we
+ * assign a new partition ID for each global index for every base relation.
+ *
+ * There is also the possibility that we might need independent partition IDs
+ * at each partition level instead of for each global index, but this approach
+ * is simpler.
  * ----------------
  */
 CATALOG(pg_index_partitions,6015,IndexPartitionsRelationId)

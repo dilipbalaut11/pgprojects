@@ -25,21 +25,24 @@
 #include "utils/rel.h"
 
 /*
- * Get the next partition id to be allocated for the input index relation.
- * also update this value in the cache for the next allocation.
+ * IndexGetNextPartitionID - Get the next partition ID of the global index
+ *
+ * Obtain the next partition ID to be allocated for the specified global index
+ * relation. Also update this value in the cache for the next allocation.
  */
 PartitionId
 IndexGetNextPartitionID(Relation irel)
 {
 	PartitionId partid;
 
+	/* If the cache is not already build then do it first. */
 	if (irel->rd_indexpartinfo == NULL)
 		BuildIndexPartitionInfo(irel, CurrentMemoryContext);
 
+	/* Use the max_partid + 1 value as the next parition id. */
 	partid = irel->rd_indexpartinfo->max_partid + 1;
 
 	/*
-	 * TODO: Recheck this logic:
 	 * Increase the max_partid in cache, in case the cache is invalidated we
 	 * will get the max value again from the system catalog, so there should
 	 * not be any issue.
@@ -52,7 +55,7 @@ IndexGetNextPartitionID(Relation irel)
 }
 
 /*
- * Create a single pg_index_partitions row with the given data
+ * InsertIndexPartitionEntry - Insert a reloid to parition id mapping
  */
 void
 InsertIndexPartitionEntry(Relation irel, Oid reloid, PartitionId partid)
@@ -84,7 +87,11 @@ InsertIndexPartitionEntry(Relation irel, Oid reloid, PartitionId partid)
 }
 
 /*
- * Initialize index-access-method support data for an index relation
+ * BuildIndexPartitionInfo - Cache for parittion id to reloid mapping
+ *
+ * Build a cache for faster access to the mappping from partition id to the
+ * relation oid.  For more detail on this mapping refer to the comments in
+ * pg_index_partition.h and also atop PartitionId declaration in c.h.
  */
 void
 BuildIndexPartitionInfo(Relation relation, MemoryContext context)
@@ -148,8 +155,10 @@ BuildIndexPartitionInfo(Relation relation, MemoryContext context)
 }
 
 /*
- * Get the the parition id for the given partition relation oid for the input
- * global index relation.
+ * IndexGetRelationPartitionId - Get partition id for the reloid
+ *
+ * Get the partition ID for the given partition relation OID
+ * for the specified global index relation.
  */
 PartitionId
 IndexGetRelationPartitionId(Relation irel, Oid reloid)
@@ -180,7 +189,10 @@ IndexGetRelationPartitionId(Relation irel, Oid reloid)
 }
 
 /*
- * Get the the reloid for the given partid for the input global index relation.
+ * IndexGetPartitionReloid - Get relation oid for the paritionid
+ *
+ * Get the relation OID for the given partition ID for the specified global
+ * index relation.
  */
 Oid
 IndexGetPartitionReloid(Relation irel, PartitionId partid)
@@ -244,12 +256,17 @@ UpdateIndexPartitionEntry(Oid indexoid, Oid reloid)
 	systable_endscan(scan);
 	table_close(catalogRelation, RowExclusiveLock);
 }
+
 /*
- * IndexPartitionDetachRecurse - Recursively detach the given partition and all
- * its children from the given list of global indexes.
+ * IndexPartitionDetachRecurse - Detach all partitions from global indexes
+ *
+ * Recursively detach all the leaf partitions underneath the given relation
+ * from all the global indexes provided in the global_indexes list. If this
+ * is a leaf relation itself, then directly detach it by marking the reloid
+ * invalid in the mapping in pg_index_partitions mapping.
  */
 void
-IndexPartitionDetachRecurse(Relation rel, List *global_indexs)
+IndexPartitionDetachRecurse(Relation rel, List *global_indexes)
 {
 	PartitionDesc pd;
 
@@ -264,7 +281,7 @@ IndexPartitionDetachRecurse(Relation rel, List *global_indexs)
 
 			partRel = table_open(pd->oids[i], ShareRowExclusiveLock);
 
-			IndexPartitionDetachRecurse(partRel, global_indexs);
+			IndexPartitionDetachRecurse(partRel, global_indexes);
 			table_close(partRel, ShareRowExclusiveLock);
 		}
 	}
@@ -272,7 +289,7 @@ IndexPartitionDetachRecurse(Relation rel, List *global_indexs)
 	{
 		ListCell *l;
 
-		foreach(l, global_indexs)
+		foreach(l, global_indexes)
 		{
 			Oid		indexoid = lfirst_oid(l);
 

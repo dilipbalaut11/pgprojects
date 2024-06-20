@@ -119,7 +119,6 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	Index		varno = rel->relid;
 	Relation	relation;
 	bool		hasindex;
-	List	   *global_indexs = NIL;
 	List	   *indexinfos = NIL;
 
 	/*
@@ -219,13 +218,6 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	else
 		hasindex = relation->rd_rel->relhasindex;
 
-	if (relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-	{
-		global_indexs = RelationGetGlobalIndexList(relation);
-		if (global_indexs)
-			hasindex = true;
-	}
-
 	if (hasindex)
 	{
 		List	   *indexoidlist;
@@ -233,11 +225,6 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 		ListCell   *l;
 
 		indexoidlist = RelationGetIndexList(relation);
-		if (global_indexs)
-		{
-			indexoidlist = list_concat(indexoidlist, global_indexs);
-			list_free(global_indexs);
-		}
 
 		/*
 		 * For each index, we get the same type of lock that the executor will

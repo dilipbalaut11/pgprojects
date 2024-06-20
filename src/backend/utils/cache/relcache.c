@@ -5285,27 +5285,20 @@ RelationGetIndexAttrBitmap(Relation relation, bool check_global_index,
 		}
 	}
 
-	if (check_global_index)
-	{
-		Oid parent = get_partition_parent(RelationGetRelid(relation), true);
-		Relation rel = table_open(parent, AccessShareLock);
-
-		global_indexs = RelationGetGlobalIndexList(rel);
-		table_close(rel, AccessShareLock);
-	}
-
 	/* Fast path if definitely no indexes */
-	if (global_indexs == NIL &&
+	if (!check_global_index &&
 		!RelationGetForm(relation)->relhasindex)
 		return NULL;
 
 	/*
-	 * Get cached list of index OIDs. If we have to start over, we do so here.
+	 * Get list of all the indexes including the global indexes of all its
+	 * ancestors. If we have to start over, we do so here.
 	 */
 restart:
-	indexoidlist = RelationGetIndexList(relation);
-	if (global_indexs != NIL)
-		indexoidlist = list_concat_unique_oid(indexoidlist, global_indexs);
+	if (check_global_index)
+		indexoidlist = RelationGetAllIndexList(relation);
+	else
+		indexoidlist = RelationGetIndexList(relation);
 
 	/* Fall out if no indexes (but relhasindex was set) */
 	if (indexoidlist == NIL)
@@ -5449,9 +5442,11 @@ restart:
 	 * signaling a change in the rel's index list.  If so, we'd better start
 	 * over to ensure we deliver up-to-date attribute bitmaps.
 	 */
-	newindexoidlist = RelationGetIndexList(relation);
-	if (global_indexs != NIL)
-		newindexoidlist = list_concat_unique_oid(newindexoidlist, global_indexs);
+	if (check_global_index)
+		newindexoidlist = RelationGetAllIndexList(relation);
+	else
+		newindexoidlist = RelationGetIndexList(relation);
+
 	if (equal(indexoidlist, newindexoidlist) &&
 		relpkindex == relation->rd_pkindex &&
 		relreplindex == relation->rd_replidindex)

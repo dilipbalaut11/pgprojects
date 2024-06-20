@@ -241,13 +241,11 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 	IndexClauseSet jclauseset;
 	IndexClauseSet eclauseset;
 	ListCell   *lc;
-	bool		is_partitioned_rel;
+	bool		ispartitioned = IS_PARTITIONED_REL(rel);
 
 	/* Skip the whole mess if no indexes */
 	if (rel->indexlist == NIL)
 		return;
-
-	is_partitioned_rel = IS_PARTITIONED_REL(rel);
 
 	/* Bitmap paths are collected and then dealt with at the end */
 	bitindexpaths = bitjoinpaths = joinorclauses = NIL;
@@ -256,6 +254,13 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 	foreach(lc, rel->indexlist)
 	{
 		IndexOptInfo *index = (IndexOptInfo *) lfirst(lc);
+
+		/*
+		 * For partitioned rel we can only consider the global index scan
+		 * paths.
+		 */
+		if (ispartitioned && !index->global)
+			continue;
 
 		/* Protect limited-size array in IndexClauseSets */
 		Assert(index->nkeycolumns <= INDEX_MAX_KEYS);
@@ -266,13 +271,6 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 		 * them, but that's of no concern here.)
 		 */
 		if (index->indpred != NIL && !index->predOK)
-			continue;
-
-		/*
-		 * For partitioned rel we can only consider the global index scan
-		 * paths.
-		 */
-		if (is_partitioned_rel && !index->global)
 			continue;
 
 		/*

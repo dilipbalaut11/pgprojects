@@ -138,16 +138,20 @@ BuildIndexPartitionInfo(Relation relation, MemoryContext context)
 		IndexPartitionInfoEntry *entry;
 		bool		found;
 
+		/*
+		 * We need to consider the partition id of the detached partitioned as
+		 * well while computing the maxpartid so that we do not repeat the
+		 * value.
+		 */
+		if (form->partid > maxpartid)
+			maxpartid = form->partid;
+
 		if (!OidIsValid(form->reloid))
 			continue;
 
 		entry = hash_search(map->pdir_hash, &form->partid, HASH_ENTER, &found);
 		Assert(!found);
 		entry->reloid = form->reloid;
-
-		/* Let caller know of partition being detached */
-		if (form->partid > maxpartid)
-			maxpartid = form->partid;
 	}
 
 	map->max_partid = maxpartid;

@@ -53,8 +53,18 @@ ALTER TABLE range_parted_5 ATTACH PARTITION range_parted_6 FOR VALUES FROM (4600
 EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 650;
 SELECT * FROM range_parted WHERE b = 650 LIMIT 5;
 
---Detach partitions
+--Detach partition
 ALTER TABLE range_parted DETACH PARTITION range_parted_5;
+EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 550;
+SELECT * FROM range_parted WHERE b = 550 LIMIT 5;
+
+--Reattach the partition
+ALTER TABLE range_parted ATTACH PARTITION range_parted_5 FOR VALUES FROM (400000) to (500000);
+EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 550;
+SELECT * FROM range_parted WHERE b = 550 LIMIT 5;
+
+--Drop the partitioned table
+DROP TABLE range_parted_5;
 EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 550;
 SELECT * FROM range_parted WHERE b = 550 LIMIT 5;
 

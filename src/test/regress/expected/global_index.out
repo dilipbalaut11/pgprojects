@@ -164,8 +164,41 @@ SELECT * FROM range_parted WHERE b = 650 LIMIT 5;
  460450 | 650
 (5 rows)
 
---Detach partitions
+--Detach partition
 ALTER TABLE range_parted DETACH PARTITION range_parted_5;
+EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 550;
+                     QUERY PLAN                     
+----------------------------------------------------
+ Global Index Scan using global_idx on range_parted
+   Index Cond: (b = 550)
+(2 rows)
+
+SELECT * FROM range_parted WHERE b = 550 LIMIT 5;
+ a | b 
+---+---
+(0 rows)
+
+--Reattach the partition
+ALTER TABLE range_parted ATTACH PARTITION range_parted_5 FOR VALUES FROM (400000) to (500000);
+EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 550;
+                     QUERY PLAN                     
+----------------------------------------------------
+ Global Index Scan using global_idx on range_parted
+   Index Cond: (b = 550)
+(2 rows)
+
+SELECT * FROM range_parted WHERE b = 550 LIMIT 5;
+   a    |  b  
+--------+-----
+ 400050 | 550
+ 400150 | 550
+ 400250 | 550
+ 400350 | 550
+ 400450 | 550
+(5 rows)
+
+--Drop the partitioned table
+DROP TABLE range_parted_5;
 EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 550;
                      QUERY PLAN                     
 ----------------------------------------------------

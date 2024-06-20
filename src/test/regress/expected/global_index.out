@@ -164,6 +164,44 @@ SELECT * FROM range_parted WHERE b = 650 LIMIT 5;
  460450 | 650
 (5 rows)
 
+-- Update the leaf and check we are inserting that in multi-level global index
+UPDATE range_parted SET b=b+1000;
+EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 1650;
+                     QUERY PLAN                     
+----------------------------------------------------
+ Global Index Scan using global_idx on range_parted
+   Index Cond: (b = 1650)
+(2 rows)
+
+SELECT * FROM range_parted WHERE b = 1650 LIMIT 5;
+   a    |  b   
+--------+------
+ 460050 | 1650
+ 460150 | 1650
+ 460250 | 1650
+ 460350 | 1650
+ 460450 | 1650
+(5 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM range_parted_5 WHERE b = 1650;
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Global Index Scan using global_idx_1 on range_parted_5
+   Index Cond: (b = 1650)
+(2 rows)
+
+SELECT * FROM range_parted_5 WHERE b = 1650 LIMIT 5;
+   a    |  b   
+--------+------
+ 460050 | 1650
+ 460150 | 1650
+ 460250 | 1650
+ 460350 | 1650
+ 460450 | 1650
+(5 rows)
+
+-- conditional update using global index -- currently not working
+--UPDATE range_parted SET b=b+1000 where b = 1650;
 --Detach partition
 ALTER TABLE range_parted DETACH PARTITION range_parted_5;
 EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 550;
@@ -188,14 +226,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 550;
 (2 rows)
 
 SELECT * FROM range_parted WHERE b = 550 LIMIT 5;
-   a    |  b  
---------+-----
- 400050 | 550
- 400150 | 550
- 400250 | 550
- 400350 | 550
- 400450 | 550
-(5 rows)
+ a | b 
+---+---
+(0 rows)
 
 --Drop the partitioned table
 DROP TABLE range_parted_5;

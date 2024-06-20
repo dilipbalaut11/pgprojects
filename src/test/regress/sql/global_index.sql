@@ -53,6 +53,16 @@ ALTER TABLE range_parted_5 ATTACH PARTITION range_parted_6 FOR VALUES FROM (4600
 EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 650;
 SELECT * FROM range_parted WHERE b = 650 LIMIT 5;
 
+-- Update the leaf and check we are inserting that in multi-level global index
+UPDATE range_parted SET b=b+1000;
+EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 1650;
+SELECT * FROM range_parted WHERE b = 1650 LIMIT 5;
+EXPLAIN (COSTS OFF) SELECT * FROM range_parted_5 WHERE b = 1650;
+SELECT * FROM range_parted_5 WHERE b = 1650 LIMIT 5;
+
+-- conditional update using global index -- currently not working
+--UPDATE range_parted SET b=b+1000 where b = 1650;
+
 --Detach partition
 ALTER TABLE range_parted DETACH PARTITION range_parted_5;
 EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 550;

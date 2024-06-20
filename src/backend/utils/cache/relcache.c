@@ -6979,12 +6979,12 @@ RelationGetAncestorsGlobalIndexList(Relation relation)
 	{
 		Oid			ancestor = lfirst_oid(lc);
 		List	   *globalindexlist;
-		Relation	parent = relation_open(ancestor, AccessShareLock);
+		Relation	parent = table_open(ancestor, AccessShareLock);
 
 		globalindexlist = RelationGetGlobalIndexList(parent);
 		allglobalindexlist = list_concat_unique_oid(allglobalindexlist,
 													globalindexlist);
-		relation_close(parent, AccessShareLock);
+		table_close(parent, AccessShareLock);
 	}
 	list_free(ancestors);
 

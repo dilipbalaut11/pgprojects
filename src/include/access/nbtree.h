@@ -682,7 +682,6 @@ BTreeTupleGetPartID(Relation index, IndexTuple itup)
 		datum = index_getattr(itup, indnatts, tupleDesc, &isNull);
 		Assert(!isNull);
 		partid = DatumGetObjectId(datum);
-		Assert(OidIsValid(heapOid_index));
 
 		return partid;
 	}

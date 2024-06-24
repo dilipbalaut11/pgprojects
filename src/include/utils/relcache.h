@@ -146,9 +146,7 @@ extern bool RelationIdIsInInitFile(Oid relationId);
 extern void RelationCacheInitFilePreInvalidate(void);
 extern void RelationCacheInitFilePostInvalidate(void);
 extern void RelationCacheInitFileRemove(void);
-extern List *RelationGetGlobalIndexList(Relation relation);
 extern List *RelationGetAncestorsGlobalIndexList(Relation relation);
-extern List *RelationGetAllIndexList(Relation relation);
 
 /* should be used only by relcache.c and catcache.c */
 extern PGDLLIMPORT bool criticalRelcachesBuilt;

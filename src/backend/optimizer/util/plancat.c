@@ -267,6 +267,18 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			}
 
 			/*
+			 * Currently, we only consider global indexes that directly exist
+			 * on this relation.  In the future, we may also include global
+			 * index scans using the global indexes present on ancestors.
+			 */
+			if (RelationIsGlobalIndex(indexRelation) &&
+				index->indrelid != relationObjectId)
+			{
+				index_close(indexRelation, NoLock);
+				continue;
+			}
+
+			/*
 			 * If the index is valid, but cannot yet be used, ignore it; but
 			 * mark the plan we are generating as transient. See
 			 * src/backend/access/heap/README.HOT for discussion.
@@ -281,6 +293,8 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			}
 
 			info = makeNode(IndexOptInfo);
+
+			/* Set a flag to indicate this is a global index. */
 			if (RelationIsGlobalIndex(indexRelation))
 				info->global = true;
 

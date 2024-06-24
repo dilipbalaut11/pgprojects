@@ -62,6 +62,7 @@
 #include "nodes/nodeFuncs.h"
 #include "optimizer/optimizer.h"
 #include "parser/parser.h"
+#include "partitioning/partdesc.h"
 #include "pgstat.h"
 #include "rewrite/rewriteManip.h"
 #include "storage/bufmgr.h"
@@ -2958,6 +2959,32 @@ index_update_stats(Relation rel,
 	table_close(pg_class, RowExclusiveLock);
 }
 
+/*
+ * Recursively update the index stats for all the child table
+ */
+void
+index_update_stats_recursive(Relation rel,
+							 bool hasindex,
+							 double reltuples)
+{
+	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		PartitionDesc	pd = RelationGetPartitionDesc(rel, true);
+
+		for (int i = 0; i < pd->nparts; i++)
+		{
+			Relation	partRel;
+
+			partRel = table_open(pd->oids[i], AccessShareLock);
+
+			index_update_stats_recursive(partRel, hasindex, reltuples);
+			table_close(partRel, AccessShareLock);
+		}
+	}
+
+	index_update_stats(rel, hasindex, reltuples);
+}
+
 
 /*
  * index_build - invoke access-method-specific index build procedure
@@ -3137,9 +3164,7 @@ index_build(Relation heapRelation,
 	 * update the relhasindex flag.
 	 */
 	if (heapRelation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		index_update_stats(heapRelation,
-						   true,
-						   -1);
+		index_update_stats_recursive(heapRelation, true, -1.0);
 	else
 		index_update_stats(heapRelation,
 						   true,

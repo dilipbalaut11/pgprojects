@@ -18506,6 +18506,9 @@ AttachToGlobalIndexes(List **wqueue, Relation rel)
 		 */
 		CacheInvalidateRelcacheByRelid(indexoid);
 	}
+
+	if (globalindexoids != NULL)
+		index_update_stats_recursive(rel, true, -1.0);
 }
 
 /*

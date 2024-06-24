@@ -2288,7 +2288,7 @@ vac_open_indexes(Relation relation, LOCKMODE lockmode,
 	 * Get list of all the indexes including the global indexes of all its
 	 * ancestors.
 	 */
-	indexoidlist = RelationGetAllIndexList(relation);
+	indexoidlist = RelationGetIndexList(relation);
 
 	/* allocate enough memory for all indexes */
 	i = list_length(indexoidlist);

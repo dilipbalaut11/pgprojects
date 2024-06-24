@@ -168,11 +168,15 @@ ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
 
 	resultRelInfo->ri_NumIndices = 0;
 
+	/* fast path if no indexes */
+	if (!RelationGetForm(resultRelation)->relhasindex)
+		return;
+
 	/*
 	 * Get list of all the indexes including the global indexes of all its
 	 * ancestors.
 	 */
-	indexoidlist = RelationGetAllIndexList(resultRelation);
+	indexoidlist = RelationGetIndexList(resultRelation);
 
 	len = list_length(indexoidlist);
 	if (len == 0)

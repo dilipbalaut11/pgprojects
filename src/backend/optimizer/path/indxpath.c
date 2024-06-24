@@ -256,11 +256,18 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 		IndexOptInfo *index = (IndexOptInfo *) lfirst(lc);
 
 		/*
-		 * For partitioned rel we can only consider the global index scan
+		 * For partitioned relations, we can only consider global index scan
 		 * paths.
 		 */
 		if (ispartitioned && !index->global)
 			continue;
+
+		/*
+		 * For non partitioned table we should not get the global index info
+		 * Check comments in get_relation_info() where we are adding
+		 * IndexOptInfo nodes.
+		 */
+		Assert(ispartitioned || !index->global);
 
 		/* Protect limited-size array in IndexClauseSets */
 		Assert(index->nkeycolumns <= INDEX_MAX_KEYS);

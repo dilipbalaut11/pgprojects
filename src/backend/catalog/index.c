@@ -766,7 +766,7 @@ index_create(Relation heapRelation,
 	bool		invalid = (flags & INDEX_CREATE_INVALID) != 0;
 	bool		concurrent = (flags & INDEX_CREATE_CONCURRENT) != 0;
 	bool		partitioned = (flags & INDEX_CREATE_PARTITIONED) != 0;
-	bool		global = (flags & INDEX_CREATE_GLOBAL) != 0;
+	bool		global_index = (flags & INDEX_CREATE_GLOBAL) != 0;
 	char		relkind;
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
@@ -778,7 +778,7 @@ index_create(Relation heapRelation,
 	/* partitioned indexes must never be "built" by themselves */
 	Assert(!partitioned || (flags & INDEX_CREATE_SKIP_BUILD));
 
-	if (global)
+	if (global_index)
 		relkind = RELKIND_GLOBAL_INDEX;
 	else if (partitioned)
 		relkind = RELKIND_PARTITIONED_INDEX;
@@ -1079,9 +1079,19 @@ index_create(Relation heapRelation,
 
 	/*
 	 * Register relcache invalidation on the indexes' heap relation, to
-	 * maintain consistency of its index list
+	 * maintain consistency of its index list.  If we are creating a global
+	 * index then invalidate the relcache of all the inheritors as well.
 	 */
-	CacheInvalidateRelcache(heapRelation);
+	if (global_index)
+	{
+		List *tableIds = find_all_inheritors(heapRelationId, NoLock, NULL);
+
+		foreach_oid(tableOid, tableIds)
+			CacheInvalidateRelcacheByRelid(tableOid);
+		list_free(tableIds);
+	}
+	else
+		CacheInvalidateRelcache(heapRelation);
 
 	/* update pg_inherits and the parent's relhassubclass, if needed */
 	if (OidIsValid(parentIndexRelid))

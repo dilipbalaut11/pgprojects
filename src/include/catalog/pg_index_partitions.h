@@ -114,6 +114,7 @@ extern void BuildIndexPartitionInfo(Relation relation, MemoryContext context);
 extern PartitionId IndexGetRelationPartitionId(Relation irel, Oid reloid);
 extern Oid IndexGetPartitionReloid(Relation irel, PartitionId partid);
 extern PartitionId IndexGetNextPartitionID(Relation irel);
+extern void DeleteIndexPartitionEntries(Oid indrelid);
 extern void InsertIndexPartitionEntry(Relation irel, Oid reloid, PartitionId partid);
 extern void IndexPartitionDetach(Relation rel);
 #endif							/* PG_INDEX_PARTITIONS_H */

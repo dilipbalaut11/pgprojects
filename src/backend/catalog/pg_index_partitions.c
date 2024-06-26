@@ -91,6 +91,37 @@ InsertIndexPartitionEntry(Relation irel, Oid reloid, PartitionId partid)
 }
 
 /*
+ * DeleteIndexPartitionEntries - Delete all index partition entries for a given
+ *								 index id.
+ */
+void
+DeleteIndexPartitionEntries(Oid indrelid)
+{
+	Relation	catalogRelation;
+	ScanKeyData key;
+	SysScanDesc scan;
+	HeapTuple	tuple;
+
+	/*
+	 * Find pg_inherits entries by inhrelid.
+	 */
+	catalogRelation = table_open(IndexPartitionsRelationId, RowExclusiveLock);
+	ScanKeyInit(&key,
+				Anum_pg_index_partitions_indexoid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(indrelid));
+
+	scan = systable_beginscan(catalogRelation, IndexPartitionsIndexId, true,
+							  NULL, 1, &key);
+	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+		CatalogTupleDelete(catalogRelation, &tuple->t_self);
+
+	/* Done */
+	systable_endscan(scan);
+	table_close(catalogRelation, RowExclusiveLock);
+}
+
+/*
  * BuildIndexPartitionInfo - Cache for parittion id to reloid mapping
  *
  * Build a cache for faster access to the mappping from partition id to the

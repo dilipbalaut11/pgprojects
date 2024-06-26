@@ -78,5 +78,16 @@ DROP TABLE range_parted_5;
 EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 550;
 SELECT * FROM range_parted WHERE b = 550 LIMIT 5;
 
+-- Test unique global index
+TRUNCATE TABLE range_parted;
+INSERT INTO range_parted VALUES(1,2);
+INSERT INTO range_parted VALUES(2,2);
+CREATE UNIQUE INDEX global_idx_unique ON range_parted(b) global; -- Fail with duplicate
+TRUNCATE TABLE range_parted;
+INSERT INTO range_parted VALUES(1,2);
+CREATE UNIQUE INDEX global_idx_unique ON range_parted(b) global;
+INSERT INTO range_parted VALUES(1,2); -- Fail with duplicate
+DROP INDEX global_idx_unique;
+INSERT INTO range_parted VALUES(1,2); -- Now this should pass
 -- Cleanup
 DROP TABLE range_parted;

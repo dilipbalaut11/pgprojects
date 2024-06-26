@@ -44,6 +44,7 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_description.h"
+#include "catalog/pg_index_partitions.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_operator.h"
@@ -2158,6 +2159,7 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	Relation	indexRelation;
 	HeapTuple	tuple;
 	bool		hasexprs;
+	bool		isglobal;
 	LockRelId	heaprelid,
 				indexrelid;
 	LOCKTAG		heaplocktag;
@@ -2342,6 +2344,9 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 		TransferPredicateLocksToHeapRelation(userIndexRelation);
 	}
 
+	/* Remember whether it is a global index. */
+	isglobal = RelationIsGlobalIndex(userIndexRelation);
+
 	/*
 	 * Schedule physical removal of the files (if any)
 	 */
@@ -2400,14 +2405,31 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	DeleteInheritsTuple(indexId, InvalidOid, false, NULL);
 
 	/*
+	 * Remove all the mapping present in pg_index_partitions table for this
+	 * global index.
+	 */
+	if (isglobal)
+		DeleteIndexPartitionEntries(indexId);
+
+	/*
 	 * We are presently too lazy to attempt to compute the new correct value
 	 * of relhasindex (the next VACUUM will fix it if necessary). So there is
 	 * no need to update the pg_class tuple for the owning relation. But we
 	 * must send out a shared-cache-inval notice on the owning relation to
 	 * ensure other backends update their relcache lists of indexes.  (In the
-	 * concurrent case, this is redundant but harmless.)
+	 * concurrent case, this is redundant but harmless.).  If we are dropping a
+	 * global index then invalidate the relcache of all the inheritors as well.
 	 */
-	CacheInvalidateRelcache(userHeapRelation);
+	if (isglobal)
+	{
+		List *tableIds = find_all_inheritors(heapId, NoLock, NULL);
+
+		foreach_oid(tableOid, tableIds)
+			CacheInvalidateRelcacheByRelid(tableOid);
+		list_free(tableIds);
+	}
+	else
+		CacheInvalidateRelcache(userHeapRelation);
 
 	/*
 	 * Close owning rel, but keep lock

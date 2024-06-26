@@ -244,5 +244,20 @@ SELECT * FROM range_parted WHERE b = 550 LIMIT 5;
 ---+---
 (0 rows)
 
+-- Test unique global index
+TRUNCATE TABLE range_parted;
+INSERT INTO range_parted VALUES(1,2);
+INSERT INTO range_parted VALUES(2,2);
+CREATE UNIQUE INDEX global_idx_unique ON range_parted(b) global; -- Fail with duplicate
+ERROR:  could not create unique index "global_idx_unique"
+DETAIL:  Key (b, )=(2, 1) is duplicated.
+TRUNCATE TABLE range_parted;
+INSERT INTO range_parted VALUES(1,2);
+CREATE UNIQUE INDEX global_idx_unique ON range_parted(b) global;
+INSERT INTO range_parted VALUES(1,2); -- Fail with duplicate
+ERROR:  duplicate key value violates unique constraint "global_idx_unique"
+DETAIL:  Key (b, )=(2, 1) already exists.
+DROP INDEX global_idx_unique;
+INSERT INTO range_parted VALUES(1,2); -- Now this should pass
 -- Cleanup
 DROP TABLE range_parted;

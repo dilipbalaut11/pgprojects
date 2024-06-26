@@ -955,10 +955,9 @@ DefineIndex(Oid tableId,
 	 * violate uniqueness by putting values that ought to be unique in
 	 * different partitions.
 	 *
-	 * We could lift this limitation if we had global indexes, but those have
-	 * their own problems, so this is a useful feature combination.
+	 * If we are creating a global index the we do not have this problem.
 	 */
-	if (partitioned && (stmt->unique || stmt->excludeOpNames))
+	if (partitioned && !stmt->global && (stmt->unique || stmt->excludeOpNames))
 	{
 		PartitionKey key = RelationGetPartitionKey(rel);
 		const char *constraint_type;

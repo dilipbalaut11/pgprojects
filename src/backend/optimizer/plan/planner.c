@@ -7634,6 +7634,7 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 	bool		rel_is_partitioned = IS_PARTITIONED_REL(rel);
 	PathTarget *scanjoin_target;
 	ListCell   *lc;
+	List	   *saved_pathlist;
 
 	/* This recurses, so be paranoid. */
 	check_stack_depth();
@@ -7665,20 +7666,8 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 	 */
 	if (rel_is_partitioned)
 	{
-		List	*index_path_list = NIL;
-
-		foreach(lc, rel->pathlist)
-		{
-			Path	   *subpath = (Path *) lfirst(lc);
-
-			if (nodeTag(subpath) == T_IndexPath)
-				index_path_list = lappend(index_path_list, subpath);
-		}
-
-		if (index_path_list)
-			rel->pathlist = index_path_list;
-		else
-			rel->pathlist = NIL;
+		saved_pathlist = rel->pathlist;
+		rel->pathlist = NIL;
 	}
 
 	/*
@@ -7842,6 +7831,44 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 
 		/* Build new paths for this relation by appending child paths. */
 		add_paths_to_append_rel(root, rel, live_children);
+
+		if (saved_pathlist)
+		{
+			List	   *index_path_list = NIL;
+			List	   *newtarget = NIL;
+
+			foreach(lc, scanjoin_targets)
+			{
+				PathTarget *target = lfirst_node(PathTarget, lc);
+
+				target = copy_pathtarget(target);
+				target->exprs = (List *)
+					adjust_appendrel_rowid_vars(root, (Node *) target->exprs);
+				newtarget = lappend(newtarget, target);
+			}
+			/* Extract SRF-free scan/join target. */
+			scanjoin_target = linitial_node(PathTarget, newtarget);
+
+			/*
+			* For partition parent we can have a global index path
+			*/
+			foreach(lc, saved_pathlist)
+			{
+				Path	   *subpath = (Path *) lfirst(lc);
+
+				/* TODO: Make path as T_GlobalIndexPath instead of T_IndexPath ? */
+				if (nodeTag(subpath) == T_IndexPath)
+				{
+					Path	   *newpath;
+
+					newpath = (Path *) create_projection_path(root, rel, subpath,
+															scanjoin_target);
+					index_path_list = lappend(index_path_list, newpath);
+				}
+			}
+			if (index_path_list)
+				rel->pathlist = index_path_list;
+		}
 	}
 
 	/*

@@ -41,7 +41,8 @@ static void make_inh_translation_list(Relation oldrelation,
 									  AppendRelInfo *appinfo);
 static Node *adjust_appendrel_attrs_mutator(Node *node,
 											adjust_appendrel_attrs_context *context);
-
+static Node *adjust_appendrel_rowid_vars_mutator(Node *node,
+								adjust_appendrel_attrs_context *context);
 
 /*
  * make_append_rel_info
@@ -506,6 +507,58 @@ adjust_appendrel_attrs_mutator(Node *node,
 	Assert(!IsA(node, JoinExpr));
 
 	return expression_tree_mutator(node, adjust_appendrel_attrs_mutator,
+								   (void *) context);
+}
+
+Node *
+adjust_appendrel_rowid_vars(PlannerInfo *root, Node *node)
+{
+	adjust_appendrel_attrs_context context;
+
+	context.root = root;
+	context.nappinfos = 0;
+
+	/* Should never be translating a Query tree. */
+	Assert(node == NULL || !IsA(node, Query));
+
+	return adjust_appendrel_rowid_vars_mutator(node, &context);
+}
+
+static Node *
+adjust_appendrel_rowid_vars_mutator(Node *node,
+									adjust_appendrel_attrs_context *context)
+{
+	if (node == NULL)
+		return NULL;
+	if (IsA(node, Var))
+	{
+		Var		   *var = (Var *) copyObject(node);
+
+		if (var->varno == ROWID_VAR)
+		{
+			RowIdentityVarInfo *ridinfo = (RowIdentityVarInfo *)
+						list_nth(context->root->row_identity_vars, var->varattno - 1);
+
+			/* Substitute the Var given in the RowIdentityVarInfo */
+			var = copyObject(ridinfo->rowidvar);
+
+			/*
+			 * Ugly hack: we are not going to use this varno ever this is a
+			 * rowid var so going to be fetched using the sysattr.  But we need
+			 * to replace the ROWID_VAR because final target list is not
+			 * allowed to have ROWID_VAR in it.
+			 */
+			var->varno = 1;
+			/* identity vars shouldn't have nulling rels */
+			Assert(var->varnullingrels == NULL);
+			/* varnosyn in the RowIdentityVarInfo is probably wrong */
+			var->varnosyn = 0;
+			var->varattnosyn = 0;
+		}
+
+		return (Node *) var;
+	}
+	return expression_tree_mutator(node, adjust_appendrel_rowid_vars_mutator,
 								   (void *) context);
 }
 

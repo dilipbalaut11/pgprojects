@@ -2856,6 +2856,9 @@ GetRunningTransactionData(void)
 	CurrentRunningXacts->oldestDatabaseRunningXid = oldestDatabaseRunningXid;
 	CurrentRunningXacts->latestCompletedXid = latestCompletedXid;
 
+	if (!TransactionIdIsNormal(CurrentRunningXacts->latestCompletedXid))
+		while(1);
+
 	Assert(TransactionIdIsValid(CurrentRunningXacts->nextXid));
 	Assert(TransactionIdIsValid(CurrentRunningXacts->oldestRunningXid));
 	Assert(TransactionIdIsNormal(CurrentRunningXacts->latestCompletedXid));

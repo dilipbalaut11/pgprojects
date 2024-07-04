@@ -1204,6 +1204,7 @@ heap_create_with_catalog(const char *relname,
 			 */
 			Assert(relkind != RELKIND_INDEX);
 			Assert(relkind != RELKIND_PARTITIONED_INDEX);
+			Assert(relkind != RELKIND_GLOBAL_INDEX);
 
 			if (relkind == RELKIND_TOASTVALUE)
 			{
@@ -1321,7 +1322,8 @@ heap_create_with_catalog(const char *relname,
 	if (!(relkind == RELKIND_SEQUENCE ||
 		  relkind == RELKIND_TOASTVALUE ||
 		  relkind == RELKIND_INDEX ||
-		  relkind == RELKIND_PARTITIONED_INDEX))
+		  relkind == RELKIND_PARTITIONED_INDEX ||
+		  relkind == RELKIND_GLOBAL_INDEX))
 	{
 		Oid			new_array_oid;
 		ObjectAddress new_type_addr;
@@ -1855,6 +1857,15 @@ heap_drop_with_catalog(Oid relid)
 	 */
 	if (relid == defaultPartOid)
 		update_default_partition_oid(parentOid, InvalidOid);
+
+	/*
+	 * Remove reloid mapping from pg_index_partitions.
+	 */
+	if (rel->rd_rel->relkind == RELKIND_RELATION &&
+		get_rel_relispartition(relid))
+	{
+		IndexPartitionDetach(rel);
+	}
 
 	/*
 	 * Schedule unlinking of the relation's physical files at commit.

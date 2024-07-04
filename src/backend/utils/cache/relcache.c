@@ -33,6 +33,7 @@
 #include "access/htup_details.h"
 #include "access/multixact.h"
 #include "access/parallel.h"
+#include "access/relation.h"
 #include "access/reloptions.h"
 #include "access/sysattr.h"
 #include "access/table.h"
@@ -483,6 +484,7 @@ RelationParseRelOptions(Relation relation, HeapTuple tuple)
 			break;
 		case RELKIND_INDEX:
 		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_GLOBAL_INDEX:
 			amoptsfn = relation->rd_indam->amoptions;
 			break;
 		default:
@@ -1202,7 +1204,8 @@ retry:
 	 * initialize access method information
 	 */
 	if (relation->rd_rel->relkind == RELKIND_INDEX ||
-		relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+		relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX ||
+		relation->rd_rel->relkind == RELKIND_GLOBAL_INDEX)
 		RelationInitIndexAccessInfo(relation);
 	else if (RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind) ||
 			 relation->rd_rel->relkind == RELKIND_SEQUENCE)
@@ -1566,6 +1569,9 @@ RelationInitIndexAccessInfo(Relation relation)
 	memcpy(relation->rd_indoption, indoption->values, indnkeyatts * sizeof(int16));
 
 	(void) RelationGetIndexAttOptions(relation, false);
+
+	if (RelationIsGlobalIndex(relation))
+		BuildIndexPartitionInfo(relation, indexcxt);
 
 	/*
 	 * expressions, predicate, exclusion caches will be filled later
@@ -2089,7 +2095,8 @@ RelationIdGetRelation(Oid relationId)
 			 * a headache for indexes that reload itself depends on.
 			 */
 			if (rd->rd_rel->relkind == RELKIND_INDEX ||
-				rd->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+				rd->rd_rel->relkind == RELKIND_PARTITIONED_INDEX ||
+				rd->rd_rel->relkind == RELKIND_GLOBAL_INDEX)
 				RelationReloadIndexInfo(rd);
 			else
 				RelationClearRelation(rd, true);
@@ -2260,7 +2267,8 @@ RelationReloadIndexInfo(Relation relation)
 
 	/* Should be called only for invalidated, live indexes */
 	Assert((relation->rd_rel->relkind == RELKIND_INDEX ||
-			relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX) &&
+			relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX ||
+			relation->rd_rel->relkind == RELKIND_GLOBAL_INDEX) &&
 		   !relation->rd_isvalid &&
 		   relation->rd_droppedSubid == InvalidSubTransactionId);
 
@@ -2607,7 +2615,8 @@ RelationClearRelation(Relation relation, bool rebuild)
 	 * index, and we check for pg_index updates too.
 	 */
 	if ((relation->rd_rel->relkind == RELKIND_INDEX ||
-		 relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX) &&
+		 relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX ||
+		 relation->rd_rel->relkind == RELKIND_GLOBAL_INDEX) &&
 		relation->rd_refcnt > 0 &&
 		relation->rd_indexcxt != NULL)
 	{
@@ -4873,6 +4882,15 @@ RelationGetIndexList(Relation relation)
 
 	table_close(indrel, AccessShareLock);
 
+	/* Get all the global indexes on all its ancestors. */
+	if (get_rel_relispartition(RelationGetRelid(relation)))
+	{
+		List *globalindexlist;
+
+		globalindexlist = RelationGetAncestorsGlobalIndexList(relation);
+		result = list_concat_unique_oid(result, globalindexlist);
+	}
+
 	/* Sort the result list into OID order, per API spec. */
 	list_sort(result, list_oid_cmp);
 
@@ -5280,7 +5298,8 @@ RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
 		return NULL;
 
 	/*
-	 * Get cached list of index OIDs. If we have to start over, we do so here.
+	 * Get list of all the indexes including the global indexes of all its
+	 * ancestors. If we have to start over, we do so here.
 	 */
 restart:
 	indexoidlist = RelationGetIndexList(relation);
@@ -5393,7 +5412,7 @@ restart:
 			 * key or identity key. Hence we do not include them into
 			 * uindexattrs, pkindexattrs and idindexattrs bitmaps.
 			 */
-			if (attrnum != 0)
+			if (attrnum != 0 && attrnum != PartitionIdAttributeNumber)
 			{
 				*attrs = bms_add_member(*attrs,
 										attrnum - FirstLowInvalidHeapAttributeNumber);
@@ -5428,6 +5447,7 @@ restart:
 	 * over to ensure we deliver up-to-date attribute bitmaps.
 	 */
 	newindexoidlist = RelationGetIndexList(relation);
+
 	if (equal(indexoidlist, newindexoidlist) &&
 		relpkindex == relation->rd_pkindex &&
 		relreplindex == relation->rd_replidindex)
@@ -6893,4 +6913,50 @@ ResOwnerReleaseRelation(Datum res)
 	rel->rd_refcnt -= 1;
 
 	RelationCloseCleanup((Relation) res);
+}
+
+/*
+ * Retrieve the complete list of global indexes found across all ancestors of
+ * this relation.
+ */
+List *
+RelationGetAncestorsGlobalIndexList(Relation relation)
+{
+	List	   *ancestors;
+	List	   *globalindexlist = NIL;
+
+	/* Get the list of all the ancestor relations. */
+	ancestors =	get_partition_ancestors(RelationGetRelid(relation));
+
+	/*
+	 * Loop through all the ancestor relations and fetch the global indexes
+	 * from each of them and append to a common global index list.
+	 */
+	foreach_oid(ancestor, ancestors)
+	{
+		List	   *indexlist = NIL;
+		Relation	parent = table_open(ancestor, AccessShareLock);
+
+		/* Get list of all the indexes on this relation. */
+		if (RelationGetForm(parent)->relhasindex)
+			indexlist = RelationGetIndexList(parent);
+
+		/*
+		 * Process all the indexes to collect the list of all global index
+		 * OIDs.
+		 */
+		foreach_oid(indexoid, indexlist)
+		{
+			Relation	indexDesc = index_open(indexoid, AccessShareLock);
+
+			if (RelationIsGlobalIndex(indexDesc))
+				globalindexlist = lappend_oid(globalindexlist, indexoid);
+
+			index_close(indexDesc, AccessShareLock);
+		}
+		table_close(parent, AccessShareLock);
+	}
+	list_free(ancestors);
+
+	return globalindexlist;
 }

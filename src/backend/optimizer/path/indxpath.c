@@ -241,6 +241,7 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 	IndexClauseSet jclauseset;
 	IndexClauseSet eclauseset;
 	ListCell   *lc;
+	bool		ispartitioned = IS_PARTITIONED_REL(rel);
 
 	/* Skip the whole mess if no indexes */
 	if (rel->indexlist == NIL)
@@ -253,6 +254,20 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 	foreach(lc, rel->indexlist)
 	{
 		IndexOptInfo *index = (IndexOptInfo *) lfirst(lc);
+
+		/*
+		 * For partitioned relations, we can only consider global index scan
+		 * paths.
+		 */
+		if (ispartitioned && !index->global)
+			continue;
+
+		/*
+		 * For non partitioned table we should not get the global index info
+		 * Check comments in get_relation_info() where we are adding
+		 * IndexOptInfo nodes.
+		 */
+		Assert(ispartitioned || !index->global);
 
 		/* Protect limited-size array in IndexClauseSets */
 		Assert(index->nkeycolumns <= INDEX_MAX_KEYS);
@@ -1737,6 +1752,10 @@ check_index_only(RelOptInfo *rel, IndexOptInfo *index)
 
 	/* Index-only scans must be enabled */
 	if (!enable_indexonlyscan)
+		return false;
+
+	/* Do not support index only scan fro global index yet. */
+	if (index->global)
 		return false;
 
 	/*

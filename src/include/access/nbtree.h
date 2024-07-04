@@ -21,6 +21,7 @@
 #include "access/xlogreader.h"
 #include "catalog/pg_am_d.h"
 #include "catalog/pg_index.h"
+#include "common/int.h"
 #include "lib/stringinfo.h"
 #include "storage/bufmgr.h"
 #include "storage/shm_toc.h"
@@ -655,6 +656,75 @@ BTreeTupleGetHeapTID(IndexTuple itup)
 }
 
 /*
+ * Fetch partition id attribute store in the index tuple.
+ *
+ * For global indexes we store partition id colum as a last additional key
+ * colum in order to identify which partition this index tuple belongs to.
+ */
+static inline PartitionId
+BTreeTupleGetPartitionId(Relation index, IndexTuple itup)
+{
+	bool		is_null;
+	Datum		datum;
+	int 		partidattno = GlobalIndexRelationGetPartIdAttrIdx(index);
+	TupleDesc	tupleDesc = RelationGetDescr(index);
+
+	Assert(RelationIsGlobalIndex(index));
+
+	/*
+	 * If this is a pivot tuple and tiebreaker partition id attribute is not
+	 * present in it then return InvalidOid.
+	 */
+	if (BTreeTupleIsPivot(itup) && BTreeTupleGetNAtts(itup, index) <=
+		IndexRelationGetNumberOfKeyAttributes(index))
+		return InvalidPartitionId;
+
+	datum = index_getattr(itup, partidattno, tupleDesc, &is_null);
+	Assert(!is_null);
+
+	return DatumGetPartitionId(datum);
+}
+
+/*
+ * Get reloid with respect to the  partition identifier attribute stored in
+ * the IndexTuple.
+ */
+static inline Oid
+BTreeTupleGetPartitionRelid(Relation index, IndexTuple itup)
+{
+	bool		is_null;
+	Datum		datum;
+	int 		partidattno = GlobalIndexRelationGetPartIdAttrIdx(index);
+	TupleDesc	tupleDesc = RelationGetDescr(index);
+
+	Assert(RelationIsGlobalIndex(index));
+
+	/*
+	 * If this is a pivot tuple and tiebreaker partition id attribute is not
+	 * present in it then return InvalidOid.
+	 */
+	if (BTreeTupleIsPivot(itup) && BTreeTupleGetNAtts(itup, index) <=
+		IndexRelationGetNumberOfKeyAttributes(index))
+		return InvalidOid;
+
+	datum = index_getattr(itup, partidattno, tupleDesc, &is_null);
+	Assert(!is_null);
+
+	return IndexGetPartitionReloid(index, DatumGetPartitionId(datum));
+}
+
+static inline int32
+BTreeHeapOidCompare(Oid partid1, Oid partid2)
+{
+	if (partid1 < partid2)
+		return -1;
+	else if (partid1 > partid2)
+		return 1;
+	else
+		return 0;
+}
+
+/*
  * Get maximum heap TID attribute, which could be the only TID in the case of
  * a non-pivot tuple that does not have a posting list.
  *
@@ -673,6 +743,18 @@ BTreeTupleGetMaxHeapTID(IndexTuple itup)
 	}
 
 	return &itup->t_tid;
+}
+
+/*
+ * _bt_indexdel_cmp() -- qsort comparison function for _bt_simpledel_pass
+ */
+static inline int
+_bt_indexdel_cmp(const void *arg1, const void *arg2)
+{
+	TM_IndexDelete *b1 = ((TM_IndexDelete *) arg1);
+	TM_IndexDelete *b2 = ((TM_IndexDelete *) arg2);
+
+	return pg_cmp_u32(b1->partid, b2->partid);
 }
 
 /*
@@ -943,6 +1025,9 @@ typedef BTVacuumPostingData *BTVacuumPosting;
 
 typedef struct BTScanPosItem	/* what we remember about each match */
 {
+	Oid		heapOid;	/* Oid of the partition relation , only valid for
+						   global indexes because global index can hold tuples
+						   from multiple partitions */
 	ItemPointerData heapTid;	/* TID of referenced heap item */
 	OffsetNumber indexOffset;	/* index item's location within page */
 	LocationIndex tupleOffset;	/* IndexTuple's offset in workspace, if any */
@@ -1136,7 +1221,8 @@ typedef struct BTOptions
 } BTOptions;
 
 #define BTGetFillFactor(relation) \
-	(AssertMacro(relation->rd_rel->relkind == RELKIND_INDEX && \
+	(AssertMacro((relation->rd_rel->relkind == RELKIND_INDEX || \
+				  relation->rd_rel->relkind == RELKIND_GLOBAL_INDEX) && \
 				 relation->rd_rel->relam == BTREE_AM_OID), \
 	 (relation)->rd_options ? \
 	 ((BTOptions *) (relation)->rd_options)->fillfactor : \
@@ -1144,7 +1230,8 @@ typedef struct BTOptions
 #define BTGetTargetPageFreeSpace(relation) \
 	(BLCKSZ * (100 - BTGetFillFactor(relation)) / 100)
 #define BTGetDeduplicateItems(relation) \
-	(AssertMacro(relation->rd_rel->relkind == RELKIND_INDEX && \
+	(AssertMacro((relation->rd_rel->relkind == RELKIND_INDEX || \
+				  relation->rd_rel->relkind == RELKIND_GLOBAL_INDEX) && \
 				 relation->rd_rel->relam == BTREE_AM_OID), \
 	((relation)->rd_options ? \
 	 ((BTOptions *) (relation)->rd_options)->deduplicate_items : true))

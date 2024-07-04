@@ -50,6 +50,7 @@
 #include "commands/progress.h"
 #include "executor/instrument.h"
 #include "miscadmin.h"
+#include "partitioning/partdesc.h"
 #include "pgstat.h"
 #include "storage/bulk_write.h"
 #include "tcop/tcopprot.h"		/* pgrminclude ignore */
@@ -349,6 +350,53 @@ btbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 }
 
 /*
+ * Recursively process the partition childs and insert data from the leaf
+ * relation into the global index.
+ */
+static double
+_bt_table_process_partitions(IndexInfo *indexInfo, Relation rel,
+							 BTBuildState *buildstate, Relation irel)
+{
+	PartitionDesc pd;
+	double		reltuples = 0;
+
+	Assert(rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
+	Assert(RelationIsGlobalIndex(irel));
+
+	pd = RelationGetPartitionDesc(rel, true);
+
+	/*
+	 * Recursively process each child of the partitioned table and insert
+	 * tuple into the global index.
+	 */
+	for (int i = 0; i < pd->nparts; i++)
+	{
+		Relation	partRel;
+
+		partRel = table_open(pd->oids[i], AccessShareLock);
+
+		if (partRel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+			reltuples += _bt_table_process_partitions(indexInfo, partRel, buildstate, irel);
+		else if (partRel->rd_rel->relkind == RELKIND_RELATION)
+		{
+			/*
+			 * If this is a global index then get the partition id of this
+			 * partition with respect to this global index.
+			 */
+			indexInfo->ii_partid =
+						IndexGetRelationPartitionId(irel, pd->oids[i]);
+
+			reltuples += table_index_build_scan(partRel, irel, indexInfo, true,
+												true, _bt_build_callback,
+												(void *) buildstate, NULL);
+		}
+
+		table_close(partRel, AccessShareLock);
+	}
+	return reltuples;
+}
+
+/*
  * Create and initialize one or two spool structures, and save them in caller's
  * buildstate argument.  May also fill-in fields within indexInfo used by index
  * builds.
@@ -470,8 +518,17 @@ _bt_spools_heapscan(Relation heap, Relation index, BTBuildState *buildstate,
 										coordinate2, TUPLESORT_NONE);
 	}
 
+	/*
+	 * If this table is partitioned, it indicates that we are building a
+	 * global index. Therefore, we need to scan all the child partitions to
+	 * build this global index.
+	 *
+	 * TODO: Handle parallel index build for global index.
+	 */
+	if (heap->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		reltuples += _bt_table_process_partitions(indexInfo, heap, buildstate, index);
 	/* Fill spool using either serial or parallel heap scan */
-	if (!buildstate->btleader)
+	else if (!buildstate->btleader)
 		reltuples = table_index_build_scan(heap, index, indexInfo, true, true,
 										   _bt_build_callback, (void *) buildstate,
 										   NULL);

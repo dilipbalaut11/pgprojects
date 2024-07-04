@@ -17,6 +17,8 @@
 
 #include "access/nbtree.h"
 #include "access/nbtxlog.h"
+#include "access/relation.h"
+#include "access/table.h"
 #include "access/transam.h"
 #include "access/xloginsert.h"
 #include "common/int.h"
@@ -29,6 +31,17 @@
 /* Minimum tree height for application of fastpath optimization */
 #define BTREE_FASTPATH_MIN_LEVEL	2
 
+/*
+ * Table block information pointed to by LP_DEAD-set tuples in the index.
+ * For a global index, we also need the PartitionId along with the BlockNumber
+ * to determine which partition the block belongs to. This information is used
+ * during simple delete pass.
+ */
+typedef struct BTHeapBlockInfo
+{
+	PartitionId	partid;
+	BlockNumber	blockno;
+} BTHeapBlockInfo;
 
 static BTStack _bt_search_insert(Relation rel, Relation heaprel,
 								 BTInsertState insertstate);
@@ -70,10 +83,12 @@ static void _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 							   OffsetNumber *deletable, int ndeletable,
 							   IndexTuple newitem, OffsetNumber minoff,
 							   OffsetNumber maxoff);
-static BlockNumber *_bt_deadblocks(Page page, OffsetNumber *deletable,
-								   int ndeletable, IndexTuple newitem,
-								   int *nblocks);
+static BTHeapBlockInfo* _bt_deadblocks(Relation rel, Page page,
+									   OffsetNumber *deletable,
+									   int ndeletable, IndexTuple newitem,
+									   int *nblocks);
 static inline int _bt_blk_cmp(const void *arg1, const void *arg2);
+static inline int _bt_indexdel_cmp(const void *arg1, const void *arg2);
 
 /*
  *	_bt_doinsert() -- Handle insertion of a single index tuple in the tree.
@@ -418,11 +433,13 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 	OffsetNumber maxoff;
 	Page		page;
 	BTPageOpaque opaque;
+	Relation	partrel;
 	Buffer		nbuf = InvalidBuffer;
 	bool		found = false;
 	bool		inposting = false;
 	bool		prevalldead = true;
 	int			curposti = 0;
+	Oid			heapoid = InvalidOid;
 
 	/* Assume unique until we find a duplicate */
 	*is_unique = true;
@@ -541,6 +558,27 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				}
 
 				/*
+				 * For a global index, we need to obtain the exact partition
+				 * heapRel corresponding to the partition ID stored inside the
+				 * index tuple.
+				 */
+				if (RelationIsGlobalIndex(rel))
+				{
+					Oid	curheapoid = BTreeTupleGetPartitionRelid(rel, curitup);
+
+					if (heapoid != curheapoid)
+					{
+						if (OidIsValid(heapoid))
+							relation_close(partrel, AccessShareLock);
+
+						partrel = relation_open(curheapoid, AccessShareLock);
+						heapoid = curheapoid;
+					}
+				}
+				else
+					partrel = heapRel;
+
+				/*
 				 * If we are doing a recheck, we expect to find the tuple we
 				 * are rechecking.  It's not a duplicate, but we have to keep
 				 * scanning.
@@ -557,7 +595,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				 * with optimizations like heap's HOT, we have just a single
 				 * index entry for the entire chain.
 				 */
-				else if (table_index_fetch_tuple_check(heapRel, &htid,
+				else if (table_index_fetch_tuple_check(partrel, &htid,
 													   &SnapshotDirty,
 													   &all_dead))
 				{
@@ -615,7 +653,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 					 * entry.
 					 */
 					htid = itup->t_tid;
-					if (table_index_fetch_tuple_check(heapRel, &htid,
+					if (table_index_fetch_tuple_check(partrel, &htid,
 													  SnapshotSelf, NULL))
 					{
 						/* Normal case --- it's still live */
@@ -669,7 +707,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 										RelationGetRelationName(rel)),
 								 key_desc ? errdetail("Key %s already exists.",
 													  key_desc) : 0,
-								 errtableconstraint(heapRel,
+								 errtableconstraint(partrel,
 													RelationGetRelationName(rel))));
 					}
 				}
@@ -762,7 +800,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				 errmsg("failed to re-find tuple within index \"%s\"",
 						RelationGetRelationName(rel)),
 				 errhint("This may be because of a non-immutable index expression."),
-				 errtableconstraint(heapRel,
+				 errtableconstraint(partrel,
 									RelationGetRelationName(rel))));
 
 	if (nbuf != InvalidBuffer)
@@ -2814,13 +2852,13 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 				   OffsetNumber minoff, OffsetNumber maxoff)
 {
 	Page		page = BufferGetPage(buffer);
-	BlockNumber *deadblocks;
+	BTHeapBlockInfo *deadblocks;
 	int			ndeadblocks;
 	TM_IndexDeleteOp delstate;
 	OffsetNumber offnum;
 
 	/* Get array of table blocks pointed to by LP_DEAD-set tuples */
-	deadblocks = _bt_deadblocks(page, deletable, ndeletable, newitem,
+	deadblocks = _bt_deadblocks(rel, page, deletable, ndeletable, newitem,
 								&ndeadblocks);
 
 	/* Initialize tableam state that describes index deletion operation */
@@ -2840,14 +2878,16 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 		IndexTuple	itup = (IndexTuple) PageGetItem(page, itemid);
 		TM_IndexDelete *odeltid = &delstate.deltids[delstate.ndeltids];
 		TM_IndexStatus *ostatus = &delstate.status[delstate.ndeltids];
-		BlockNumber tidblock;
+		BTHeapBlockInfo tidblock;
 		void	   *match;
 
 		if (!BTreeTupleIsPosting(itup))
 		{
-			tidblock = ItemPointerGetBlockNumber(&itup->t_tid);
+			tidblock.blockno = ItemPointerGetBlockNumber(&itup->t_tid);
+			tidblock.partid = (RelationIsGlobalIndex(rel)) ?
+						BTreeTupleGetPartitionId(rel, itup) : InvalidOid;
 			match = bsearch(&tidblock, deadblocks, ndeadblocks,
-							sizeof(BlockNumber), _bt_blk_cmp);
+							sizeof(BTHeapBlockInfo), _bt_blk_cmp);
 
 			if (!match)
 			{
@@ -2859,6 +2899,7 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 			 * TID's table block is among those pointed to by the TIDs from
 			 * LP_DEAD-bit set tuples on page -- add TID to deltids
 			 */
+			odeltid->partid = tidblock.partid;
 			odeltid->tid = itup->t_tid;
 			odeltid->id = delstate.ndeltids;
 			ostatus->idxoffnum = offnum;
@@ -2871,14 +2912,18 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 		else
 		{
 			int			nitem = BTreeTupleGetNPosting(itup);
+			PartitionId	partid = (RelationIsGlobalIndex(rel)) ?
+						BTreeTupleGetPartitionId(rel, itup) : InvalidOid;
 
 			for (int p = 0; p < nitem; p++)
 			{
 				ItemPointer tid = BTreeTupleGetPostingN(itup, p);
 
-				tidblock = ItemPointerGetBlockNumber(tid);
+				tidblock.blockno = ItemPointerGetBlockNumber(tid);
+				tidblock.partid = partid;
+
 				match = bsearch(&tidblock, deadblocks, ndeadblocks,
-								sizeof(BlockNumber), _bt_blk_cmp);
+								sizeof(BTHeapBlockInfo), _bt_blk_cmp);
 
 				if (!match)
 				{
@@ -2890,6 +2935,7 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 				 * TID's table block is among those pointed to by the TIDs
 				 * from LP_DEAD-bit set tuples on page -- add TID to deltids
 				 */
+				odeltid->partid = partid;
 				odeltid->tid = *tid;
 				odeltid->id = delstate.ndeltids;
 				ostatus->idxoffnum = offnum;
@@ -2923,6 +2969,17 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
  * block from incoming newitem just in case it isn't among the LP_DEAD-related
  * table blocks.
  *
+ * For global indexes, we need the relation OID along with block numbers to
+ * uniquely identify the block. Therefore, we return the output in the form of
+ * a partition ID and block number pair and will convert the partition ID to
+ * the relation OID whenever we need to access the heap. While we could
+ * convert to the relation OID here and store it directly, this conversion
+ * might need to be done multiple times. So, we choose to convert when we
+ * really need to access the heap. Before accessing the heap, we first sort
+ * them in partition ID order, so the conversion from partition ID to relation
+ * OID  only needs to be done once per partition. Note that for non-global
+ * indexes, the relation OID will be InvalidOid, as it will never be accessed.
+ *
  * Always counting the newitem's table block as an LP_DEAD related block makes
  * sense because the cost is consistently low; it is practically certain that
  * the table block will not incur a buffer miss in tableam.  On the other hand
@@ -2934,13 +2991,14 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
  *
  * Returns final array, and sets *nblocks to its final size for caller.
  */
-static BlockNumber *
-_bt_deadblocks(Page page, OffsetNumber *deletable, int ndeletable,
-			   IndexTuple newitem, int *nblocks)
+static BTHeapBlockInfo *
+_bt_deadblocks(Relation rel, Page page, OffsetNumber *deletable,
+			   int ndeletable, IndexTuple newitem, int *nblocks)
 {
 	int			spacentids,
 				ntids;
-	BlockNumber *tidblocks;
+	bool		isglobalidx = RelationIsGlobalIndex(rel);
+	BTHeapBlockInfo *tidblocks;
 
 	/*
 	 * Accumulate each TID's block in array whose initial size has space for
@@ -2950,7 +3008,7 @@ _bt_deadblocks(Page page, OffsetNumber *deletable, int ndeletable,
 	 */
 	spacentids = ndeletable + 1;
 	ntids = 0;
-	tidblocks = (BlockNumber *) palloc(sizeof(BlockNumber) * spacentids);
+	tidblocks = (BTHeapBlockInfo *) palloc(sizeof(BTHeapBlockInfo) * spacentids);
 
 	/*
 	 * First add the table block for the incoming newitem.  This is the one
@@ -2958,7 +3016,14 @@ _bt_deadblocks(Page page, OffsetNumber *deletable, int ndeletable,
 	 * any known deletable items.
 	 */
 	Assert(!BTreeTupleIsPosting(newitem) && !BTreeTupleIsPivot(newitem));
-	tidblocks[ntids++] = ItemPointerGetBlockNumber(&newitem->t_tid);
+	tidblocks[ntids].blockno = ItemPointerGetBlockNumber(&newitem->t_tid);
+
+	/*
+	 * For global indexes we also need to store the PartitionId for more detail
+	 * read comments in function header.
+	 */
+	tidblocks[ntids++].partid = isglobalidx ?
+						BTreeTupleGetPartitionId(rel, newitem) : InvalidOid;
 
 	for (int i = 0; i < ndeletable; i++)
 	{
@@ -2972,34 +3037,39 @@ _bt_deadblocks(Page page, OffsetNumber *deletable, int ndeletable,
 			if (ntids + 1 > spacentids)
 			{
 				spacentids *= 2;
-				tidblocks = (BlockNumber *)
-					repalloc(tidblocks, sizeof(BlockNumber) * spacentids);
+				tidblocks = (BTHeapBlockInfo *)
+					repalloc(tidblocks, sizeof(BTHeapBlockInfo) * spacentids);
 			}
 
-			tidblocks[ntids++] = ItemPointerGetBlockNumber(&itup->t_tid);
+			tidblocks[ntids].blockno = ItemPointerGetBlockNumber(&itup->t_tid);
+			tidblocks[ntids++].partid = isglobalidx ?
+							BTreeTupleGetPartitionId(rel, itup) : InvalidPartitionId;
 		}
 		else
 		{
 			int			nposting = BTreeTupleGetNPosting(itup);
+			PartitionId	partid = isglobalidx ?
+						BTreeTupleGetPartitionId(rel, itup) : InvalidPartitionId;
 
 			if (ntids + nposting > spacentids)
 			{
 				spacentids = Max(spacentids * 2, ntids + nposting);
-				tidblocks = (BlockNumber *)
-					repalloc(tidblocks, sizeof(BlockNumber) * spacentids);
+				tidblocks = (BTHeapBlockInfo *)
+					repalloc(tidblocks, sizeof(BTHeapBlockInfo) * spacentids);
 			}
 
 			for (int j = 0; j < nposting; j++)
 			{
 				ItemPointer tid = BTreeTupleGetPostingN(itup, j);
 
-				tidblocks[ntids++] = ItemPointerGetBlockNumber(tid);
+				tidblocks[ntids].blockno = ItemPointerGetBlockNumber(tid);
+				tidblocks[ntids++].partid = partid;
 			}
 		}
 	}
 
-	qsort(tidblocks, ntids, sizeof(BlockNumber), _bt_blk_cmp);
-	*nblocks = qunique(tidblocks, ntids, sizeof(BlockNumber), _bt_blk_cmp);
+	qsort(tidblocks, ntids, sizeof(BTHeapBlockInfo), _bt_blk_cmp);
+	*nblocks = qunique(tidblocks, ntids, sizeof(BTHeapBlockInfo), _bt_blk_cmp);
 
 	return tidblocks;
 }
@@ -3010,8 +3080,13 @@ _bt_deadblocks(Page page, OffsetNumber *deletable, int ndeletable,
 static inline int
 _bt_blk_cmp(const void *arg1, const void *arg2)
 {
-	BlockNumber b1 = *((BlockNumber *) arg1);
-	BlockNumber b2 = *((BlockNumber *) arg2);
+	BTHeapBlockInfo *b1 = ((BTHeapBlockInfo *) arg1);
+	BTHeapBlockInfo *b2 = ((BTHeapBlockInfo *) arg2);
+	int	res;
 
-	return pg_cmp_u32(b1, b2);
+	/* first compare partid if they are same those compare the block number. */
+	res = pg_cmp_u32(b1->partid, b2->partid);
+	if (res == 0)
+		res = pg_cmp_u32(b1->blockno, b2->blockno);
+	return res;
 }

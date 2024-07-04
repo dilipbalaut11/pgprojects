@@ -764,14 +764,10 @@ index_getnext_slot(IndexScanDesc scan, ScanDirection direction, TupleTableSlot *
 		 */
 		if (scan->xs_global_index)
 		{
-			IndexTuple	itup;
 			Oid			relid;
 			GlobalIndexPartitionCacheEntry *entry;
 
-			Assert(scan->xs_want_itup);
-			Assert(scan->xs_itup);
-			itup = scan->xs_itup;
-			relid = index_tuple_fetch_partrelid(scan->indexRelation, itup);
+			relid = scan->xs_heapoid;
 
 			if (!OidIsValid(relid))
 				continue;

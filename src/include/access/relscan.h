@@ -145,7 +145,9 @@ typedef struct IndexScanDescData
 	struct TupleDescData *xs_itupdesc;	/* rowtype descriptor of xs_itup */
 	HeapTuple	xs_hitup;		/* index data returned by AM, as HeapTuple */
 	struct TupleDescData *xs_hitupdesc; /* rowtype descriptor of xs_hitup */
-
+	Oid			xs_heapoid;		/* Oid of the partition relation , only valid
+								   for global indexes because global index can
+								   hold tuples from multiple partitions */
 	ItemPointerData xs_heaptid; /* result */
 	bool		xs_heap_continue;	/* T if must keep walking, potential
 									 * further results */

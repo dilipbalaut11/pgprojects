@@ -25,8 +25,7 @@
 #include "utils/inval.h"
 #include "utils/rel.h"
 
-static void InvalidateIndexPartitionEntries(Oid reloid, List *indexoids);
-static void IndexPartitionDetachRecurse(Relation rel, List *global_indexes);
+static void InvalidateIndexPartitionEntries(List *reloids, Oid indexoid);
 
 /*
  * IndexGetNextPartitionID - Get the next partition ID of the global index
@@ -248,29 +247,37 @@ IndexGetPartitionReloid(Relation irel, PartitionId partid)
 }
 
 /*
- * IndexPartitionDetach - Remove this partition from all ancestor's global
- *						  indexes
+ * IndexPartitionDetach - Detach reloids from all global indexes
  *
- * Detach all the leaf partitions underneath the given relation from all the
- * global indexes of its ancestors. If this is a leaf relation itself, then
- * directly detach it by marking the reloid invalid in the mapping in
- * pg_index_partitions mapping.
+ * Invalidate the mapping in pg_index_partitions for input 'indexoids' and
+ * 'reloids'.
  */
 void
-IndexPartitionDetach(Relation rel)
+IndexPartitionDetach(List *indexoids, List *reloids)
 {
-	List *global_index = RelationGetAncestorsGlobalIndexList(rel);
-
-	if (global_index != NIL)
+	foreach_oid(indexoid, indexoids)
 	{
-		IndexPartitionDetachRecurse(rel, global_index);
+		Relation	irel = index_open(indexoid, AccessExclusiveLock);
 
 		/*
-		 * Invalidate the index relation cache for all the global indexes so
-		 * that the dropped relation information is reflected in the cache.
+		 * There will not be any mapping if this is not a global index so
+		 * continue with the nexr entry.
 		 */
-		foreach_oid(indexoid, global_index)
-			CacheInvalidateRelcacheByRelid(indexoid);
+		if (!RelationIsGlobalIndex(irel))
+		{
+			index_close(irel, AccessExclusiveLock);
+			continue;
+		}
+
+		/* Invalidate the mapping for the global index to reloids. */
+		InvalidateIndexPartitionEntries(reloids, indexoid);
+
+		/*
+		 * Invalidate the index relation cache so that the dropped relation
+		 * information is reflected in the cache.
+		 */
+		CacheInvalidateRelcache(irel);
+		index_close(irel, AccessExclusiveLock);
 	}
 }
 
@@ -283,7 +290,7 @@ IndexPartitionDetach(Relation rel)
  * oids.
  */
 static void
-InvalidateIndexPartitionEntries(Oid reloid, List *indexoids)
+InvalidateIndexPartitionEntries(List *reloids, Oid indexoid)
 {
 	Relation	catalogRelation;
 	SysScanDesc scan;
@@ -297,11 +304,11 @@ InvalidateIndexPartitionEntries(Oid reloid, List *indexoids)
 	catalogRelation = table_open(IndexPartitionsRelationId, RowExclusiveLock);
 
 	ScanKeyInit(&key,
-				Anum_pg_index_partitions_reloid,
+				Anum_pg_index_partitions_indexoid,
 				BTEqualStrategyNumber, F_OIDEQ,
-				ObjectIdGetDatum(reloid));
+				ObjectIdGetDatum(indexoid));
 
-	scan = systable_beginscan(catalogRelation, IndexPartitionsReloidIndexId, true,
+	scan = systable_beginscan(catalogRelation, IndexPartitionsIndexId, true,
 							  NULL, 1, &key);
 
 	while ((tuple = systable_getnext(scan)) != NULL)
@@ -309,7 +316,7 @@ InvalidateIndexPartitionEntries(Oid reloid, List *indexoids)
 		Form_pg_index_partitions form = (Form_pg_index_partitions) GETSTRUCT(tuple);
 		HeapTuple	newtup;
 
-		if (!list_member_oid(indexoids, form->indexoid))
+		if (!list_member_oid(reloids, form->reloid))
 			continue;
 
 		newtup = heap_copytuple(tuple);
@@ -324,34 +331,4 @@ InvalidateIndexPartitionEntries(Oid reloid, List *indexoids)
 	/* Done */
 	systable_endscan(scan);
 	table_close(catalogRelation, RowExclusiveLock);
-}
-
-/*
- * IndexPartitionDetachRecurse - helper function for IndexPartitionDetach
- *
- * Helper function for IndexPartitionDetach for recursively processing the
- * partitioned table.
- */
-static void
-IndexPartitionDetachRecurse(Relation rel, List *global_indexes)
-{
-	PartitionDesc pd;
-
-	/* FIXME: handle other relkind?*/
-	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-	{
-		pd = RelationGetPartitionDesc(rel, true);
-
-		for (int i = 0; i < pd->nparts; i++)
-		{
-			Relation	partRel;
-
-			partRel = table_open(pd->oids[i], ShareRowExclusiveLock);
-
-			IndexPartitionDetachRecurse(partRel, global_indexes);
-			table_close(partRel, ShareRowExclusiveLock);
-		}
-	}
-	else if (rel->rd_rel->relkind == RELKIND_RELATION)
-		InvalidateIndexPartitionEntries(RelationGetRelid(rel), global_indexes);
 }

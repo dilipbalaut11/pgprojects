@@ -47,6 +47,7 @@
 #include "access/xact.h"
 #include "access/xloginsert.h"
 #include "catalog/index.h"
+#include "catalog/pg_inherits.h"
 #include "commands/progress.h"
 #include "executor/instrument.h"
 #include "miscadmin.h"
@@ -285,7 +286,9 @@ static void _bt_parallel_scan_and_sort(BTSpool *btspool, BTSpool *btspool2,
 									   BTShared *btshared, Sharedsort *sharedsort,
 									   Sharedsort *sharedsort2, int sortmem,
 									   bool progress);
-
+static double _bt_spool_scan_partitions(IndexInfo *indexInfo, Relation rel,
+										BTBuildState *buildstate,
+										Relation irel);
 
 /*
  *	btbuild() -- build a new btree index.
@@ -350,49 +353,45 @@ btbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 }
 
 /*
- * Recursively process the partition childs and insert data from the leaf
- * relation into the global index.
+ * This is a wrapper function to call table_index_build_scan() for each leaf
+ * partition while building a btree index.
  */
 static double
-_bt_table_process_partitions(IndexInfo *indexInfo, Relation rel,
-							 BTBuildState *buildstate, Relation irel)
+_bt_spool_scan_partitions(IndexInfo *indexInfo, Relation rel,
+						  BTBuildState *buildstate, Relation irel)
 {
-	PartitionDesc pd;
 	double		reltuples = 0;
+	List	   *tableIds;
 
 	Assert(rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
 	Assert(RelationIsGlobalIndex(irel));
 
-	pd = RelationGetPartitionDesc(rel, true);
+	/* Caller should already hold the lock. */
+	tableIds = find_all_inheritors(RelationGetRelid(rel), NoLock, NULL);
 
-	/*
-	 * Recursively process each child of the partitioned table and insert
-	 * tuple into the global index.
-	 */
-	for (int i = 0; i < pd->nparts; i++)
+	foreach_oid(tableOid, tableIds)
 	{
-		Relation	partRel;
+		Relation	childrel = table_open(tableOid, NoLock);
 
-		partRel = table_open(pd->oids[i], AccessShareLock);
-
-		if (partRel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-			reltuples += _bt_table_process_partitions(indexInfo, partRel, buildstate, irel);
-		else if (partRel->rd_rel->relkind == RELKIND_RELATION)
+		if (childrel->rd_rel->relkind != RELKIND_RELATION)
 		{
-			/*
-			 * If this is a global index then get the partition id of this
-			 * partition with respect to this global index.
-			 */
-			indexInfo->ii_partid =
-						IndexGetRelationPartitionId(irel, pd->oids[i]);
-
-			reltuples += table_index_build_scan(partRel, irel, indexInfo, true,
-												true, _bt_build_callback,
-												(void *) buildstate, NULL);
+			table_close(childrel, NoLock);
+			continue;
 		}
 
-		table_close(partRel, AccessShareLock);
+		/*
+		 * Get partition id of this partition with respect to the global
+		 * index.
+		 */
+		indexInfo->ii_partid = IndexGetRelationPartitionId(irel, tableOid);
+		reltuples += table_index_build_scan(childrel, irel, indexInfo, true,
+											true, _bt_build_callback,
+											(void *) buildstate, NULL);
+		table_close(childrel, NoLock);
 	}
+
+	list_free(tableIds);
+
 	return reltuples;
 }
 
@@ -518,20 +517,21 @@ _bt_spools_heapscan(Relation heap, Relation index, BTBuildState *buildstate,
 										coordinate2, TUPLESORT_NONE);
 	}
 
-	/*
-	 * If this table is partitioned, it indicates that we are building a
-	 * global index. Therefore, we need to scan all the child partitions to
-	 * build this global index.
-	 *
-	 * TODO: Handle parallel index build for global index.
-	 */
-	if (heap->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		reltuples += _bt_table_process_partitions(indexInfo, heap, buildstate, index);
 	/* Fill spool using either serial or parallel heap scan */
-	else if (!buildstate->btleader)
-		reltuples = table_index_build_scan(heap, index, indexInfo, true, true,
-										   _bt_build_callback, (void *) buildstate,
-										   NULL);
+	if (!buildstate->btleader)
+	{
+		/*
+		 * If we are building a global index then we need to scan all the
+		 * child partitions and insert into the global index.
+		 */
+		if (RelationIsGlobalIndex(index))
+			reltuples += _bt_spool_scan_partitions(indexInfo, heap,
+												   buildstate, index);
+		else
+			reltuples = table_index_build_scan(heap, index, indexInfo, true,
+											   true, _bt_build_callback,
+											   (void *) buildstate, NULL);
+	}
 	else
 		reltuples = _bt_parallel_heapscan(buildstate,
 										  &indexInfo->ii_BrokenHotChain);

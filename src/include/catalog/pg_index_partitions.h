@@ -116,5 +116,5 @@ extern Oid IndexGetPartitionReloid(Relation irel, PartitionId partid);
 extern PartitionId IndexGetNextPartitionID(Relation irel);
 extern void DeleteIndexPartitionEntries(Oid indrelid);
 extern void InsertIndexPartitionEntry(Relation irel, Oid reloid, PartitionId partid);
-extern void IndexPartitionDetach(Relation rel);
+extern void IndexPartitionDetach(List *indexoids, List *reloids);
 #endif							/* PG_INDEX_PARTITIONS_H */

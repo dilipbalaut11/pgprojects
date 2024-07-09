@@ -121,9 +121,6 @@ static void UpdateIndexRelation(Oid indexoid, Oid heapoid,
 								bool immediate,
 								bool isvalid,
 								bool isready);
-static void index_update_stats(Relation rel,
-							   bool hasindex,
-							   double reltuples);
 static void IndexCheckExclusion(Relation heapRelation,
 								Relation indexRelation,
 								IndexInfo *indexInfo);
@@ -1068,10 +1065,32 @@ index_create(Relation heapRelation,
 						!concurrent && !invalid,
 						!concurrent);
 
-	/* Create the mapping in pg_index_partitions table */
-	if (RelationIsGlobalIndex(indexRelation))
+	/*
+	 * Create the mapping in pg_index_partitions table, also register relcache
+	 * invalidation on the indexes' heap relation, to maintain consistency of
+	 * its index list.  If we are creating a global index then invalidate the
+	 * relcache of all the inheritors as well.
+	 */
+	if (global_index)
 	{
-		IndexPartitionAttachRecurse(NULL, heapRelation, indexRelation);
+		List   *tableIds;
+
+		if (heapRelation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+			tableIds = find_all_inheritors(heapRelationId, NoLock, NULL);
+		else
+			tableIds = list_make1_oid(heapRelationId);
+
+		AttachParittionsToGlobalIndex(indexRelation, tableIds, NULL);
+
+		foreach_oid(tableOid, tableIds)
+		{
+			Relation	childrel = table_open(tableOid, NoLock);
+
+			CacheInvalidateRelcache(childrel);
+			table_close(childrel, NoLock);
+		}
+
+		list_free(tableIds);
 
 		/*
 		 * Cache got built while we were inserting the tuple in system table
@@ -1079,20 +1098,6 @@ index_create(Relation heapRelation,
 		 * whenever needed.
 		 */
 		indexRelation->rd_indexpartinfo = NULL;
-	}
-
-	/*
-	 * Register relcache invalidation on the indexes' heap relation, to
-	 * maintain consistency of its index list.  If we are creating a global
-	 * index then invalidate the relcache of all the inheritors as well.
-	 */
-	if (global_index)
-	{
-		List *tableIds = find_all_inheritors(heapRelationId, NoLock, NULL);
-
-		foreach_oid(tableOid, tableIds)
-			CacheInvalidateRelcacheByRelid(tableOid);
-		list_free(tableIds);
 	}
 	else
 		CacheInvalidateRelcache(heapRelation);
@@ -2851,7 +2856,7 @@ FormIndexDatum(IndexInfo *indexInfo,
  * index.  When updating an index, it's important because some index AMs
  * expect a relcache flush to occur after REINDEX.
  */
-static void
+void
 index_update_stats(Relation rel,
 				   bool hasindex,
 				   double reltuples)
@@ -3069,7 +3074,8 @@ index_build(Relation heapRelation,
 	 * Note that planner considers parallel safety for us.
 	 */
 	if (parallel && IsNormalProcessingMode() &&
-		indexRelation->rd_indam->amcanbuildparallel)
+		indexRelation->rd_indam->amcanbuildparallel &&
+		!RelationIsGlobalIndex(indexRelation)) /* TODO: Support parallel build for global index */
 		indexInfo->ii_ParallelWorkers =
 			plan_create_index_workers(RelationGetRelid(heapRelation),
 									  RelationGetRelid(indexRelation));

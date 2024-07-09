@@ -1859,12 +1859,20 @@ heap_drop_with_catalog(Oid relid)
 		update_default_partition_oid(parentOid, InvalidOid);
 
 	/*
-	 * Remove reloid mapping from pg_index_partitions.
+	 * Relation is being dropped so detach this reloid from all the global
+	 * indexes.
 	 */
 	if (rel->rd_rel->relkind == RELKIND_RELATION &&
 		get_rel_relispartition(relid))
 	{
-		IndexPartitionDetach(rel);
+		List	*indexids = RelationGetIndexList(rel);
+		List	*reloids = list_make1_oid(relid);
+
+		/* Detach the reloid from the global indexes. */
+		IndexPartitionDetach(indexids, reloids);
+
+		list_free(indexids);
+		list_free(reloids);
 	}
 
 	/*

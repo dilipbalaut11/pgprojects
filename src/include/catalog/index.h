@@ -144,6 +144,9 @@ extern void index_build(Relation heapRelation,
 						IndexInfo *indexInfo,
 						bool isreindex,
 						bool parallel);
+extern void index_update_stats(Relation rel,
+							   bool hasindex,
+							   double reltuples);
 extern void index_update_stats_recursive(Relation rel,
 										 bool hasindex,
 										 double reltuples);

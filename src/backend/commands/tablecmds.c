@@ -18416,47 +18416,51 @@ QueuePartitionConstraintValidation(List **wqueue, Relation scanrel,
 }
 
 /*
- * Helper function of AttachToGlobalIndexes to attach to one global index
+ * AttachToGlobalIndexes - Attach relation oids to the global index
  *
- * This recursively process all the child partition and attach the leaf
- * partitions to the given global index.
+ * Thi will create the mapping for the input 'reloids' to global index oid of
+ * the input relation pointed by 'irel'.
  */
 void
-IndexPartitionAttachRecurse(List **wqueue, Relation rel, Relation irel)
+AttachParittionsToGlobalIndex(Relation irel, List *reloids, List **wqueue)
 {
 	/*
-	 * If this is a leaf relation, allocate the partition ID for this partition
-	 * with respect to the input global index and insert the mapping into the
-	 * index partition table. Otherwise, recursively process the child tables.
+	 * Loop through OID of each relation and attach to the global indexes.
 	 */
-	if (rel->rd_rel->relkind == RELKIND_RELATION)
+	foreach_oid(childoid, reloids)
 	{
-		PartitionId	partid = IndexGetNextPartitionID(irel);
+		Relation	childrel = table_open(childoid, NoLock);
+		PartitionId	partid;
 
-		InsertIndexPartitionEntry(irel, RelationGetRelid(rel), partid);
+		/* We need to create mapping only for the leaf partitions. */
+		if (childrel->rd_rel->relkind != RELKIND_RELATION)
+		{
+			table_close(childrel, NoLock);
+			continue;
+		}
+
+		/*
+		 * Allocate the partition ID for this partition with respect to the
+		 * the global index and insert the mapping into the index partition
+		 * table.
+		 */
+		partid = IndexGetNextPartitionID(irel);
+		InsertIndexPartitionEntry(irel, childoid, partid);
+
+		/*
+		 * If wqueue is valid then store the list of global index oids and
+		 * partition ids into the AlteredTableInfo which will be used by
+		 * ATRewriteTable().
+		 */
 		if (wqueue != NULL)
 		{
-			AlteredTableInfo *tab = ATGetQueueEntry(wqueue, rel);
+			AlteredTableInfo *tab = ATGetQueueEntry(wqueue, childrel);
 
 			tab->globalindexoids = lappend_oid(tab->globalindexoids,
-											RelationGetRelid(irel));
+											   RelationGetRelid(irel));
 			tab->partids = lappend_int(tab->partids, partid);
 		}
-	}
-	else if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-	{
-		PartitionDesc partdesc = RelationGetPartitionDesc(rel, true);
-		int			i;
-
-		for (i = 0; i < partdesc->nparts; i++)
-		{
-			Relation	part_rel;
-
-			/* This is the minimum lock we need to prevent deadlocks. */
-			part_rel = table_open(partdesc->oids[i], AccessExclusiveLock);
-			IndexPartitionAttachRecurse(wqueue, part_rel, irel);
-			table_close(part_rel, NoLock);	/* keep lock till commit */
-		}
+		table_close(childrel, NoLock);
 	}
 }
 
@@ -18473,36 +18477,73 @@ IndexPartitionAttachRecurse(List **wqueue, Relation rel, Relation irel)
  * for the base relations, as only they can contain tuples.
  */
 static void
-AttachToGlobalIndexes(List **wqueue, Relation rel)
+AttachToGlobalIndexes(List **wqueue, Relation rel, List *reloids)
 {
-	List	   *globalindexoids;
+	List	   *indexoids;
+	bool		hasglobalindex = false;
 
 	/*
-	 * When attaching a partition, we need to retrieve the list of all global
-	 * indexes from all ancestors. This ensures that we can create the
-	 * partition IDs for  all child leaf relations with respect to each
-	 * ancestor's global indexes.  Additionally, this will also be required to
-	 * insert tuples from the leaf partition into the corresponding global
-	 * indexes.
+	 * Retrieve the list of all indexes from the parent to which we are
+	 * attaching.  The parent relation's index list will also include all the
+	 * global indexes of its ancestors.
 	 */
-	globalindexoids = RelationGetAncestorsGlobalIndexList(rel);
+	indexoids = RelationGetIndexList(rel);
 
-	foreach_oid(indexoid, globalindexoids)
+	/* Quick exit if there is no index on the parent relation. */
+	if (indexoids == NIL)
+		return;
+
+	/*
+	 * Loop through each indexoid and create mapping for the all the reloids
+	 * if this is a global index.
+	 */
+	foreach_oid(indexoid, indexoids)
 	{
-		Relation	irel = index_open(indexoid, AccessShareLock);
+		Relation	irel = index_open(indexoid, RowExclusiveLock);
 
-		IndexPartitionAttachRecurse(wqueue, rel, irel);
-		index_close(irel, NoLock);
+		/* We don't need to do anything if this is not a global index. */
+		if (!RelationIsGlobalIndex(irel))
+		{
+			table_close(irel, NoLock);
+			continue;
+		}
+
+		/* Flag to indicate that we have at least one global index. */
+		hasglobalindex = true;
+
+		/* Attach reloids to the global index. */
+		AttachParittionsToGlobalIndex(irel, reloids, wqueue);
 
 		/*
-		 * Invalidate the index relation cache for all the global indexes so
-		 * that its gets recreated after we have attached partitions to it.
+		 * Invalidate the index relation cache of the global index so that its
+		 * gets recreated and the newly attached partitions get reflected in
+		 * the cache.
 		 */
-		CacheInvalidateRelcacheByRelid(indexoid);
+		CacheInvalidateRelcache(irel);
+
+		/* Close the index relation but don't release the lock. */
+		table_close(irel, NoLock);
 	}
 
-	if (globalindexoids != NULL)
-		index_update_stats_recursive(rel, true, -1.0);
+	/*
+	 * Loop through each partition and update the stats that the relation has
+	 * a index.
+	 */
+	if (hasglobalindex)
+	{
+		foreach_oid(childoid, reloids)
+		{
+			Relation	childrel;
+
+			/* Lock already held by caller. */
+			childrel = table_open(childoid, NoLock);
+			index_update_stats(childrel, true, -1.0);
+			table_close(childrel, NoLock);
+		}
+	}
+
+	/* Free the indexoids list memory. */
+	list_free(indexoids);
 }
 
 /*
@@ -18534,12 +18575,6 @@ attachPartitionTable(List **wqueue, Relation rel, Relation attachrel, PartitionB
 	 * for phase 3 constraint verification.
 	 */
 	CloneForeignKeyConstraints(wqueue, rel, attachrel);
-
-	/*
-	 * Recursively attached all the child partitions to the ancestors global
-	 * indexes.
-	 */
-	AttachToGlobalIndexes(wqueue, attachrel);
 }
 
 /*
@@ -18746,6 +18781,8 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd,
 
 	/* Attach a new partition to the partitioned table. */
 	attachPartitionTable(wqueue, rel, attachrel, cmd->bound);
+
+	AttachToGlobalIndexes(wqueue, rel, attachrel_children);
 
 	/*
 	 * Generate partition constraint from the partition bound specification.
@@ -19233,12 +19270,6 @@ ATExecDetachPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 						   AccessExclusiveLock);
 
 	/*
-	 * Detach this relation and all its children from all the ancestor's
-	 * global indexes.
-	 */
-	IndexPartitionDetach(partRel);
-
-	/*
 	 * Check inheritance conditions and either delete the pg_inherits row (in
 	 * non-concurrent mode) or just set the inhdetachpending flag.
 	 */
@@ -19377,6 +19408,7 @@ DetachPartitionFinalize(Relation rel, Relation partRel, bool concurrent,
 	HeapTuple	tuple,
 				newtuple;
 	Relation	trigrel = NULL;
+	List	   *children = NIL;
 
 	if (concurrent)
 	{
@@ -19570,6 +19602,20 @@ DetachPartitionFinalize(Relation rel, Relation partRel, bool concurrent,
 			CacheInvalidateRelcacheByRelid(defaultPartOid);
 	}
 
+	/* Get the index list of the parent from which we are detaching. */
+	indexes = RelationGetIndexList(rel);
+	if (partRel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		children = find_all_inheritors(RelationGetRelid(partRel),
+									   AccessExclusiveLock, NULL);
+	}
+	else
+		children = list_make1_oid(RelationGetRelid(partRel));
+
+	/* Detach the relation and its children from ancestor's global indexes. */
+	IndexPartitionDetach(indexes, children);
+	list_free(indexes);
+
 	/*
 	 * Invalidate the parent's relcache so that the partition is no longer
 	 * included in its partition descriptor.
@@ -19585,15 +19631,13 @@ DetachPartitionFinalize(Relation rel, Relation partRel, bool concurrent,
 	 */
 	if (partRel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
-		List	   *children;
-
-		children = find_all_inheritors(RelationGetRelid(partRel),
-									   AccessExclusiveLock, NULL);
 		foreach(cell, children)
 		{
 			CacheInvalidateRelcacheByRelid(lfirst_oid(cell));
 		}
 	}
+
+	list_free(children);
 }
 
 /*

@@ -342,6 +342,11 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 				info->amcanmarkpos = (amroutine->ammarkpos != NULL &&
 									  amroutine->amrestrpos != NULL);
 				info->amcostestimate = amroutine->amcostestimate;
+
+				/*
+				 * TODO: Currently parallel and bitmap scans are not supported
+				 * for the global indexes.
+				 */
 				if (info->global)
 				{
 					info->amcanparallel = false;

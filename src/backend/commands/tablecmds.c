@@ -206,8 +206,9 @@ typedef struct AlteredTableInfo
 	char	   *clusterOnIndex; /* index to use for CLUSTER */
 	List	   *changedStatisticsOids;	/* OIDs of statistics to rebuild */
 	List	   *changedStatisticsDefs;	/* string definitions of same */
-	List	   *globalindexoids;	/* OIDs of the global indexes from ancestors */
-	List	   *partids; /* Partition ids w.r.t. each global index in globalindexoids */
+	List	   *globalindexoids; /* OIDs of the global indexes from ancestors */
+	List	   *partids; /* Partition ids for each global index oids in
+							globalindexoids */
 } AlteredTableInfo;
 
 /* Struct describing one new constraint to check in Phase 3 scan */
@@ -6200,7 +6201,10 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
 		scan = table_beginscan(oldrel, snapshot, 0, NULL);
 
-		/* FIXME: reuse code in ExecOpenIndices instead of duplicating it here */
+		/*
+		 * We need to insert tuple into the global indexes so prepare index
+		 * relation descriptor and index info array for each global index.
+		 */
 		if (nglobalindexes > 0)
 		{
 			ListCell   *lc1,
@@ -6208,11 +6212,14 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 			int			index = 0;
 
 			/* Allocate space for index descriptors and index info arrays */
-			indexdescs = (RelationPtr) palloc(nglobalindexes * sizeof(Relation));
-			indexInfoArray = (IndexInfo **) palloc(nglobalindexes * sizeof(IndexInfo *));	
+			indexdescs =
+				(RelationPtr) palloc(nglobalindexes * sizeof(Relation));
+			indexInfoArray =
+				(IndexInfo **) palloc(nglobalindexes * sizeof(IndexInfo *));
 
 			/*
-			 * Build index info for each global index.
+			 * Loop through global index oids and partition ids and build index
+			 * info for each global index.
 			 */
 			forboth(lc1, tab->globalindexoids,
 					lc2, tab->partids)
@@ -6399,9 +6406,8 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 				rootTuple = (ItemPointer) DatumGetPointer(datum);
 
 				/* 
-				 * Loop through all the global indexes and call index_insert
-				 * need to get values from insertslot because index_insert
-				 * accept the values
+				 * Loop through all the global indexes and insert the value
+				 * into all of them by calling index_insert.
 				 */
 				for (i = 0; i < nglobalindexes; i++)
 				{
@@ -6428,12 +6434,14 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 			CHECK_FOR_INTERRUPTS();
 		}
 
-		for (i = 0; i < nglobalindexes; i++)
-			index_close(indexdescs[i], NoLock);
-
-		/* indexInfoArray and indexdescs are allocated together so free the memory. */
-		if (indexInfoArray != NULL)
+		/*
+		 * Close the global index relations and also free the memory allocated
+		 * for relation desc and index info arrays.
+		 */
+		if (nglobalindexes > 0)
 		{
+			for (i = 0; i < nglobalindexes; i++)
+				index_close(indexdescs[i], NoLock);
 			pfree(indexInfoArray);
 			pfree(indexdescs);
 		}
@@ -18429,6 +18437,7 @@ AttachParittionsToGlobalIndex(Relation irel, List *reloids, List **wqueue)
 	 */
 	foreach_oid(childoid, reloids)
 	{
+		/* Caller should be holding the lock for all the children. */
 		Relation	childrel = table_open(childoid, NoLock);
 		PartitionId	partid;
 
@@ -18504,7 +18513,7 @@ AttachToGlobalIndexes(List **wqueue, Relation rel, List *reloids)
 		/* We don't need to do anything if this is not a global index. */
 		if (!RelationIsGlobalIndex(irel))
 		{
-			table_close(irel, NoLock);
+			table_close(irel, RowExclusiveLock);
 			continue;
 		}
 
@@ -18521,7 +18530,7 @@ AttachToGlobalIndexes(List **wqueue, Relation rel, List *reloids)
 		 */
 		CacheInvalidateRelcache(irel);
 
-		/* Close the index relation but don't release the lock. */
+		/* Close the index relation, keep the lock till end of transaction */
 		table_close(irel, NoLock);
 	}
 
@@ -18782,6 +18791,7 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd,
 	/* Attach a new partition to the partitioned table. */
 	attachPartitionTable(wqueue, rel, attachrel, cmd->bound);
 
+	/* Attach partition to the global indexes. */
 	AttachToGlobalIndexes(wqueue, rel, attachrel_children);
 
 	/*

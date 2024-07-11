@@ -46,19 +46,22 @@ IndexGetNextPartitionID(Relation irel)
 	partid = irel->rd_indexpartinfo->max_partid + 1;
 
 	/*
-	 * Increase the max_partid in cache, in case the cache is invalidated we
+	 * Store the new value in the cache, in case the cache is invalidated we
 	 * will get the max value again from the system catalog, so there should
 	 * not be any issue.
 	 */
 	irel->rd_indexpartinfo->max_partid = partid;
 
-	/* TODO: check availability of this partid and find the unused value*/
+	/* TODO: check availability of this partid and find the unused value */
 
 	return partid;
 }
 
 /*
- * InsertIndexPartitionEntry - Insert a reloid to parition id mapping
+ * InsertIndexPartitionEntry - Insert parition id to reloid mapping
+ *
+ * Insert parition id to relation oid mapping for the global index into the
+ * pg_index_partitions table.
  */
 void
 InsertIndexPartitionEntry(Relation irel, Oid reloid, PartitionId partid)
@@ -71,9 +74,7 @@ InsertIndexPartitionEntry(Relation irel, Oid reloid, PartitionId partid)
 
 	rel = table_open(IndexPartitionsRelationId, RowExclusiveLock);
 
-	/*
-	 * Make the pg_index_partitions entry
-	 */
+	/* Make the pg_index_partitions entry. */
 	values[Anum_pg_index_partitions_indexoid - 1] = ObjectIdGetDatum(indexoid);
 	values[Anum_pg_index_partitions_reloid - 1] = ObjectIdGetDatum(reloid);
 	values[Anum_pg_index_partitions_partid - 1] = PartitionIdGetDatum(partid);
@@ -90,8 +91,11 @@ InsertIndexPartitionEntry(Relation irel, Oid reloid, PartitionId partid)
 }
 
 /*
- * DeleteIndexPartitionEntries - Delete all index partition entries for a given
- *								 index id.
+ * DeleteIndexPartitionEntries - Delete all index partition entries.
+ *
+ * This will delete all the entires for given global index id from
+ * pg_index_partitions table.  This should only be called when global index
+ * is being dropped.
  */
 void
 DeleteIndexPartitionEntries(Oid indrelid)
@@ -101,9 +105,7 @@ DeleteIndexPartitionEntries(Oid indrelid)
 	SysScanDesc scan;
 	HeapTuple	tuple;
 
-	/*
-	 * Find pg_inherits entries by inhrelid.
-	 */
+	/* Find pg_index_partitions entries by indrelid. */
 	catalogRelation = table_open(IndexPartitionsRelationId, RowExclusiveLock);
 	ScanKeyInit(&key,
 				Anum_pg_index_partitions_indexoid,
@@ -139,13 +141,18 @@ BuildIndexPartitionInfo(Relation relation, MemoryContext context)
 	MemoryContext oldcontext;
 	HASHCTL		ctl;
 
+	/*
+	 * Open pg_index_partition table for getting the partition id to reloid
+	 * mapping for the input index relation.
+	 */
 	rel = table_open(IndexPartitionsRelationId, AccessShareLock);
 
 	oldcontext = MemoryContextSwitchTo(context);
 	map = (IndexPartitionInfoData *) palloc0(sizeof(IndexPartitionInfoData));
 	map->context = context;
 
-	ctl.keysize = sizeof(int32);
+	/* Make a new hash table for the cache */
+	ctl.keysize = sizeof(Oid);
 	ctl.entrysize = sizeof(IndexPartitionInfoEntry);
 	ctl.hcxt = context;
 
@@ -157,7 +164,7 @@ BuildIndexPartitionInfo(Relation relation, MemoryContext context)
 	ScanKeyInit(&key,
 				Anum_pg_index_partitions_indexoid,
 				BTEqualStrategyNumber, F_OIDEQ,
-				ObjectIdGetDatum(relation->rd_rel->oid));
+				ObjectIdGetDatum(RelationGetRelid(relation)));
 
 	scan = systable_beginscan(rel, IndexPartitionsIndexId, true,
 							  NULL, 1, &key);
@@ -188,15 +195,14 @@ BuildIndexPartitionInfo(Relation relation, MemoryContext context)
 	relation->rd_indexpartinfo = map;
 	systable_endscan(scan);
 
-
 	table_close(rel, AccessShareLock);
 }
 
 /*
  * IndexGetRelationPartitionId - Get partition id for the reloid
  *
- * Get the partition ID for the given partition relation OID
- * for the specified global index relation.
+ * Get the partition ID for the given partition relation OID for the specified
+ * global index relation.
  */
 PartitionId
 IndexGetRelationPartitionId(Relation irel, Oid reloid)

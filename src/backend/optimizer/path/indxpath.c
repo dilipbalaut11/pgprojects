@@ -263,7 +263,7 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 			continue;
 
 		/*
-		 * For non partitioned table we should not get the global index info
+		 * For non partitioned table we should not get the global index info.
 		 * Check comments in get_relation_info() where we are adding
 		 * IndexOptInfo nodes.
 		 */
@@ -1754,7 +1754,7 @@ check_index_only(RelOptInfo *rel, IndexOptInfo *index)
 	if (!enable_indexonlyscan)
 		return false;
 
-	/* Do not support index only scan fro global index yet. */
+	/* Currently we do not support index only scan for global indexes. */
 	if (index->global)
 		return false;
 

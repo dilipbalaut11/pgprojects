@@ -1093,9 +1093,9 @@ index_create(Relation heapRelation,
 		list_free(tableIds);
 
 		/*
-		 * Cache got built while we were inserting the tuple in system table
-		 * so this might not be complete so clean this up and let it get build
-		 * whenever needed.
+		 * IndexPartitionInfo cache got built while we were inserting the tuple
+		 * in system table so this might not be complete so clean this up and
+		 * let it get build whenever needed.
 		 */
 		indexRelation->rd_indexpartinfo = NULL;
 	}
@@ -1320,10 +1320,7 @@ index_create(Relation heapRelation,
 		CommandCounterIncrement();
 	}
 	else
-	{
-		indexRelation->rd_indexpartinfo = NULL;
 		index_build(heapRelation, indexRelation, indexInfo, false, true);
-	}
 
 	/*
 	 * Close the index; but we keep the lock that we acquired above until end
@@ -2797,7 +2794,7 @@ FormIndexDatum(IndexInfo *indexInfo,
 
 		/*
 		 * If the attribute number is PartitionIdAttributeNumber then directly
-		 * assign to the predefined partitionid_attr constant.
+		 * assign the value stored in indexInfo->ii_partid.
 		 */
 		if (keycol == PartitionIdAttributeNumber)
 		{
@@ -3074,8 +3071,7 @@ index_build(Relation heapRelation,
 	 * Note that planner considers parallel safety for us.
 	 */
 	if (parallel && IsNormalProcessingMode() &&
-		indexRelation->rd_indam->amcanbuildparallel &&
-		!RelationIsGlobalIndex(indexRelation)) /* TODO: Support parallel build for global index */
+		indexRelation->rd_indam->amcanbuildparallel)
 		indexInfo->ii_ParallelWorkers =
 			plan_create_index_workers(RelationGetRelid(heapRelation),
 									  RelationGetRelid(indexRelation));

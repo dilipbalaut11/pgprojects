@@ -71,6 +71,7 @@ table_slot_callbacks(Relation relation)
 		 */
 		tts_cb = &TTSOpsHeapTuple;
 	}
+	/* TODO : recheck this and add comments. */
 	else if(relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
 		tts_cb = &TTSOpsBufferHeapTuple;

@@ -1570,6 +1570,11 @@ RelationInitIndexAccessInfo(Relation relation)
 
 	(void) RelationGetIndexAttOptions(relation, false);
 
+	/*
+	 * If this is a global index then also build cache for partition id to
+	 * relation oid mapping.  For more details about this mapping read comments
+	 * atop IndexPartitionInfoData.
+	 */
 	if (RelationIsGlobalIndex(relation))
 		BuildIndexPartitionInfo(relation, indexcxt);
 
@@ -4882,13 +4887,48 @@ RelationGetIndexList(Relation relation)
 
 	table_close(indrel, AccessShareLock);
 
-	/* Get all the global indexes on all its ancestors. */
+	/*
+	 * If this is a partition then also get all the global indexes on all its
+	 * ancestors.  We will recursively call RelationGetIndexList to get the
+	 * global indexes from all the ancestors.
+	 */
 	if (get_rel_relispartition(RelationGetRelid(relation)))
 	{
-		List *globalindexlist;
+		Oid		parentid;
+		List   *globalindexlist = NIL;
+		List   *indexlist = NIL;
+		Relation	parent;
 
-		globalindexlist = RelationGetAncestorsGlobalIndexList(relation);
-		result = list_concat_unique_oid(result, globalindexlist);
+		/* Get the list of all the ancestor relations. */
+		parentid = get_partition_parent(RelationGetRelid(relation), false);
+		if (OidIsValid(parentid))
+		{
+			parent = table_open(parentid, AccessShareLock);
+
+			/* Get list of all the indexes on this relation. */
+			if (RelationGetForm(parent)->relhasindex)
+				indexlist = RelationGetIndexList(parent);
+
+			/*
+			 * Process all the indexes to collect the list of all global index
+			 * OIDs.
+			 */
+			foreach_oid(indexoid, indexlist)
+			{
+				/* XXX what lock mode should be acquired. */
+				Relation	indexDesc = index_open(indexoid, AccessShareLock);
+
+				if (RelationIsGlobalIndex(indexDesc))
+					globalindexlist = lappend_oid(globalindexlist, indexoid);
+
+				index_close(indexDesc, AccessShareLock);
+			}
+
+			table_close(parent, AccessShareLock);
+			list_free(indexlist);
+
+			result = list_concat_unique_oid(result, globalindexlist);
+		}
 	}
 
 	/* Sort the result list into OID order, per API spec. */
@@ -5411,6 +5451,9 @@ restart:
 			 * Obviously, non-key columns couldn't be referenced by foreign
 			 * key or identity key. Hence we do not include them into
 			 * uindexattrs, pkindexattrs and idindexattrs bitmaps.
+			 *
+			 * Also ignore the parittion id attribute as this is an internal
+			 * attribute added for the global indexes.
 			 */
 			if (attrnum != 0 && attrnum != PartitionIdAttributeNumber)
 			{
@@ -6913,50 +6956,4 @@ ResOwnerReleaseRelation(Datum res)
 	rel->rd_refcnt -= 1;
 
 	RelationCloseCleanup((Relation) res);
-}
-
-/*
- * Retrieve the complete list of global indexes found across all ancestors of
- * this relation.
- */
-List *
-RelationGetAncestorsGlobalIndexList(Relation relation)
-{
-	List	   *ancestors;
-	List	   *globalindexlist = NIL;
-
-	/* Get the list of all the ancestor relations. */
-	ancestors =	get_partition_ancestors(RelationGetRelid(relation));
-
-	/*
-	 * Loop through all the ancestor relations and fetch the global indexes
-	 * from each of them and append to a common global index list.
-	 */
-	foreach_oid(ancestor, ancestors)
-	{
-		List	   *indexlist = NIL;
-		Relation	parent = table_open(ancestor, AccessShareLock);
-
-		/* Get list of all the indexes on this relation. */
-		if (RelationGetForm(parent)->relhasindex)
-			indexlist = RelationGetIndexList(parent);
-
-		/*
-		 * Process all the indexes to collect the list of all global index
-		 * OIDs.
-		 */
-		foreach_oid(indexoid, indexlist)
-		{
-			Relation	indexDesc = index_open(indexoid, AccessShareLock);
-
-			if (RelationIsGlobalIndex(indexDesc))
-				globalindexlist = lappend_oid(globalindexlist, indexoid);
-
-			index_close(indexDesc, AccessShareLock);
-		}
-		table_close(parent, AccessShareLock);
-	}
-	list_free(ancestors);
-
-	return globalindexlist;
 }

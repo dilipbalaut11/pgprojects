@@ -44,10 +44,6 @@ static void get_partition_ancestors_worker(Relation inhRel, Oid relid,
  *
  * If the partition is in the process of being detached, an error is thrown,
  * unless even_if_detached is passed as true.
- *
- * Note: Because this function assumes that the relation whose OID is passed
- * as an argument will have precisely one parent, it should only be called
- * when it is known that the relation is a partition.
  */
 Oid
 get_partition_parent(Oid relid, bool even_if_detached)
@@ -62,7 +58,10 @@ get_partition_parent(Oid relid, bool even_if_detached)
 										 &detach_pending);
 
 	if (!OidIsValid(result))
-		elog(ERROR, "could not find tuple for parent of relation %u", relid);
+	{
+		table_close(catalogRelation, AccessShareLock);
+		return InvalidOid;
+	}
 
 	if (detach_pending && !even_if_detached)
 		elog(ERROR, "relation %u has no parent because it's being detached",

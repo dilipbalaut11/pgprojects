@@ -1917,8 +1917,8 @@ ComputeIndexAttrs(IndexInfo *indexInfo,
 		/*
 		 * Process the column-or-expression to be indexed.  For partition id
 		 * attribute both name and expr is set as NULL.  And we can directly
-		 * point to the predefine  FormData_pg_attribute for the partition
-		 * id attribute.
+		 * point to the predefine FormData_pg_attribute for the partition id
+		 * attribute.
 		 */
 		if ((attribute->name == NULL) && (attribute->expr == NULL))
 		{

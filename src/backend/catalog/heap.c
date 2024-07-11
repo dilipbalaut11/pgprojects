@@ -1859,8 +1859,9 @@ heap_drop_with_catalog(Oid relid)
 		update_default_partition_oid(parentOid, InvalidOid);
 
 	/*
-	 * Relation is being dropped so detach this reloid from all the global
-	 * indexes.
+	 * If leaf relation of a partitioned table is beging drop then detach it
+	 * from the global indexes of ancestors.  We only keep mapping for leaf
+	 * relation so we don't need to do anything for non leaf relations.
 	 */
 	if (rel->rd_rel->relkind == RELKIND_RELATION &&
 		get_rel_relispartition(relid))

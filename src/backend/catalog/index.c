@@ -2998,33 +2998,6 @@ index_update_stats(Relation rel,
 }
 
 /*
- * Recursively update the index stats for all the child table
- */
-void
-index_update_stats_recursive(Relation rel,
-							 bool hasindex,
-							 double reltuples)
-{
-	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-	{
-		PartitionDesc	pd = RelationGetPartitionDesc(rel, true);
-
-		for (int i = 0; i < pd->nparts; i++)
-		{
-			Relation	partRel;
-
-			partRel = table_open(pd->oids[i], AccessShareLock);
-
-			index_update_stats_recursive(partRel, hasindex, reltuples);
-			table_close(partRel, AccessShareLock);
-		}
-	}
-
-	index_update_stats(rel, hasindex, reltuples);
-}
-
-
-/*
  * index_build - invoke access-method-specific index build procedure
  *
  * On entry, the index's catalog entries are valid, and its physical disk
@@ -3196,13 +3169,17 @@ index_build(Relation heapRelation,
 	}
 
 	/*
-	 * Update the pg_class rows for the heap and index. If this is a
-	 * partitioned relation, meaning we are building a global index, we don't
-	 * need to update the tuple stats for the heap relation. In this case, just
-	 * update the relhasindex flag.
+	 * Update the pg_class rows for the heap and index.  If this is a
+	 * partitioned relation, meaning we are building a global index, so just
+	 * set the relation has an index.  We have already updated the heap tuple
+	 * stats for leaf relation while processing each partition inside
+	 * _bt_spool_scan_partitions().
+	 *
+	 * TODO: We might choose to change the ambuild function to return array
+	 * of stats so that we can get a seperate stats for each partition.
 	 */
 	if (heapRelation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		index_update_stats_recursive(heapRelation, true, -1.0);
+		index_update_stats(heapRelation, true, -1.0);
 	else
 		index_update_stats(heapRelation,
 						   true,

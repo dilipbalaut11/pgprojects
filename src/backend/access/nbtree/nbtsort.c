@@ -354,7 +354,7 @@ btbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 
 /*
  * This is a wrapper function to call table_index_build_scan() for each leaf
- * partition while building a btree index.
+ * partition while building a global index.
  */
 static double
 _bt_spool_scan_partitions(IndexInfo *indexInfo, Relation rel,
@@ -372,6 +372,7 @@ _bt_spool_scan_partitions(IndexInfo *indexInfo, Relation rel,
 	foreach_oid(tableOid, tableIds)
 	{
 		Relation	childrel = table_open(tableOid, NoLock);
+		double		curreltuples;
 
 		if (childrel->rd_rel->relkind != RELKIND_RELATION)
 		{
@@ -384,9 +385,17 @@ _bt_spool_scan_partitions(IndexInfo *indexInfo, Relation rel,
 		 * index.
 		 */
 		indexInfo->ii_partid = IndexGetRelationPartitionId(irel, tableOid);
-		reltuples += table_index_build_scan(childrel, irel, indexInfo, true,
-											true, _bt_build_callback,
-											(void *) buildstate, NULL);
+		curreltuples = table_index_build_scan(childrel, irel, indexInfo, true,
+											  true, _bt_build_callback,
+											  (void *) buildstate, NULL);
+		reltuples += curreltuples;
+
+		/*
+		 * This is the right place to update the relation stats while building
+		 * the global index because at this point we know the individual
+		 * tuples for each partition.
+		 */
+		index_update_stats(childrel, true, curreltuples);
 		table_close(childrel, NoLock);
 	}
 
@@ -525,8 +534,8 @@ _bt_spools_heapscan(Relation heap, Relation index, BTBuildState *buildstate,
 		 * child partitions and insert into the global index.
 		 */
 		if (RelationIsGlobalIndex(index))
-			reltuples += _bt_spool_scan_partitions(indexInfo, heap,
-												   buildstate, index);
+			reltuples = _bt_spool_scan_partitions(indexInfo, heap,
+												  buildstate, index);
 		else
 			reltuples = table_index_build_scan(heap, index, indexInfo, true,
 											   true, _bt_build_callback,

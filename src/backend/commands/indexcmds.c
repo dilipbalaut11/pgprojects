@@ -1260,6 +1260,12 @@ DefineIndex(Oid tableId,
 		CreateComments(indexRelationId, RelationRelationId, 0,
 					   stmt->idxcomment);
 
+	/*
+	 * If table is partitioned then create index on each partition.  But if
+	 * we are building a global index we don't need to create it on each
+	 * partition, there will be just one global index which will hold data from
+	 * all the children.
+	 */
 	if (partitioned && !stmt->global)
 	{
 		PartitionDesc partdesc;
@@ -2853,7 +2859,8 @@ ReindexIndex(const ReindexStmt *stmt, const ReindexParams *params, bool isTopLev
 		ReindexParams newparams = *params;
 
 		newparams.options |= REINDEXOPT_REPORT_PROGRESS;
-		reindex_index(stmt, indOid, false, persistence, &newparams);
+		reindex_index(stmt, indOid, false, persistence, &newparams,
+					  relkind == RELKIND_GLOBAL_INDEX);
 	}
 }
 
@@ -3403,7 +3410,8 @@ ReindexMultipleInternal(const ReindexStmt *stmt, const List *relids, const Reind
 
 			newparams.options |=
 				REINDEXOPT_REPORT_PROGRESS | REINDEXOPT_MISSING_OK;
-			reindex_index(stmt, relid, false, relpersistence, &newparams);
+			reindex_index(stmt, relid, false, relpersistence, &newparams,
+						  false);
 			PopActiveSnapshot();
 			/* reindex_index() does the verbose output */
 		}

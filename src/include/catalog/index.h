@@ -158,7 +158,7 @@ extern Oid	IndexGetRelation(Oid indexId, bool missing_ok);
 
 extern void reindex_index(const ReindexStmt *stmt, Oid indexId,
 						  bool skip_constraint_checks, char persistence,
-						  const ReindexParams *params);
+						  const ReindexParams *params, bool isglobal);
 
 /* Flag bits for reindex_relation(): */
 #define REINDEX_REL_PROCESS_TOAST			0x01

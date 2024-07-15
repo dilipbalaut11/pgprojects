@@ -3637,7 +3637,7 @@ IndexGetRelation(Oid indexId, bool missing_ok)
 void
 reindex_index(const ReindexStmt *stmt, Oid indexId,
 			  bool skip_constraint_checks, char persistence,
-			  const ReindexParams *params)
+			  const ReindexParams *params, bool isglobal)
 {
 	Relation	iRel,
 				heapRelation;
@@ -3662,6 +3662,13 @@ reindex_index(const ReindexStmt *stmt, Oid indexId,
 	/* if relation is missing, leave */
 	if (!OidIsValid(heapId))
 		return;
+
+	/*
+	 * If we are reindexing the global index then lock all the inheritors.
+	 * ShareLock is enough to prevent schema modifications.
+	 */
+	if (isglobal)
+		(void) find_all_inheritors(heapId, ShareLock, NULL);
 
 	if ((params->options & REINDEXOPT_MISSING_OK) != 0)
 		heapRelation = try_table_open(heapId, ShareLock);
@@ -4092,8 +4099,18 @@ reindex_relation(const ReindexStmt *stmt, Oid relid, int flags,
 			continue;
 		}
 
+		/*
+		 * XXX currently global indexes are not reindexed while reindexing the
+		 * relation.  However they can be reindexed using REINDEX INDEX
+		 * idxname.  We might provide an option for user to tell us whether
+		 * they want to reindex the global indexes as well while reindexing the
+		 * relation.
+		 */
+		if (get_rel_relkind(indexOid) == RELKIND_GLOBAL_INDEX)
+			continue;
+
 		reindex_index(stmt, indexOid, !(flags & REINDEX_REL_CHECK_CONSTRAINTS),
-					  persistence, params);
+					  persistence, params, false);
 
 		CommandCounterIncrement();
 

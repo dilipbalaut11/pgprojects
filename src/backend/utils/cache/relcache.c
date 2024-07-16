@@ -4915,14 +4915,10 @@ RelationGetIndexList(Relation relation)
 			 */
 			foreach_oid(indexoid, indexlist)
 			{
-				/* XXX what lock mode should be acquired. */
-				Relation	indexDesc = index_open(indexoid, AccessShareLock);
-
-				if (RelationIsGlobalIndex(indexDesc))
+				if (get_rel_relkind(indexoid) == RELKIND_GLOBAL_INDEX)
 					globalindexlist = lappend_oid(globalindexlist, indexoid);
-
-				index_close(indexDesc, AccessShareLock);
 			}
+
 
 			table_close(parent, AccessShareLock);
 			list_free(indexlist);

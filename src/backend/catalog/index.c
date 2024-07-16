@@ -727,6 +727,7 @@ UpdateIndexRelation(Oid indexoid,
  * allow_system_table_mods: allow table to be a system catalog
  * is_internal: if true, post creation hook for new index
  * constraintId: if not NULL, receives OID of created constraint
+ * inheritors: if not NIL, receives OIDs of all the inheritors
  *
  * Returns the OID of the created index.
  */
@@ -751,7 +752,8 @@ index_create(Relation heapRelation,
 			 bits16 constr_flags,
 			 bool allow_system_table_mods,
 			 bool is_internal,
-			 Oid *constraintId)
+			 Oid *constraintId,
+			 List *inheritors)
 {
 	Oid			heapRelationId = RelationGetRelid(heapRelation);
 	Relation	pg_class;
@@ -1073,24 +1075,15 @@ index_create(Relation heapRelation,
 	 */
 	if (global_index)
 	{
-		List   *tableIds;
-
-		if (heapRelation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-			tableIds = find_all_inheritors(heapRelationId, NoLock, NULL);
-		else
-			tableIds = list_make1_oid(heapRelationId);
-
-		AttachParittionsToGlobalIndex(indexRelation, tableIds, NULL);
-
-		foreach_oid(tableOid, tableIds)
+		Assert(inheritors != NIL);
+		AttachParittionsToGlobalIndex(indexRelation, inheritors, NULL);
+		foreach_oid(tableOid, inheritors)
 		{
 			Relation	childrel = table_open(tableOid, NoLock);
 
 			CacheInvalidateRelcache(childrel);
 			table_close(childrel, NoLock);
 		}
-
-		list_free(tableIds);
 
 		/*
 		 * IndexPartitionInfo cache got built while we were inserting the tuple
@@ -1505,7 +1498,8 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId,
 							  0,
 							  true, /* allow table to be a system catalog? */
 							  false,	/* is_internal? */
-							  NULL);
+							  NULL,
+							  NIL);
 
 	/* Close the relations used and clean up */
 	index_close(indexRelation, NoLock);

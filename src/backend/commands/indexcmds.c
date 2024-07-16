@@ -516,6 +516,7 @@ WaitForOlderSnapshots(TransactionId limitXmin, bool progress)
  *		of a partitioned index.
  * 'parentConstraintId': the OID of the parent constraint; InvalidOid if not
  *		the child of a constraint (only used when recursing)
+ * 'inheritors' List of all inheritor's OIDs if this is a partitioned relation;
  * 'total_parts': total number of direct and indirect partitions of relation;
  *		pass -1 if not known or rel is not partitioned.
  * 'is_alter_table': this is due to an ALTER rather than a CREATE operation.
@@ -535,6 +536,7 @@ DefineIndex(Oid tableId,
 			Oid indexRelationId,
 			Oid parentIndexId,
 			Oid parentConstraintId,
+			List *inheritors,
 			int total_parts,
 			bool is_alter_table,
 			bool check_rights,
@@ -1223,7 +1225,7 @@ DefineIndex(Oid tableId,
 					 coloptions, NULL, reloptions,
 					 flags, constr_flags,
 					 allowSystemTableMods, !check_rights,
-					 &createdConstraintId);
+					 &createdConstraintId, inheritors);
 
 	ObjectAddressSet(address, RelationRelationId, indexRelationId);
 
@@ -1535,6 +1537,7 @@ DefineIndex(Oid tableId,
 									InvalidOid, /* no predefined OID */
 									indexRelationId,	/* this is our child */
 									createdConstraintId,
+									NIL,
 									-1,
 									is_alter_table, check_rights,
 									check_not_in_use,

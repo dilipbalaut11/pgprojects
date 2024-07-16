@@ -92,5 +92,63 @@ CREATE UNIQUE INDEX global_idx_unique ON range_parted(b) global;
 INSERT INTO range_parted VALUES(1,2); -- Fail with duplicate
 DROP INDEX global_idx_unique;
 INSERT INTO range_parted VALUES(1,2); -- Now this should pass
+
+-- multiple level multiple type partitions
+CREATE TABLE parent_table (
+    id INT,
+    category TEXT,
+    sub_category TEXT,
+    value INT
+) PARTITION BY RANGE (id);
+
+
+DO $$
+DECLARE
+    range_start INT;
+    range_end INT;
+    range_partition_name TEXT;
+    list_partition_name TEXT;
+    hash_partition_name TEXT;
+    i INT;
+    j INT;
+    k INT;
+BEGIN
+    -- Create range partitions
+    FOR i IN 0..10 LOOP
+        range_start := i * 1000;
+        range_end := (i + 1) * 1000;
+        range_partition_name := format('parent_table_%s', i);
+        EXECUTE format('CREATE TABLE %I PARTITION OF parent_table FOR VALUES FROM (%s) TO (%s) PARTITION BY LIST(category)', range_partition_name, range_start, range_end);
+
+        -- Create list partitions within each range partition
+        FOR j IN 1..10 LOOP
+            list_partition_name := format('%s_list_%s', range_partition_name, j);
+            EXECUTE format('CREATE TABLE %I PARTITION OF %I FOR VALUES IN (''%s'') PARTITION BY HASH (id)', list_partition_name, range_partition_name, j);
+
+            -- Create hash partitions within each list partition
+            FOR k IN 0..4 LOOP
+                hash_partition_name := format('%s_hash_%s', list_partition_name, k);
+                EXECUTE format('CREATE TABLE %I PARTITION OF %I FOR VALUES WITH (MODULUS 5, REMAINDER %s)', hash_partition_name, list_partition_name, k);
+            END LOOP;
+        END LOOP;
+    END LOOP;
+END $$;
+
+
+DO $$
+DECLARE
+    i INT := 1;
+BEGIN
+    WHILE i <= 10000 LOOP
+        INSERT INTO parent_table (id, category, sub_category, value)
+        VALUES (i, '' || (i % 10 + 1), '' || (i % 10 + 1), i);
+        i := i + 1;
+    END LOOP;
+END $$;
+
+CREATE INDEX global_index_v ON parent_table(value) global;
+EXPLAIN (COSTS OFF) SELECT * FROM parent_table WHERE value = 9000;
+SELECT * FROM parent_table WHERE value = 9000;
+
 -- Cleanup
 DROP TABLE range_parted;

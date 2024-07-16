@@ -1234,6 +1234,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 						InvalidOid,
 						RelationGetRelid(idxRel),
 						constraintOid,
+						NIL,
 						-1,
 						false, false, false, false, false);
 
@@ -9287,6 +9288,7 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 						  InvalidOid,	/* no predefined OID */
 						  InvalidOid,	/* no parent index */
 						  InvalidOid,	/* no parent constraint */
+						  NIL,
 						  -1,	/* total_parts unknown */
 						  true, /* is_alter_table */
 						  check_rights,
@@ -19056,6 +19058,7 @@ AttachPartitionEnsureIndexes(List **wqueue, Relation rel, Relation attachrel)
 			DefineIndex(RelationGetRelid(attachrel), stmt, InvalidOid,
 						RelationGetRelid(idxRel),
 						conOid,
+						NIL,
 						-1,
 						true, false, false, false, false);
 		}

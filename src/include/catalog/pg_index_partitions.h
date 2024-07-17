@@ -19,9 +19,11 @@
 #define PG_INDEX_PARTITIONS_H
 
 #include "catalog/genbki.h"
+#include "catalog/pg_attribute.h"
 #include "catalog/pg_index_partitions_d.h"
 #include "catalog/pg_type_d.h"
 #include "utils/hsearch.h"
+#include "utils/relcache.h"
 
 /* ----------------
  *		pg_index_partitions definition.  cpp turns this into

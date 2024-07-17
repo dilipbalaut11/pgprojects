@@ -778,38 +778,7 @@ index_getnext_slot(IndexScanDesc scan, ScanDirection direction, TupleTableSlot *
 		 * tuple from that relation.
 		 */
 		if (scan->xs_global_index)
-		{
-			Oid			relid;
-			GlobalIndexPartitionCacheEntry *entry;
-
-			relid = scan->xs_heapoid;
-
-			/*
-			 * During a global index scan, we might encounter index entries
-			 * that belong to different partitions, which could be interleaved.
-			 * Each time we get a new index tuple, we need to verify if the
-			 * scan->heapRelation matches the relid of that tuple. If it does
-			 * not, we fetch the corresponding entry from the cache and store
-			 * it in the scan descriptor.
-			 */
-			if (scan->heapRelation == NULL)
-			{
-				entry = globalindex_partition_entry_lookup(
-										scan->xs_global_index_cache, relid);
-
-				scan->heapRelation = entry->relation;
-				scan->xs_heapfetch = entry->heapfetch;
-			}
-			else if (scan->heapRelation &&
-					 relid != RelationGetRelid(scan->heapRelation))
-			{
-				table_index_fetch_reset(scan->xs_heapfetch);
-				entry = globalindex_partition_entry_lookup(
-										scan->xs_global_index_cache, relid);
-				scan->heapRelation = entry->relation;
-				scan->xs_heapfetch = entry->heapfetch;
-			}
-		}
+			global_indexscan_setup_partrel(scan);
 
 		if (index_fetch_heap(scan, slot))
 			return true;
@@ -1153,6 +1122,46 @@ index_opclass_options(Relation indrel, AttrNumber attnum, Datum attoptions,
 	(void) FunctionCall1(procinfo, PointerGetDatum(&relopts));
 
 	return build_local_reloptions(&relopts, attoptions, validate);
+}
+
+/*
+ * Helper function for index_getnext_slot() and IndexOnlyNext for setting up
+ * a proper scan->heapRelation and scan->xs_heapfetch during global index scan
+ * as global index will return tids which belongs to different partitions.
+ */
+void
+global_indexscan_setup_partrel(IndexScanDesc scan)
+{
+	Oid		relid;
+	GlobalIndexPartitionCacheEntry *entry;
+
+	relid = scan->xs_heapoid;
+
+	/*
+	 * During a global index scan, we might encounter index entries that belong
+	 * to different partitions, which could be interleaved.  Each time we get
+	 * a new index tuple, we need to verify if the scan->heapRelation matches
+	 * the relid of that tuple. If it does not, we fetch the corresponding
+	 * entry from the cache and store it in the scan descriptor.
+	 */
+	if (scan->heapRelation == NULL)
+	{
+		entry = globalindex_partition_entry_lookup(
+								scan->xs_global_index_cache, relid);
+
+		scan->heapRelation = entry->relation;
+		scan->xs_heapfetch = entry->heapfetch;
+	}
+	else if (scan->heapRelation &&
+				relid != RelationGetRelid(scan->heapRelation))
+	{
+		table_index_fetch_reset(scan->xs_heapfetch);
+
+		entry = globalindex_partition_entry_lookup(
+								scan->xs_global_index_cache, relid);
+		scan->heapRelation = entry->relation;
+		scan->xs_heapfetch = entry->heapfetch;
+	}
 }
 
 /*

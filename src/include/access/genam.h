@@ -238,4 +238,5 @@ extern void systable_endscan_ordered(SysScanDesc sysscan);
 extern Relation globalindex_partition_rel_lookup(GlobalIndexPartitionCache pdir, Oid relid);
 extern void globalindex_partition_cache_destroy(GlobalIndexPartitionCache pdir);
 extern GlobalIndexPartitionCache create_globalindex_partition_cache(MemoryContext mcxt);
+extern void global_indexscan_setup_partrel(IndexScanDesc scan);
 #endif							/* GENAM_H */

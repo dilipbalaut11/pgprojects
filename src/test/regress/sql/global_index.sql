@@ -46,6 +46,10 @@ ALTER TABLE range_parted ATTACH PARTITION range_parted_5 FOR VALUES FROM (400000
 EXPLAIN (COSTS OFF) SELECT * FROM range_parted WHERE b = 550;
 SELECT * FROM range_parted WHERE b = 550 LIMIT 5;
 
+-- Check index only scan
+EXPLAIN (COSTS OFF) SELECT b FROM range_parted WHERE b = 550 LIMIT 5;
+SELECT b FROM range_parted WHERE b = 550 LIMIT 5;
+
 -- Attach to level-1 partition (test with multi level global index)
 CREATE TABLE range_parted_6(a int, b int);
 INSERT INTO range_parted_6 SELECT i,i%100 + 600 FROM generate_series(460000,490000) AS i;

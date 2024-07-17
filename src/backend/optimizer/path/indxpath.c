@@ -20,6 +20,7 @@
 #include "access/stratnum.h"
 #include "access/sysattr.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_index_partitions.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_opfamily.h"
 #include "catalog/pg_type.h"
@@ -1746,16 +1747,13 @@ check_index_only(RelOptInfo *rel, IndexOptInfo *index)
 {
 	bool		result;
 	Bitmapset  *attrs_used = NULL;
+	Bitmapset  *rowidvar = NULL;
 	Bitmapset  *index_canreturn_attrs = NULL;
 	ListCell   *lc;
 	int			i;
 
 	/* Index-only scans must be enabled */
 	if (!enable_indexonlyscan)
-		return false;
-
-	/* Currently we do not support index only scan for global indexes. */
-	if (index->global)
 		return false;
 
 	/*
@@ -1769,6 +1767,21 @@ check_index_only(RelOptInfo *rel, IndexOptInfo *index)
 	 * because attr_needed isn't computed for inheritance child rels.
 	 */
 	pull_varattnos((Node *) rel->reltarget->exprs, rel->relid, &attrs_used);
+
+	/*
+	 * FIXME: Ugly hack to avoid global index only scan during update/delete.
+	 * In normal case it is avoided because reltarget will have junkattribute
+	 * which would not match with index_canreturn_attrs.  But with global index
+	 * we are creating this scan on parent table so we would have extra
+	 * ROWID_VAR but that would not get caught while calling pull_varattnos
+	 * with rel->relid so we are searching here with sepecific ROWID_VAR.
+	 */
+	if (rel->nparts != 0)
+	{
+		pull_varattnos((Node *) rel->reltarget->exprs, ROWID_VAR, &rowidvar);
+		if (rowidvar != NULL)
+			return false;
+	}
 
 	/*
 	 * Add all the attributes used by restriction clauses; but consider only
@@ -1798,9 +1811,11 @@ check_index_only(RelOptInfo *rel, IndexOptInfo *index)
 
 		/*
 		 * For the moment, we just ignore index expressions.  It might be nice
-		 * to do something with them, later.
+		 * to do something with them, later.  For global index we also add
+		 * an internal partition id attribute so just ignore that as we don't
+		 * need to return that attribute from index.
 		 */
-		if (attno == 0)
+		if (attno == 0 || attno == PartitionIdAttributeNumber)
 			continue;
 
 		if (index->canreturn[i])

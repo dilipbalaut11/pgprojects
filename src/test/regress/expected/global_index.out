@@ -143,6 +143,25 @@ SELECT * FROM range_parted WHERE b = 550 LIMIT 5;
  400450 | 550
 (5 rows)
 
+-- Check index only scan
+EXPLAIN (COSTS OFF) SELECT b FROM range_parted WHERE b = 550 LIMIT 5;
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Limit
+   ->  Global Index Only Scan using global_idx on range_parted
+         Index Cond: (b = 550)
+(3 rows)
+
+SELECT b FROM range_parted WHERE b = 550 LIMIT 5;
+  b  
+-----
+ 550
+ 550
+ 550
+ 550
+ 550
+(5 rows)
+
 -- Attach to level-1 partition (test with multi level global index)
 CREATE TABLE range_parted_6(a int, b int);
 INSERT INTO range_parted_6 SELECT i,i%100 + 600 FROM generate_series(460000,490000) AS i;

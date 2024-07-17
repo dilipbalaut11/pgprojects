@@ -1464,7 +1464,11 @@ ExplainNode(PlanState *planstate, List *ancestors,
 					pname = sname = "Index Scan";
 			break;
 		case T_IndexOnlyScan:
-			pname = sname = "Index Only Scan";
+				if (get_rel_relkind(((IndexScan *) plan)->indexid) ==
+					RELKIND_GLOBAL_INDEX)
+					pname = sname = "Global Index Only Scan";
+				else
+					pname = sname = "Index Only Scan";
 			break;
 		case T_BitmapIndexScan:
 			pname = sname = "Bitmap Index Scan";

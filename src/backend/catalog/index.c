@@ -44,6 +44,7 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_description.h"
+#include "catalog/pg_index_partitions.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_operator.h"
@@ -62,6 +63,7 @@
 #include "nodes/nodeFuncs.h"
 #include "optimizer/optimizer.h"
 #include "parser/parser.h"
+#include "partitioning/partdesc.h"
 #include "pgstat.h"
 #include "rewrite/rewriteManip.h"
 #include "storage/bufmgr.h"
@@ -119,9 +121,6 @@ static void UpdateIndexRelation(Oid indexoid, Oid heapoid,
 								bool immediate,
 								bool isvalid,
 								bool isready);
-static void index_update_stats(Relation rel,
-							   bool hasindex,
-							   double reltuples);
 static void IndexCheckExclusion(Relation heapRelation,
 								Relation indexRelation,
 								IndexInfo *indexInfo);
@@ -342,12 +341,23 @@ ConstructTupleDescriptor(Relation heapRelation,
 			/* Simple index column */
 			const FormData_pg_attribute *from;
 
-			Assert(atnum > 0);	/* should've been caught above */
+			/*
+			 * For global indexes we will get partition id attribute as well.
+			 */
+			Assert(atnum > 0 || atnum == PartitionIdAttributeNumber);
 
 			if (atnum > natts)	/* safety check */
 				elog(ERROR, "invalid column number %d", atnum);
-			from = TupleDescAttr(heapTupDesc,
-								 AttrNumberGetAttrOffset(atnum));
+
+			/*
+			 * If the attribute number is PartitionIdAttributeNumber then
+			 * directly assign to the predefined partitionid_attr constant.
+			 */
+			if (atnum == PartitionIdAttributeNumber)
+				from = &partitionid_attr;
+			else
+				from = TupleDescAttr(heapTupDesc,
+									 AttrNumberGetAttrOffset(atnum));
 
 			to->atttypid = from->atttypid;
 			to->attlen = from->attlen;
@@ -717,6 +727,7 @@ UpdateIndexRelation(Oid indexoid,
  * allow_system_table_mods: allow table to be a system catalog
  * is_internal: if true, post creation hook for new index
  * constraintId: if not NULL, receives OID of created constraint
+ * inheritors: if not NIL, receives OIDs of all the inheritors
  *
  * Returns the OID of the created index.
  */
@@ -741,7 +752,8 @@ index_create(Relation heapRelation,
 			 bits16 constr_flags,
 			 bool allow_system_table_mods,
 			 bool is_internal,
-			 Oid *constraintId)
+			 Oid *constraintId,
+			 List *inheritors)
 {
 	Oid			heapRelationId = RelationGetRelid(heapRelation);
 	Relation	pg_class;
@@ -757,6 +769,7 @@ index_create(Relation heapRelation,
 	bool		invalid = (flags & INDEX_CREATE_INVALID) != 0;
 	bool		concurrent = (flags & INDEX_CREATE_CONCURRENT) != 0;
 	bool		partitioned = (flags & INDEX_CREATE_PARTITIONED) != 0;
+	bool		global_index = (flags & INDEX_CREATE_GLOBAL) != 0;
 	char		relkind;
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
@@ -768,7 +781,13 @@ index_create(Relation heapRelation,
 	/* partitioned indexes must never be "built" by themselves */
 	Assert(!partitioned || (flags & INDEX_CREATE_SKIP_BUILD));
 
-	relkind = partitioned ? RELKIND_PARTITIONED_INDEX : RELKIND_INDEX;
+	if (global_index)
+		relkind = RELKIND_GLOBAL_INDEX;
+	else if (partitioned)
+		relkind = RELKIND_PARTITIONED_INDEX;
+	else
+		relkind = RELKIND_INDEX;
+
 	is_exclusion = (indexInfo->ii_ExclusionOps != NULL);
 
 	pg_class = table_open(RelationRelationId, RowExclusiveLock);
@@ -1049,10 +1068,32 @@ index_create(Relation heapRelation,
 						!concurrent);
 
 	/*
-	 * Register relcache invalidation on the indexes' heap relation, to
-	 * maintain consistency of its index list
+	 * Create the mapping in pg_index_partitions table, also register relcache
+	 * invalidation on the indexes' heap relation, to maintain consistency of
+	 * its index list.  If we are creating a global index then invalidate the
+	 * relcache of all the inheritors as well.
 	 */
-	CacheInvalidateRelcache(heapRelation);
+	if (global_index)
+	{
+		Assert(inheritors != NIL);
+		AttachParittionsToGlobalIndex(indexRelation, inheritors, NULL);
+		foreach_oid(tableOid, inheritors)
+		{
+			Relation	childrel = table_open(tableOid, NoLock);
+
+			CacheInvalidateRelcache(childrel);
+			table_close(childrel, NoLock);
+		}
+
+		/*
+		 * IndexPartitionInfo cache got built while we were inserting the tuple
+		 * in system table so this might not be complete so clean this up and
+		 * let it get build whenever needed.
+		 */
+		indexRelation->rd_indexpartinfo = NULL;
+	}
+	else
+		CacheInvalidateRelcache(heapRelation);
 
 	/* update pg_inherits and the parent's relhassubclass, if needed */
 	if (OidIsValid(parentIndexRelid))
@@ -1272,9 +1313,7 @@ index_create(Relation heapRelation,
 		CommandCounterIncrement();
 	}
 	else
-	{
 		index_build(heapRelation, indexRelation, indexInfo, false, true);
-	}
 
 	/*
 	 * Close the index; but we keep the lock that we acquired above until end
@@ -1459,7 +1498,8 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId,
 							  0,
 							  true, /* allow table to be a system catalog? */
 							  false,	/* is_internal? */
-							  NULL);
+							  NULL,
+							  NIL);
 
 	/* Close the relations used and clean up */
 	index_close(indexRelation, NoLock);
@@ -2119,6 +2159,7 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	Relation	indexRelation;
 	HeapTuple	tuple;
 	bool		hasexprs;
+	bool		isglobal;
 	LockRelId	heaprelid,
 				indexrelid;
 	LOCKTAG		heaplocktag;
@@ -2303,6 +2344,9 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 		TransferPredicateLocksToHeapRelation(userIndexRelation);
 	}
 
+	/* Remember whether it is a global index. */
+	isglobal = RelationIsGlobalIndex(userIndexRelation);
+
 	/*
 	 * Schedule physical removal of the files (if any)
 	 */
@@ -2361,14 +2405,31 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	DeleteInheritsTuple(indexId, InvalidOid, false, NULL);
 
 	/*
+	 * Remove all the mapping present in pg_index_partitions table for this
+	 * global index.
+	 */
+	if (isglobal)
+		DeleteIndexPartitionEntries(indexId);
+
+	/*
 	 * We are presently too lazy to attempt to compute the new correct value
 	 * of relhasindex (the next VACUUM will fix it if necessary). So there is
 	 * no need to update the pg_class tuple for the owning relation. But we
 	 * must send out a shared-cache-inval notice on the owning relation to
 	 * ensure other backends update their relcache lists of indexes.  (In the
-	 * concurrent case, this is redundant but harmless.)
+	 * concurrent case, this is redundant but harmless.).  If we are dropping a
+	 * global index then invalidate the relcache of all the inheritors as well.
 	 */
-	CacheInvalidateRelcache(userHeapRelation);
+	if (isglobal)
+	{
+		List *tableIds = find_all_inheritors(heapId, NoLock, NULL);
+
+		foreach_oid(tableOid, tableIds)
+			CacheInvalidateRelcacheByRelid(tableOid);
+		list_free(tableIds);
+	}
+	else
+		CacheInvalidateRelcache(userHeapRelation);
 
 	/*
 	 * Close owning rel, but keep lock
@@ -2725,7 +2786,16 @@ FormIndexDatum(IndexInfo *indexInfo,
 		Datum		iDatum;
 		bool		isNull;
 
-		if (keycol < 0)
+		/*
+		 * If the attribute number is PartitionIdAttributeNumber then directly
+		 * assign the value stored in indexInfo->ii_partid.
+		 */
+		if (keycol == PartitionIdAttributeNumber)
+		{
+			iDatum = indexInfo->ii_partid;
+			isNull = false;
+		}
+		else if (keycol < 0)
 			iDatum = slot_getsysattr(slot, keycol, &isNull);
 		else if (keycol != 0)
 		{
@@ -2777,7 +2847,7 @@ FormIndexDatum(IndexInfo *indexInfo,
  * index.  When updating an index, it's important because some index AMs
  * expect a relcache flush to occur after REINDEX.
  */
-static void
+void
 index_update_stats(Relation rel,
 				   bool hasindex,
 				   double reltuples)
@@ -2921,7 +2991,6 @@ index_update_stats(Relation rel,
 	table_close(pg_class, RowExclusiveLock);
 }
 
-
 /*
  * index_build - invoke access-method-specific index build procedure
  *
@@ -2949,6 +3018,10 @@ index_build(Relation heapRelation,
 	Oid			save_userid;
 	int			save_sec_context;
 	int			save_nestlevel;
+
+	/* TODO: for now block parallel build */
+	if (RelationIsGlobalIndex(indexRelation))
+		parallel = false;
 
 	/*
 	 * sanity checks
@@ -3090,11 +3163,21 @@ index_build(Relation heapRelation,
 	}
 
 	/*
-	 * Update heap and index pg_class rows
+	 * Update the pg_class rows for the heap and index.  If this is a
+	 * partitioned relation, meaning we are building a global index, so just
+	 * set the relation has an index.  We have already updated the heap tuple
+	 * stats for leaf relation while processing each partition inside
+	 * _bt_spool_scan_partitions().
+	 *
+	 * TODO: We might choose to change the ambuild function to return array
+	 * of stats so that we can get a seperate stats for each partition.
 	 */
-	index_update_stats(heapRelation,
-					   true,
-					   stats->heap_tuples);
+	if (heapRelation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		index_update_stats(heapRelation, true, -1.0);
+	else
+		index_update_stats(heapRelation,
+						   true,
+						   stats->heap_tuples);
 
 	index_update_stats(indexRelation,
 					   false,
@@ -3548,7 +3631,7 @@ IndexGetRelation(Oid indexId, bool missing_ok)
 void
 reindex_index(const ReindexStmt *stmt, Oid indexId,
 			  bool skip_constraint_checks, char persistence,
-			  const ReindexParams *params)
+			  const ReindexParams *params, bool isglobal)
 {
 	Relation	iRel,
 				heapRelation;
@@ -3573,6 +3656,13 @@ reindex_index(const ReindexStmt *stmt, Oid indexId,
 	/* if relation is missing, leave */
 	if (!OidIsValid(heapId))
 		return;
+
+	/*
+	 * If we are reindexing the global index then lock all the inheritors.
+	 * ShareLock is enough to prevent schema modifications.
+	 */
+	if (isglobal)
+		(void) find_all_inheritors(heapId, ShareLock, NULL);
 
 	if ((params->options & REINDEXOPT_MISSING_OK) != 0)
 		heapRelation = try_table_open(heapId, ShareLock);
@@ -4003,8 +4093,18 @@ reindex_relation(const ReindexStmt *stmt, Oid relid, int flags,
 			continue;
 		}
 
+		/*
+		 * XXX currently global indexes are not reindexed while reindexing the
+		 * relation.  However they can be reindexed using REINDEX INDEX
+		 * idxname.  We might provide an option for user to tell us whether
+		 * they want to reindex the global indexes as well while reindexing the
+		 * relation.
+		 */
+		if (get_rel_relkind(indexOid) == RELKIND_GLOBAL_INDEX)
+			continue;
+
 		reindex_index(stmt, indexOid, !(flags & REINDEX_REL_CHECK_CONSTRAINTS),
-					  persistence, params);
+					  persistence, params, false);
 
 		CommandCounterIncrement();
 

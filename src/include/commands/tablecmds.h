@@ -110,5 +110,8 @@ extern bool PartConstraintImpliedByRelConstraint(Relation scanrel,
 extern void AttachParittionsToGlobalIndex(Relation irel,
 										  List *reloids,
 										  List **wqueue);
+extern void AttachParittionsToGlobalIndex(Relation irel,
+										  List *reloids,
+										  List **wqueue);
 extern void DetachFromGlobalIndexes(List *indexoids, List *reloids);
 #endif							/* TABLECMDS_H */

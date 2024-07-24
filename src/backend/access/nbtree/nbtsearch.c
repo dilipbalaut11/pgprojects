@@ -32,13 +32,14 @@ static int	_bt_binsrch_posting(BTScanInsert key, Page page,
 static bool _bt_readpage(IndexScanDesc scan, ScanDirection dir,
 						 OffsetNumber offnum, bool firstPage);
 static void _bt_saveitem(BTScanOpaque so, int itemIndex,
-						 OffsetNumber offnum, IndexTuple itup);
+						 OffsetNumber offnum, IndexTuple itup, Oid heapOid);
 static int	_bt_setuppostingitems(BTScanOpaque so, int itemIndex,
 								  OffsetNumber offnum, ItemPointer heapTid,
-								  IndexTuple itup);
+								  IndexTuple itup, Oid heapOid);
 static inline void _bt_savepostingitem(BTScanOpaque so, int itemIndex,
 									   OffsetNumber offnum,
-									   ItemPointer heapTid, int tupleOffset);
+									   ItemPointer heapTid, int tupleOffset,
+									   Oid heapOid);
 static bool _bt_steppage(IndexScanDesc scan, ScanDirection dir);
 static bool _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno, ScanDirection dir);
 static bool _bt_parallel_readpage(IndexScanDesc scan, BlockNumber blkno,
@@ -1467,6 +1468,10 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 readcomplete:
 	/* OK, itemIndex says what to return */
 	currItem = &so->currPos.items[so->currPos.itemIndex];
+
+	/* For global index we must have a valid heap oid. */
+	Assert(!scan->xs_global_index || OidIsValid(currItem->heapOid));
+	scan->xs_heapoid = currItem->heapOid;
 	scan->xs_heaptid = currItem->heapTid;
 	if (scan->xs_want_itup)
 		scan->xs_itup = (IndexTuple) (so->currTuples + currItem->tupleOffset);
@@ -1517,6 +1522,10 @@ _bt_next(IndexScanDesc scan, ScanDirection dir)
 
 	/* OK, itemIndex says what to return */
 	currItem = &so->currPos.items[so->currPos.itemIndex];
+
+	/* For global index we must have a valid heap oid. */
+	Assert(!scan->xs_global_index || OidIsValid(currItem->heapOid));
+	scan->xs_heapoid = currItem->heapOid;
 	scan->xs_heaptid = currItem->heapTid;
 	if (scan->xs_want_itup)
 		scan->xs_itup = (IndexTuple) (so->currTuples + currItem->tupleOffset);
@@ -1565,6 +1574,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 	bool		arrayKeys;
 	int			itemIndex,
 				indnatts;
+	Oid			heapOid;
 
 	/*
 	 * We must have the buffer pinned and locked, but the usual macro can't be
@@ -1722,6 +1732,24 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 			itup = (IndexTuple) PageGetItem(page, iid);
 			Assert(!BTreeTupleIsPivot(itup));
 
+			/*
+			 * For global index we also need to fetch the partition id in order
+			 * to know from which relation we need to fetch tuple.  We might
+			 * get an InvalidOid if the partition is already detcahed so ignore
+			 * such tuples.
+			 */
+			if (RelationIsGlobalIndex(scan->indexRelation))
+			{
+				heapOid = BTreeTupleGetPartitionRelid(scan->indexRelation, itup);
+				if (!OidIsValid(heapOid))
+				{
+					offnum = OffsetNumberNext(offnum);
+					continue;
+				}
+			}
+			else
+				heapOid = InvalidOid;
+
 			pstate.offnum = offnum;
 			passes_quals = _bt_checkkeys(scan, &pstate, arrayKeys,
 										 itup, indnatts);
@@ -1747,7 +1775,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 				if (!BTreeTupleIsPosting(itup))
 				{
 					/* Remember it */
-					_bt_saveitem(so, itemIndex, offnum, itup);
+					_bt_saveitem(so, itemIndex, offnum, itup, heapOid);
 					itemIndex++;
 				}
 				else
@@ -1761,14 +1789,14 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 					tupleOffset =
 						_bt_setuppostingitems(so, itemIndex, offnum,
 											  BTreeTupleGetPostingN(itup, 0),
-											  itup);
+											  itup, heapOid);
 					itemIndex++;
 					/* Remember additional TIDs */
 					for (int i = 1; i < BTreeTupleGetNPosting(itup); i++)
 					{
 						_bt_savepostingitem(so, itemIndex, offnum,
 											BTreeTupleGetPostingN(itup, i),
-											tupleOffset);
+											tupleOffset, heapOid);
 						itemIndex++;
 					}
 				}
@@ -1859,6 +1887,24 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 			itup = (IndexTuple) PageGetItem(page, iid);
 			Assert(!BTreeTupleIsPivot(itup));
 
+			/*
+			 * For global index we also need to fetch the partition id in order
+			 * to know from which relation we need to fetch tuple.  We might
+			 * get an InvalidOid if the partition is already detcahed so ignore
+			 * such tuples.
+			 */
+			if (RelationIsGlobalIndex(scan->indexRelation))
+			{
+				heapOid = BTreeTupleGetPartitionRelid(scan->indexRelation, itup);
+				if (!OidIsValid(heapOid))
+				{
+					offnum = OffsetNumberNext(offnum);
+					continue;
+				}
+			}
+			else
+				heapOid = InvalidOid;
+
 			pstate.offnum = offnum;
 			passes_quals = _bt_checkkeys(scan, &pstate, arrayKeys,
 										 itup, indnatts);
@@ -1885,7 +1931,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 				{
 					/* Remember it */
 					itemIndex--;
-					_bt_saveitem(so, itemIndex, offnum, itup);
+					_bt_saveitem(so, itemIndex, offnum, itup, heapOid);
 				}
 				else
 				{
@@ -1905,14 +1951,14 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 					tupleOffset =
 						_bt_setuppostingitems(so, itemIndex, offnum,
 											  BTreeTupleGetPostingN(itup, 0),
-											  itup);
+											  itup, heapOid);
 					/* Remember additional TIDs */
 					for (int i = 1; i < BTreeTupleGetNPosting(itup); i++)
 					{
 						itemIndex--;
 						_bt_savepostingitem(so, itemIndex, offnum,
 											BTreeTupleGetPostingN(itup, i),
-											tupleOffset);
+											tupleOffset, heapOid);
 					}
 				}
 			}
@@ -1938,12 +1984,13 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 /* Save an index item into so->currPos.items[itemIndex] */
 static void
 _bt_saveitem(BTScanOpaque so, int itemIndex,
-			 OffsetNumber offnum, IndexTuple itup)
+			 OffsetNumber offnum, IndexTuple itup, Oid heapOid)
 {
 	BTScanPosItem *currItem = &so->currPos.items[itemIndex];
 
 	Assert(!BTreeTupleIsPivot(itup) && !BTreeTupleIsPosting(itup));
 
+	currItem->heapOid = heapOid;
 	currItem->heapTid = itup->t_tid;
 	currItem->indexOffset = offnum;
 	if (so->currTuples)
@@ -1968,12 +2015,13 @@ _bt_saveitem(BTScanOpaque so, int itemIndex,
  */
 static int
 _bt_setuppostingitems(BTScanOpaque so, int itemIndex, OffsetNumber offnum,
-					  ItemPointer heapTid, IndexTuple itup)
+					  ItemPointer heapTid, IndexTuple itup, Oid heapOid)
 {
 	BTScanPosItem *currItem = &so->currPos.items[itemIndex];
 
 	Assert(BTreeTupleIsPosting(itup));
 
+	currItem->heapOid = heapOid;
 	currItem->heapTid = *heapTid;
 	currItem->indexOffset = offnum;
 	if (so->currTuples)
@@ -2006,10 +2054,11 @@ _bt_setuppostingitems(BTScanOpaque so, int itemIndex, OffsetNumber offnum,
  */
 static inline void
 _bt_savepostingitem(BTScanOpaque so, int itemIndex, OffsetNumber offnum,
-					ItemPointer heapTid, int tupleOffset)
+					ItemPointer heapTid, int tupleOffset, Oid heapOid)
 {
 	BTScanPosItem *currItem = &so->currPos.items[itemIndex];
 
+	currItem->heapOid = heapOid;
 	currItem->heapTid = *heapTid;
 	currItem->indexOffset = offnum;
 
@@ -2635,6 +2684,10 @@ _bt_endpoint(IndexScanDesc scan, ScanDirection dir)
 
 	/* OK, itemIndex says what to return */
 	currItem = &so->currPos.items[so->currPos.itemIndex];
+
+	/* For global index we must have a valid heap oid. */
+	Assert(!scan->xs_global_index || OidIsValid(currItem->heapOid));
+	scan->xs_heapoid = currItem->heapOid;
 	scan->xs_heaptid = currItem->heapTid;
 	if (scan->xs_want_itup)
 		scan->xs_itup = (IndexTuple) (so->currTuples + currItem->tupleOffset);

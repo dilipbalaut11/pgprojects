@@ -1187,6 +1187,12 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		}
 	}
 
+	/*
+	 * We need to check the index predicate for the parent relation because
+	 * paraent relation can have global index paths.
+	 */
+	check_index_predicates(root, rel);
+
 	if (has_live_children)
 	{
 		/*
@@ -1284,6 +1290,12 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 
 	/* Add paths to the append relation. */
 	add_paths_to_append_rel(root, rel, live_childrels);
+
+	/*
+	 * Partiotioned relation may have global indexes so lets consider index
+	 * scans for the partitioned relation.
+	 */
+	create_index_paths(root, rel);
 }
 
 

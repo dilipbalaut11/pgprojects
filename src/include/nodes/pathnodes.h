@@ -1182,6 +1182,8 @@ struct IndexOptInfo
 	bool		immediate;
 	/* true if index doesn't really exist */
 	bool		hypothetical;
+	/* true if a global index */
+	bool		global;
 
 	/*
 	 * Remaining fields are copied from the index AM's API struct

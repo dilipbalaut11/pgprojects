@@ -796,8 +796,7 @@ ExecInsert(ModifyTableContext *context,
 	 * Open the table's indexes, if we have not done so already, so that we
 	 * can add new index entries for the inserted tuple.
 	 */
-	if (resultRelationDesc->rd_rel->relhasindex &&
-		resultRelInfo->ri_IndexRelationDescs == NULL)
+	if (resultRelInfo->ri_IndexRelationDescs == NULL)
 		ExecOpenIndices(resultRelInfo, onconflict != ONCONFLICT_NONE);
 
 	/*
@@ -1906,8 +1905,6 @@ ExecUpdatePrologue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 				   ItemPointer tupleid, HeapTuple oldtuple, TupleTableSlot *slot,
 				   TM_Result *result)
 {
-	Relation	resultRelationDesc = resultRelInfo->ri_RelationDesc;
-
 	if (result)
 		*result = TM_Ok;
 
@@ -1917,8 +1914,7 @@ ExecUpdatePrologue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	 * Open the table's indexes, if we have not done so already, so that we
 	 * can add new index entries for the updated tuple.
 	 */
-	if (resultRelationDesc->rd_rel->relhasindex &&
-		resultRelInfo->ri_IndexRelationDescs == NULL)
+	if (resultRelInfo->ri_IndexRelationDescs == NULL)
 		ExecOpenIndices(resultRelInfo, false);
 
 	/* BEFORE ROW UPDATE triggers */

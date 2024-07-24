@@ -123,6 +123,25 @@ RelationGetIndexScan(Relation indexRelation, int nkeys, int norderbys)
 	scan->xs_hitup = NULL;
 	scan->xs_hitupdesc = NULL;
 
+	/*
+	 * For global index scan set a flag that this is a global index scan and
+	 * also create a cache for partition id to reloid lookup.  Because global
+	 * index stored partition id along with the tuple and while fetching the
+	 * tuple we need to convert that to relation OID.  For more detail refer
+	 * comments atop PartitionId typedef.
+	 */
+	if (RelationIsGlobalIndex(indexRelation))
+	{
+		scan->xs_global_index = true;
+		scan->xs_global_index_cache =
+			create_globalindex_partition_cache(CurrentMemoryContext);
+	}
+	else
+	{
+		scan->xs_global_index = false;
+		scan->xs_global_index_cache = NULL;
+	}
+
 	return scan;
 }
 

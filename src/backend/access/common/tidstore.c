@@ -165,6 +165,7 @@ TidStoreCreateLocal(size_t max_bytes, bool insert_only)
 	size_t		initBlockSize = ALLOCSET_DEFAULT_INITSIZE;
 	size_t		minContextSize = ALLOCSET_DEFAULT_MINSIZE;
 	size_t		maxBlockSize = ALLOCSET_DEFAULT_MAXSIZE;
+	MemoryContext oldctx = MemoryContextSwitchTo(TopMemoryContext); //hack
 
 	ts = palloc0(sizeof(TidStore));
 	ts->context = CurrentMemoryContext;
@@ -195,6 +196,7 @@ TidStoreCreateLocal(size_t max_bytes, bool insert_only)
 	}
 
 	ts->tree.local = local_ts_create(ts->rt_context);
+	MemoryContextSwitchTo(oldctx); //hack
 
 	return ts;
 }

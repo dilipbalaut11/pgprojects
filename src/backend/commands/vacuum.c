@@ -62,6 +62,14 @@
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
+/*
+ * Entry structures for the hash tables
+ */
+typedef struct
+{
+	Oid		reloid;
+	TidStore *dead_items;
+} TidStoreEntry;
 
 /*
  * GUC parameters
@@ -113,11 +121,14 @@ static void vac_truncate_clog(TransactionId frozenXID,
 							  MultiXactId minMulti,
 							  TransactionId lastSaneFrozenXid,
 							  MultiXactId lastSaneMinMulti);
-static bool vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
-					   BufferAccessStrategy bstrategy);
+static bool vacuum_rel(Oid relid, HTAB *tidstore_hash, RangeVar *relation,
+					   VacuumParams *params, BufferAccessStrategy bstrategy);
 static double compute_parallel_delay(void);
 static VacOptValue get_vacoptval_from_boolean(DefElem *def);
-static bool vac_tid_reaped(ItemPointer itemptr, void *state);
+static bool vac_tid_reaped(ItemPointer itemptr, Oid relid, void *state);
+static void vacuum_global_index_heap(List *vrel_vacuum, HTAB *tidstore_hash,
+									 VacuumParams *params,
+									 BufferAccessStrategy bstrategy);
 
 /*
  * GUC check function to ensure GUC value specified is within the allowable
@@ -600,6 +611,14 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 	PG_TRY();
 	{
 		ListCell   *cur;
+		HTAB	   *tidstore_hash = NULL;
+		HASHCTL		hash_ctl;
+		List	   *vrel_vacuum = NIL;
+
+
+		hash_ctl.keysize = sizeof(Oid);
+		hash_ctl.entrysize = sizeof(TidStoreEntry);
+		hash_ctl.hcxt = CurrentMemoryContext;
 
 		in_vacuum = true;
 		VacuumFailsafeActive = false;
@@ -615,11 +634,48 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 		foreach(cur, relations)
 		{
 			VacuumRelation *vrel = lfirst_node(VacuumRelation, cur);
+			VacuumRelation *prevvrel = NULL;
+
+			if (vrel->top_parent_oid != vrel->oid && tidstore_hash == NULL)
+			{
+				tidstore_hash = hash_create("TidStoreHash",
+											128,
+											&hash_ctl,
+											HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+			}
 
 			if (params->options & VACOPT_VACUUM)
 			{
-				if (!vacuum_rel(vrel->oid, vrel->relation, params, bstrategy))
+				/* If parent oid changed first complete the global index and heap vacuum */
+				if (prevvrel != NULL && tidstore_hash &&
+					vrel->top_parent_oid != prevvrel->top_parent_oid)
+				{
+					/*
+					 * Now we will do the global index vacuum as well as second
+					 * pass heap vacuum for all the rels.  Deadtid array could
+					 * be a independent for each leaf, so that there local
+					 * index vacuum doesn't need to look into whole array and
+					 * the global index vacuum can also lookup into the array
+					 * of the respective partition based on which partitionid
+					 * the index tuple belongs to.
+					 */
+					vacuum_global_index_heap(vrel_vacuum, tidstore_hash,
+											 params, bstrategy);
+					hash_destroy(tidstore_hash);
+					tidstore_hash = NULL;
+					list_free(vrel_vacuum);
+					vrel_vacuum = NIL;
+				}
+
+				if (!vacuum_rel(vrel->oid, tidstore_hash, vrel->relation,
+								params, bstrategy))
 					continue;
+
+				if (tidstore_hash)
+				{
+					prevvrel = vrel;
+					vrel_vacuum = lappend(vrel_vacuum, vrel);
+				}
 			}
 
 			if (params->options & VACOPT_ANALYZE)
@@ -660,6 +716,16 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 			 */
 			VacuumFailsafeActive = false;
 		}
+
+		if (vrel_vacuum != NIL)
+		{
+			vacuum_global_index_heap(vrel_vacuum, tidstore_hash,
+										params, bstrategy);
+			hash_destroy(tidstore_hash);
+			tidstore_hash = NULL;
+			list_free(vrel_vacuum);
+			vrel_vacuum = NIL;
+		}
 	}
 	PG_FINALLY();
 	{
@@ -693,6 +759,62 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 		vac_update_datfrozenxid();
 	}
 
+}
+
+static void
+vacuum_global_index_heap(List *vrel_vacuum, HTAB *tidstore_hash,
+						 VacuumParams *params, BufferAccessStrategy bstrategy)
+{
+	ListCell   *cur;
+	List	   *globalindexes = NIL;
+
+	if (hash_get_num_entries(tidstore_hash) == 0)
+		return;
+	StartTransactionCommand();
+
+	/* Get list of global indexes */
+	foreach(cur, vrel_vacuum)
+	{
+		VacuumRelation *vrel = lfirst_node(VacuumRelation, cur);
+		Relation	rel = table_open(vrel->oid, AccessShareLock);
+		List	   *indexoidlist;
+
+		indexoidlist = RelationGetIndexList(rel);
+		foreach_oid(indexoid, indexoidlist)
+		{
+			if (get_rel_relkind(indexoid) == RELKIND_GLOBAL_INDEX)
+				globalindexes = list_append_unique_oid(globalindexes, indexoid);
+		}
+		table_close(rel, AccessShareLock);
+	}
+
+	/* vacuum global indexes */
+	foreach_oid(indexoid, globalindexes)
+	{
+		IndexVacuumInfo ivinfo;
+
+		ivinfo.index = index_open(indexoid, RowExclusiveLock);
+		//ivinfo.heaprel = table_open(vrel->oid, AccessShareLock);;
+		ivinfo.analyze_only = false;
+		ivinfo.report_progress = true;
+		ivinfo.estimated_count = true;
+		ivinfo.message_level = DEBUG2;
+		//ivinfo.num_heap_tuples = heapRelation->rd_rel->reltuples;
+		ivinfo.strategy = NULL;
+
+		index_bulk_delete(&ivinfo, NULL, vac_tid_reaped,
+						  (void *) tidstore_hash);
+		index_close(ivinfo.index, RowExclusiveLock);
+	}
+	CommitTransactionCommand();
+
+	foreach(cur, vrel_vacuum)
+	{
+		VacuumRelation *vrel = lfirst_node(VacuumRelation, cur);
+
+		params->options |= VACOPT_HEAP_VACUUM_ONLY;
+		vacuum_rel(vrel->oid, tidstore_hash, vrel->relation, params, bstrategy);
+	}
 }
 
 /*
@@ -942,7 +1064,8 @@ expand_vacuum_rel(VacuumRelation *vrel, MemoryContext vac_context,
 			oldcontext = MemoryContextSwitchTo(vac_context);
 			vacrels = lappend(vacrels, makeVacuumRelation(vrel->relation,
 														  relid,
-														  vrel->va_cols));
+														  vrel->va_cols,
+														  relid));
 			MemoryContextSwitchTo(oldcontext);
 		}
 
@@ -979,7 +1102,8 @@ expand_vacuum_rel(VacuumRelation *vrel, MemoryContext vac_context,
 				oldcontext = MemoryContextSwitchTo(vac_context);
 				vacrels = lappend(vacrels, makeVacuumRelation(NULL,
 															  part_oid,
-															  vrel->va_cols));
+															  vrel->va_cols,
+															  relid));
 				MemoryContextSwitchTo(oldcontext);
 			}
 		}
@@ -1045,7 +1169,8 @@ get_all_vacuum_rels(MemoryContext vac_context, int options)
 		oldcontext = MemoryContextSwitchTo(vac_context);
 		vacrels = lappend(vacrels, makeVacuumRelation(NULL,
 													  relid,
-													  NIL));
+													  NIL,
+													  relid)); //FIX pass proper top parent Oid
 		MemoryContextSwitchTo(oldcontext);
 	}
 
@@ -1948,8 +2073,8 @@ vac_truncate_clog(TransactionId frozenXID,
  *		At entry and exit, we are not inside a transaction.
  */
 static bool
-vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
-		   BufferAccessStrategy bstrategy)
+vacuum_rel(Oid relid, HTAB *tidstore_hash, RangeVar *relation,
+		   VacuumParams *params, BufferAccessStrategy bstrategy)
 {
 	LOCKMODE	lmode;
 	Relation	rel;
@@ -2206,7 +2331,35 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 			cluster_rel(relid, InvalidOid, &cluster_params);
 		}
 		else
-			table_relation_vacuum(rel, params, bstrategy);
+		{
+			if (tidstore_hash)
+			{
+				bool found;
+				TidStoreEntry *entry;
+				TidStore	  *dead_items;
+
+				if (params->options & VACOPT_HEAP_VACUUM_ONLY)
+				{
+					entry = hash_search(tidstore_hash, &relid, HASH_FIND, &found);
+					Assert(found);
+					dead_items = entry->dead_items;
+					table_relation_vacuum(rel, params, bstrategy, dead_items);
+				}
+				else
+				{
+					dead_items = table_relation_vacuum(rel, params, bstrategy,
+													   NULL);
+					if (dead_items != NULL)
+					{
+						entry = hash_search(tidstore_hash, &relid, HASH_ENTER, &found);
+						Assert(!found);
+						entry->dead_items = dead_items;
+					}
+				}
+			}
+			else
+				(void) table_relation_vacuum(rel, params, bstrategy, NULL);
+		}
 	}
 
 	/* Roll back any GUC changes executed by index functions */
@@ -2246,7 +2399,7 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 		toast_vacuum_params.options |= VACOPT_PROCESS_MAIN;
 		toast_vacuum_params.toast_parent = relid;
 
-		vacuum_rel(toast_relid, NULL, &toast_vacuum_params, bstrategy);
+		vacuum_rel(toast_relid, NULL, NULL, &toast_vacuum_params, bstrategy);
 	}
 
 	/*
@@ -2271,13 +2424,14 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
  * unique index, uniqueness checks will be performed anyway and had better not
  * hit dangling index pointers.
  */
-void
+bool
 vac_open_indexes(Relation relation, LOCKMODE lockmode,
 				 int *nindexes, Relation **Irel)
 {
 	List	   *indexoidlist;
 	ListCell   *indexoidscan;
 	int			i;
+	bool		has_global_index = false;
 
 	Assert(lockmode != NoLock);
 
@@ -2304,7 +2458,11 @@ vac_open_indexes(Relation relation, LOCKMODE lockmode,
 
 		indrel = index_open(indexoid, lockmode);
 		if (indrel->rd_index->indisready)
+		{
 			(*Irel)[i++] = indrel;
+			if (RelationIsGlobalIndex(indrel))
+				has_global_index = true;
+		}
 		else
 			index_close(indrel, lockmode);
 	}
@@ -2312,6 +2470,8 @@ vac_open_indexes(Relation relation, LOCKMODE lockmode,
 	*nindexes = i;
 
 	list_free(indexoidlist);
+
+	return has_global_index;
 }
 
 /*
@@ -2541,9 +2701,22 @@ vac_cleanup_one_index(IndexVacuumInfo *ivinfo, IndexBulkDeleteResult *istat)
  *		This has the right signature to be an IndexBulkDeleteCallback.
  */
 static bool
-vac_tid_reaped(ItemPointer itemptr, void *state)
+vac_tid_reaped(ItemPointer itemptr, Oid reloid, void *state)
 {
-	TidStore   *dead_items = (TidStore *) state;
+	TidStore   *dead_items;
+
+	if (OidIsValid(reloid))
+	{
+		HTAB	   *tidstore_hash = (HTAB *) state;
+		TidStoreEntry	*entry;
+		bool		found;
+
+		entry = hash_search(tidstore_hash, &reloid, HASH_FIND, &found);
+		Assert(found);
+		dead_items = entry->dead_items;
+	}
+	else
+		dead_items = (TidStore *) state;
 
 	return TidStoreIsMember(dead_items, itemptr);
 }

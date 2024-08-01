@@ -391,8 +391,9 @@ extern void log_heap_prune_and_freeze(Relation relation, Buffer buffer,
 
 /* in heap/vacuumlazy.c */
 struct VacuumParams;
-extern void heap_vacuum_rel(Relation rel,
-							struct VacuumParams *params, BufferAccessStrategy bstrategy);
+extern TidStore* heap_vacuum_rel(Relation rel, struct VacuumParams *params,
+								 BufferAccessStrategy bstrategy,
+								 TidStore *dead_items);
 
 /* in heap/heapam_visibility.c */
 extern bool HeapTupleSatisfiesVisibility(HeapTuple htup, Snapshot snapshot,

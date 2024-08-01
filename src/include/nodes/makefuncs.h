@@ -107,7 +107,7 @@ extern DefElem *makeDefElemExtended(char *nameSpace, char *name, Node *arg,
 
 extern GroupingSet *makeGroupingSet(GroupingSetKind kind, List *content, int location);
 
-extern VacuumRelation *makeVacuumRelation(RangeVar *relation, Oid oid, List *va_cols);
+extern VacuumRelation *makeVacuumRelation(RangeVar *relation, Oid oid, List *va_cols, Oid top_parent);
 
 extern JsonFormat *makeJsonFormat(JsonFormatType type, JsonEncoding encoding,
 								  int location);

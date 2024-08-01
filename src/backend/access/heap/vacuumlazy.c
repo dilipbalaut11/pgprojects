@@ -154,8 +154,9 @@ typedef struct LVRelState
 	/* Doing index vacuuming, index cleanup, rel truncation? */
 	bool		do_index_vacuuming;
 	bool		do_index_cleanup;
+	bool		do_heap_vacuum_only;
 	bool		do_rel_truncate;
-
+	bool		has_global_indexes;
 	/* VACUUM operation's cutoffs for freezing and pruning */
 	struct VacuumCutoffs cutoffs;
 	GlobalVisState *vistest;
@@ -291,9 +292,9 @@ static void restore_vacuum_error_info(LVRelState *vacrel,
  *		At entry, we have already established a transaction and opened
  *		and locked the relation.
  */
-void
+TidStore *
 heap_vacuum_rel(Relation rel, VacuumParams *params,
-				BufferAccessStrategy bstrategy)
+				BufferAccessStrategy bstrategy, TidStore *dead_items)
 {
 	LVRelState *vacrel;
 	bool		verbose,
@@ -356,8 +357,10 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 
 	/* Set up high level stuff about rel and its indexes */
 	vacrel->rel = rel;
-	vac_open_indexes(vacrel->rel, RowExclusiveLock, &vacrel->nindexes,
-					 &vacrel->indrels);
+	vacrel->has_global_indexes = vac_open_indexes(vacrel->rel,
+												  RowExclusiveLock,
+												  &vacrel->nindexes,
+												  &vacrel->indrels);
 	vacrel->bstrategy = bstrategy;
 	if (instrument && vacrel->nindexes > 0)
 	{
@@ -488,19 +491,34 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	 * is already dangerously old.)
 	 */
 	lazy_check_wraparound_failsafe(vacrel);
-	dead_items_alloc(vacrel, params->nworkers);
 
 	/*
-	 * Call lazy_scan_heap to perform all required heap pruning, index
-	 * vacuuming, and heap vacuuming (plus related processing)
+	 * If only global index and heap vacuum is requested then caller must pass
+	 * the dead item as input.
 	 */
-	lazy_scan_heap(vacrel);
+	if (params->options & VACOPT_HEAP_VACUUM_ONLY)
+	{
+		vacrel->do_index_vacuuming = false;
+		vacrel->do_index_cleanup = false;
+		vacrel->do_heap_vacuum_only = true;
+		vacrel->dead_items = dead_items;
+		lazy_vacuum(vacrel);
+	}
+	else
+	{
+		vacrel->do_heap_vacuum_only = false;
+		dead_items_alloc(vacrel, params->nworkers);
+		lazy_scan_heap(vacrel);
+		
+		//if (!delay_cleanup)
+		//	dead_items_cleanup(vacrel);
+	}
 
 	/*
 	 * Free resources managed by dead_items_alloc.  This ends parallel mode in
 	 * passing when necessary.
 	 */
-	dead_items_cleanup(vacrel);
+	//dead_items_cleanup(vacrel);
 	Assert(!IsInParallelMode());
 
 	/*
@@ -774,6 +792,11 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 		if (instrument)
 			pfree(indnames[i]);
 	}
+
+	if (vacrel->has_global_indexes)
+		return vacrel->dead_items;
+	else
+		return NULL;
 }
 
 /*
@@ -1864,7 +1887,7 @@ lazy_vacuum(LVRelState *vacrel)
 	Assert(vacrel->nindexes > 0);
 	Assert(vacrel->lpdead_item_pages > 0);
 
-	if (!vacrel->do_index_vacuuming)
+	if (!vacrel->do_index_vacuuming && !vacrel->has_global_indexes)
 	{
 		Assert(!vacrel->do_index_cleanup);
 		dead_items_reset(vacrel);
@@ -1941,13 +1964,18 @@ lazy_vacuum(LVRelState *vacrel)
 		 */
 		vacrel->do_index_vacuuming = false;
 	}
+	else if (vacrel->do_heap_vacuum_only)
+	{
+		lazy_vacuum_heap_rel(vacrel);
+	}
 	else if (lazy_vacuum_all_indexes(vacrel))
 	{
 		/*
 		 * We successfully completed a round of index vacuuming.  Do related
 		 * heap vacuuming now.
 		 */
-		lazy_vacuum_heap_rel(vacrel);
+		if (!vacrel->has_global_indexes)
+			lazy_vacuum_heap_rel(vacrel);
 	}
 	else
 	{
@@ -1969,7 +1997,8 @@ lazy_vacuum(LVRelState *vacrel)
 	 * Forget the LP_DEAD items that we just vacuumed (or just decided to not
 	 * vacuum)
 	 */
-	dead_items_reset(vacrel);
+	if (!vacrel->has_global_indexes)
+		dead_items_reset(vacrel);
 }
 
 /*
@@ -2022,6 +2051,14 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 		{
 			Relation	indrel = vacrel->indrels[idx];
 			IndexBulkDeleteResult *istat = vacrel->indstats[idx];
+
+			/*
+			 * Check the flag whether we are vacuuming the local indexes or the
+			 * global indexes and accordingly decide whether to vacuum this
+			 * index or skip it.
+			 */
+			if (RelationIsGlobalIndex(indrel))
+				continue;
 
 			vacrel->indstats[idx] = lazy_vacuum_one_index(indrel, istat,
 														  old_live_tuples,

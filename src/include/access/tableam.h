@@ -19,6 +19,7 @@
 
 #include "access/relscan.h"
 #include "access/sdir.h"
+#include "access/tidstore.h"
 #include "access/xact.h"
 #include "executor/tuptable.h"
 #include "storage/read_stream.h"
@@ -652,9 +653,10 @@ typedef struct TableAmRoutine
 	 * There probably, in the future, needs to be a separate callback to
 	 * integrate with autovacuum's scheduling.
 	 */
-	void		(*relation_vacuum) (Relation rel,
+	TidStore 	*(*relation_vacuum) (Relation rel,
 									struct VacuumParams *params,
-									BufferAccessStrategy bstrategy);
+									BufferAccessStrategy bstrategy,
+									TidStore *dead_items);
 
 	/*
 	 * Prepare to analyze block `blockno` of `scan`. The scan has been started
@@ -1704,11 +1706,11 @@ table_relation_copy_for_cluster(Relation OldTable, Relation NewTable,
  * Note that neither VACUUM FULL (and CLUSTER), nor ANALYZE go through this
  * routine, even if (for ANALYZE) it is part of the same VACUUM command.
  */
-static inline void
+static inline TidStore *
 table_relation_vacuum(Relation rel, struct VacuumParams *params,
-					  BufferAccessStrategy bstrategy)
+					  BufferAccessStrategy bstrategy, TidStore *deaditems)
 {
-	rel->rd_tableam->relation_vacuum(rel, params, bstrategy);
+	return rel->rd_tableam->relation_vacuum(rel, params, bstrategy, deaditems);
 }
 
 /*

@@ -3861,6 +3861,7 @@ typedef struct VacuumRelation
 	RangeVar   *relation;		/* table name to process, or NULL */
 	Oid			oid;			/* table's OID; InvalidOid if not looked up */
 	List	   *va_cols;		/* list of column names, or NIL for all */
+	Oid			top_parent_oid;
 } VacuumRelation;
 
 /* ----------------------

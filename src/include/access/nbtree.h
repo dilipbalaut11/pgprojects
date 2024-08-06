@@ -293,6 +293,9 @@ BTPageIsRecyclable(Page page, Relation heaprel)
 {
 	BTPageOpaque opaque;
 
+	if (heaprel == NULL)
+		return false;
+
 	Assert(!PageIsNew(page));
 	Assert(heaprel != NULL);
 

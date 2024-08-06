@@ -3054,6 +3054,10 @@ _bt_pendingfsm_finalize(Relation rel, BTVacState *vstate)
 	IndexBulkDeleteResult *stats = vstate->stats;
 	Relation	heaprel = vstate->info->heaprel;
 
+	/* Ugly hack, need to see how to set the relation for the global index. */
+	if (heaprel == NULL)
+		return;
+
 	Assert(stats->pages_newly_deleted >= vstate->npendingpages);
 	Assert(heaprel != NULL);
 

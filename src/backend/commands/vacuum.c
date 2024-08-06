@@ -797,7 +797,8 @@ vacuum_global_index_heap(List *vrel_vacuum, HTAB *tidstore_hash,
 		IndexVacuumInfo ivinfo;
 
 		ivinfo.index = index_open(indexoid, RowExclusiveLock);
-		//ivinfo.heaprel = table_open(vrel->oid, AccessShareLock);;
+		//ivinfo.heaprel = table_open(vrel->oid, AccessShareLock);
+		ivinfo.heaprel = NULL;
 		ivinfo.analyze_only = false;
 		ivinfo.report_progress = true;
 		ivinfo.estimated_count = true;

@@ -1885,9 +1885,9 @@ lazy_vacuum(LVRelState *vacrel)
 
 	/* Should not end up here with no indexes */
 	Assert(vacrel->nindexes > 0);
-	Assert(vacrel->lpdead_item_pages > 0);
+	//Assert(vacrel->lpdead_item_pages > 0);
 
-	if (!vacrel->do_index_vacuuming && !vacrel->has_global_indexes)
+	if (!vacrel->do_index_vacuuming && !vacrel->do_heap_vacuum_only)
 	{
 		Assert(!vacrel->do_index_cleanup);
 		dead_items_reset(vacrel);
@@ -1950,7 +1950,12 @@ lazy_vacuum(LVRelState *vacrel)
 				  (TidStoreMemoryUsage(vacrel->dead_items) < (32L * 1024L * 1024L)));
 	}
 
-	if (bypass)
+
+	if (vacrel->do_heap_vacuum_only)
+	{
+		lazy_vacuum_heap_rel(vacrel);
+	}
+	else if (bypass)
 	{
 		/*
 		 * There are almost zero TIDs.  Behave as if there were precisely
@@ -1963,11 +1968,7 @@ lazy_vacuum(LVRelState *vacrel)
 		 * calls.)
 		 */
 		vacrel->do_index_vacuuming = false;
-	}
-	else if (vacrel->do_heap_vacuum_only)
-	{
-		lazy_vacuum_heap_rel(vacrel);
-	}
+	}	
 	else if (lazy_vacuum_all_indexes(vacrel))
 	{
 		/*

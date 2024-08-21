@@ -2158,6 +2158,8 @@ _bt_mark_page_halfdead(Relation rel, Relation heaprel, Buffer leafbuf,
 	IndexTuple	itup;
 	IndexTupleData trunctuple;
 
+	if (heaprel == NULL)
+		return false;
 	page = BufferGetPage(leafbuf);
 	opaque = BTPageGetOpaque(page);
 

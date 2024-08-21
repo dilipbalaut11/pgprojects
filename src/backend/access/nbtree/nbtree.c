@@ -1367,7 +1367,7 @@ backtrack:
 		Assert(!attempt_pagedel || nhtidslive == 0);
 	}
 
-	if (attempt_pagedel)
+	if (attempt_pagedel && info->heaprel != NULL )
 	{
 		MemoryContext oldcontext;
 

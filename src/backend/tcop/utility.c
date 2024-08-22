@@ -1462,6 +1462,7 @@ ProcessUtilitySlow(ParseState *pstate,
 					LOCKMODE	lockmode;
 					int			nparts = -1;
 					bool		is_alter_table;
+					List	   *inheritors = NIL;
 
 					if (stmt->concurrent)
 						PreventInTransactionBlock(isTopLevel,
@@ -1499,7 +1500,6 @@ ProcessUtilitySlow(ParseState *pstate,
 						get_rel_relkind(relid) == RELKIND_PARTITIONED_TABLE)
 					{
 						ListCell   *lc;
-						List	   *inheritors = NIL;
 
 						inheritors = find_all_inheritors(relid, lockmode, NULL);
 						foreach(lc, inheritors)
@@ -1525,7 +1525,6 @@ ProcessUtilitySlow(ParseState *pstate,
 						}
 						/* count direct and indirect children, but not rel */
 						nparts = list_length(inheritors) - 1;
-						list_free(inheritors);
 					}
 
 					/*
@@ -1550,12 +1549,15 @@ ProcessUtilitySlow(ParseState *pstate,
 									InvalidOid, /* no predefined OID */
 									InvalidOid, /* no parent index */
 									InvalidOid, /* no parent constraint */
+									inheritors, /* list of inheritor's OID */
 									nparts, /* # of partitions, or -1 */
 									is_alter_table,
 									true,	/* check_rights */
 									true,	/* check_not_in_use */
 									false,	/* skip_build */
 									false); /* quiet */
+
+					list_free(inheritors);
 
 					/*
 					 * Add the CREATE INDEX node itself to stash right away;

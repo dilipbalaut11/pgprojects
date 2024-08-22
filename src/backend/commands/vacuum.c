@@ -36,6 +36,7 @@
 #include "access/xact.h"
 #include "catalog/index.h"
 #include "catalog/namespace.h"
+#include "catalog/partition.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_inherits.h"
 #include "commands/cluster.h"
@@ -58,6 +59,7 @@
 #include "utils/guc_hooks.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
+#include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
 
@@ -2279,6 +2281,10 @@ vac_open_indexes(Relation relation, LOCKMODE lockmode,
 
 	Assert(lockmode != NoLock);
 
+	/*
+	 * Get list of all the indexes including the global indexes of all its
+	 * ancestors.
+	 */
 	indexoidlist = RelationGetIndexList(relation);
 
 	/* allocate enough memory for all indexes */

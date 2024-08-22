@@ -20,7 +20,8 @@
 #include "miscadmin.h"
 #include "utils/rel.h"
 
-static void _bt_bottomupdel_finish_pending(Page page, BTDedupState state,
+static void _bt_bottomupdel_finish_pending(Relation rel, Page page,
+										   BTDedupState state,
 										   TM_IndexDeleteOp *delstate);
 static bool _bt_do_singleval(Relation rel, Page page, BTDedupState state,
 							 OffsetNumber minoff, IndexTuple newitem);
@@ -382,14 +383,14 @@ _bt_bottomupdel_pass(Relation rel, Buffer buf, Relation heapRel,
 		else
 		{
 			/* Finalize interval -- move its TIDs to delete state */
-			_bt_bottomupdel_finish_pending(page, state, &delstate);
+			_bt_bottomupdel_finish_pending(rel, page, state, &delstate);
 
 			/* itup starts new pending interval */
 			_bt_dedup_start_pending(state, itup, offnum);
 		}
 	}
 	/* Finalize final interval -- move its TIDs to delete state */
-	_bt_bottomupdel_finish_pending(page, state, &delstate);
+	_bt_bottomupdel_finish_pending(rel, page, state, &delstate);
 
 	/*
 	 * We don't give up now in the event of having few (or even zero)
@@ -645,10 +646,11 @@ _bt_dedup_finish_pending(Page newpage, BTDedupState state)
  * deletion operations.
  */
 static void
-_bt_bottomupdel_finish_pending(Page page, BTDedupState state,
+_bt_bottomupdel_finish_pending(Relation rel, Page page, BTDedupState state,
 							   TM_IndexDeleteOp *delstate)
 {
 	bool		dupinterval = (state->nitems > 1);
+	PartitionId	partid = InvalidPartitionId;
 
 	Assert(state->nitems > 0);
 	Assert(state->nitems <= state->nhtids);
@@ -662,9 +664,19 @@ _bt_bottomupdel_finish_pending(Page page, BTDedupState state,
 		TM_IndexDelete *ideltid = &delstate->deltids[delstate->ndeltids];
 		TM_IndexStatus *istatus = &delstate->status[delstate->ndeltids];
 
+		/*
+		 * A global index stored tids from multiple partitions so we also need
+		 * reloid along with tid to uniquely identifying the tuple.  We don't
+		 * need convert partition id to reloid every time because we are
+		 * not deduplicating across multiple partition ids.
+		 */
+		if (!PartIdIsValid(partid) && RelationIsGlobalIndex(rel))
+			partid = BTreeTupleGetPartitionId(rel, itup);
+
 		if (!BTreeTupleIsPosting(itup))
 		{
 			/* Simple case: A plain non-pivot tuple */
+			ideltid->partid = partid;
 			ideltid->tid = itup->t_tid;
 			ideltid->id = delstate->ndeltids;
 			istatus->idxoffnum = offnum;
@@ -723,6 +735,7 @@ _bt_bottomupdel_finish_pending(Page page, BTDedupState state,
 			{
 				ItemPointer htid = BTreeTupleGetPostingN(itup, p);
 
+				ideltid->partid = partid;
 				ideltid->tid = *htid;
 				ideltid->id = delstate->ndeltids;
 				istatus->idxoffnum = offnum;

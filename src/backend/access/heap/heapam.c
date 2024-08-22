@@ -7993,8 +7993,8 @@ index_delete_sort(TM_IndexDeleteOp *delstate)
 	const int	gaps[9] = {1968, 861, 336, 112, 48, 21, 7, 3, 1};
 
 	/* Think carefully before changing anything here -- keep swaps cheap */
-	StaticAssertDecl(sizeof(TM_IndexDelete) <= 8,
-					 "element size exceeds 8 bytes");
+	StaticAssertDecl(sizeof(TM_IndexDelete) <= 12,
+					 "element size exceeds 12 bytes");
 
 	for (int g = 0; g < lengthof(gaps); g++)
 	{

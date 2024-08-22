@@ -1402,7 +1402,13 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 			appendStringInfoString(&buf, sep);
 		sep = ", ";
 
-		if (attnum != 0)
+		/*
+		 * If this is partition id attribute then just ignore it as it is
+		 * internal attribute added for the global index.
+		 */
+		if (attnum == PartitionIdAttributeNumber)
+			continue;
+		else if (attnum != 0)
 		{
 			/* Simple index column */
 			char	   *attname;

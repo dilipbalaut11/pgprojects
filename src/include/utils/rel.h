@@ -150,7 +150,13 @@ typedef struct RelationData
 	MemoryContext rd_partcheckcxt;	/* private cxt for rd_partcheck, if any */
 
 	/* data managed by RelationGetIndexList: */
-	List	   *rd_indexlist;	/* list of OIDs of indexes on relation */
+	List	   *rd_indexlist;	/* List of OIDs of indexes on the relation,
+								   including the global indexes of all its
+								   ancestors. We include the ancestor's global
+								   indexes because any operation performed on
+								   this relation, such as insert or update,
+								   will also affect the global indexes of the
+								   ancestors. */
 	Oid			rd_pkindex;		/* OID of (deferrable?) primary key, if any */
 	bool		rd_ispkdeferrable;	/* is rd_pkindex a deferrable PK? */
 	Oid			rd_replidindex; /* OID of replica identity index, if any */

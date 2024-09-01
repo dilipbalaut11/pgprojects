@@ -74,6 +74,9 @@ CATALOG(pg_class,1259,RelationRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(83,Relat
 	/* T if has (or has had) any indexes */
 	bool		relhasindex BKI_DEFAULT(f);
 
+	/* T if this rel or any of its ancestor has (or has had) any global indexes */
+	bool		relhasglobalindex BKI_DEFAULT(f);
+
 	/* T if shared across databases */
 	bool		relisshared BKI_DEFAULT(f);
 
@@ -171,6 +174,7 @@ MAKE_SYSCACHE(RELNAMENSP, pg_class_relname_nsp_index, 128);
 #define		  RELKIND_FOREIGN_TABLE   'f'	/* foreign table */
 #define		  RELKIND_PARTITIONED_TABLE 'p' /* partitioned table */
 #define		  RELKIND_PARTITIONED_INDEX 'I' /* partitioned index */
+#define		  RELKIND_GLOBAL_INDEX	  'g'	/* global index */
 
 #define		  RELPERSISTENCE_PERMANENT	'p' /* regular table */
 #define		  RELPERSISTENCE_UNLOGGED	'u' /* unlogged permanent table */
@@ -199,7 +203,8 @@ MAKE_SYSCACHE(RELNAMENSP, pg_class_relname_nsp_index, 128);
 	 (relkind) == RELKIND_INDEX || \
 	 (relkind) == RELKIND_SEQUENCE || \
 	 (relkind) == RELKIND_TOASTVALUE || \
-	 (relkind) == RELKIND_MATVIEW)
+	 (relkind) == RELKIND_MATVIEW || \
+	 (relkind) == RELKIND_GLOBAL_INDEX)
 
 #define RELKIND_HAS_PARTITIONS(relkind) \
 	((relkind) == RELKIND_PARTITIONED_TABLE || \

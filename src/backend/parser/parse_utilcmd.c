@@ -1555,6 +1555,7 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 	index->unique = idxrec->indisunique;
 	index->nulls_not_distinct = idxrec->indnullsnotdistinct;
 	index->primary = idxrec->indisprimary;
+	index->global = (idxrelrec->relkind == RELKIND_GLOBAL_INDEX);
 	index->transformed = true;	/* don't need transformIndexStmt */
 	index->concurrent = false;
 	index->if_not_exists = false;
@@ -1672,7 +1673,13 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 
 		iparam = makeNode(IndexElem);
 
-		if (AttributeNumberIsValid(attnum))
+		/*
+		 * We don't need to copy PartitionIdAttributeNumber as this will be
+		 * internally added by DefineIndex while creating a global index.
+		 */
+		if (attnum == PartitionIdAttributeNumber)
+			continue;
+		else if (AttributeNumberIsValid(attnum))
 		{
 			/* Simple index column */
 			char	   *attname;

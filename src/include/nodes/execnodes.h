@@ -176,6 +176,17 @@ typedef struct ExprState
  *
  * ii_Concurrent, ii_BrokenHotChain, and ii_ParallelWorkers are used only
  * during index build; they're conventionally zeroed otherwise.
+ *
+ * ii_partid is only used during inserting a index tuple or index build.  This
+ * holds the partition Id of a leaf partition for which we are currently
+ * inserting the tuple into the global index.
+ *
+ * XXX this is stored by caller where we have the information about currently
+ * for which partition we can inserting a tuple into the index and this is
+ * accessed by FormIndexDatum().  We may consider to pass this as a parameter
+ * to FormIndexDatum() or some other way of computing this.  If we can convert
+ * this to an expression column then maybe we can compute it without passing
+ * as any argument but that need more thoughts.
  * ----------------
  */
 typedef struct IndexInfo
@@ -204,6 +215,7 @@ typedef struct IndexInfo
 	bool		ii_Summarizing;
 	int			ii_ParallelWorkers;
 	Oid			ii_Am;
+	PartitionId	ii_partid;
 	void	   *ii_AmCache;
 	MemoryContext ii_Context;
 } IndexInfo;

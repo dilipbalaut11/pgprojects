@@ -23,6 +23,7 @@
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
+#include "catalog/heap.h"
 #include "catalog/index.h"
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
@@ -30,6 +31,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_database.h"
+#include "catalog/pg_index_partitions.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
@@ -514,6 +516,7 @@ WaitForOlderSnapshots(TransactionId limitXmin, bool progress)
  *		of a partitioned index.
  * 'parentConstraintId': the OID of the parent constraint; InvalidOid if not
  *		the child of a constraint (only used when recursing)
+ * 'inheritors' List of all inheritor's OIDs if this is a partitioned relation;
  * 'total_parts': total number of direct and indirect partitions of relation;
  *		pass -1 if not known or rel is not partitioned.
  * 'is_alter_table': this is due to an ALTER rather than a CREATE operation.
@@ -533,6 +536,7 @@ DefineIndex(Oid tableId,
 			Oid indexRelationId,
 			Oid parentIndexId,
 			Oid parentConstraintId,
+			List *inheritors,
 			int total_parts,
 			bool is_alter_table,
 			bool check_rights,
@@ -623,6 +627,27 @@ DefineIndex(Oid tableId,
 	 */
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_INDEX_OID,
 								 InvalidOid);
+
+	/*
+	 * If this is a global index, we must append a partition identifier to
+	 * uniquely identify the heap tuple.  Therefore, in this design, we have
+	 * opted to include the partition-id as the last key column.
+	 *
+	 * The rationale behind storing it as the last key column is that in
+	 * various scenarios, we would treat this column as an extended
+	 * index key column.  Essentially, each index tuple must be uniquely
+	 * identified. Therefore, if we encounter duplicate keys, we utilize heap
+	 * tid as a tiebreaker.  However, for global indexes, relying solely on
+	 * heap tid isn't adequate; we also require the partition identifier.
+	 */
+	if (stmt->global)
+	{
+		IndexElem	*newparam = makeNode(IndexElem);
+
+		newparam->name = NULL;
+		newparam->expr = NULL;
+		stmt->indexParams = lappend(stmt->indexParams, newparam);
+	}
 
 	/*
 	 * count key attributes in index
@@ -932,10 +957,9 @@ DefineIndex(Oid tableId,
 	 * violate uniqueness by putting values that ought to be unique in
 	 * different partitions.
 	 *
-	 * We could lift this limitation if we had global indexes, but those have
-	 * their own problems, so this is a useful feature combination.
+	 * If we are creating a global index the we do not have this problem.
 	 */
-	if (partitioned && (stmt->unique || stmt->excludeOpNames))
+	if (partitioned && !stmt->global && (stmt->unique || stmt->excludeOpNames))
 	{
 		PartitionKey key = RelationGetPartitionKey(rel);
 		const char *constraint_type;
@@ -1090,7 +1114,7 @@ DefineIndex(Oid tableId,
 	{
 		AttrNumber	attno = indexInfo->ii_IndexAttrNumbers[i];
 
-		if (attno < 0)
+		if (attno < 0 && !stmt->global)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("index creation on system columns is not supported")));
@@ -1162,16 +1186,18 @@ DefineIndex(Oid tableId,
 	flags = constr_flags = 0;
 	if (stmt->isconstraint)
 		flags |= INDEX_CREATE_ADD_CONSTRAINT;
-	if (skip_build || concurrent || partitioned)
+	if (skip_build || concurrent || (partitioned && !stmt->global))
 		flags |= INDEX_CREATE_SKIP_BUILD;
 	if (stmt->if_not_exists)
 		flags |= INDEX_CREATE_IF_NOT_EXISTS;
 	if (concurrent)
 		flags |= INDEX_CREATE_CONCURRENT;
-	if (partitioned)
+	if (partitioned && !stmt->global)
 		flags |= INDEX_CREATE_PARTITIONED;
 	if (stmt->primary)
 		flags |= INDEX_CREATE_IS_PRIMARY;
+	if (stmt->global)
+		flags |= INDEX_CREATE_GLOBAL;
 
 	/*
 	 * If the table is partitioned, and recursion was declined but partitions
@@ -1199,7 +1225,7 @@ DefineIndex(Oid tableId,
 					 coloptions, NULL, reloptions,
 					 flags, constr_flags,
 					 allowSystemTableMods, !check_rights,
-					 &createdConstraintId);
+					 &createdConstraintId, inheritors);
 
 	ObjectAddressSet(address, RelationRelationId, indexRelationId);
 
@@ -1237,7 +1263,13 @@ DefineIndex(Oid tableId,
 		CreateComments(indexRelationId, RelationRelationId, 0,
 					   stmt->idxcomment);
 
-	if (partitioned)
+	/*
+	 * If table is partitioned then create index on each partition.  But if
+	 * we are building a global index we don't need to create it on each
+	 * partition, there will be just one global index which will hold data from
+	 * all the children.
+	 */
+	if (partitioned && !stmt->global)
 	{
 		PartitionDesc partdesc;
 
@@ -1506,6 +1538,7 @@ DefineIndex(Oid tableId,
 									InvalidOid, /* no predefined OID */
 									indexRelationId,	/* this is our child */
 									createdConstraintId,
+									NIL,
 									-1,
 									is_alter_table, check_rights,
 									check_not_in_use,
@@ -1892,9 +1925,21 @@ ComputeIndexAttrs(IndexInfo *indexInfo,
 		Oid			attcollation;
 
 		/*
-		 * Process the column-or-expression to be indexed.
+		 * Process the column-or-expression to be indexed.  For partition id
+		 * attribute both name and expr is set as NULL.  And we can directly
+		 * point to the predefine FormData_pg_attribute for the partition id
+		 * attribute.
 		 */
-		if (attribute->name != NULL)
+		if ((attribute->name == NULL) && (attribute->expr == NULL))
+		{
+			const FormData_pg_attribute *attform;
+
+			attform = &partitionid_attr;
+			indexInfo->ii_IndexAttrNumbers[attn] = attform->attnum;
+			atttype = attform->atttypid;
+			attcollation = attform->attcollation;
+		}
+		else if (attribute->name != NULL)
 		{
 			/* Simple index attribute */
 			HeapTuple	atttuple;
@@ -2871,7 +2916,8 @@ RangeVarCallbackForReindexIndex(const RangeVar *relation,
 	if (!relkind)
 		return;
 	if (relkind != RELKIND_INDEX &&
-		relkind != RELKIND_PARTITIONED_INDEX)
+		relkind != RELKIND_PARTITIONED_INDEX &&
+		relkind != RELKIND_GLOBAL_INDEX)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("\"%s\" is not an index", relation->relname)));
@@ -3699,6 +3745,7 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 
 		case RELKIND_PARTITIONED_TABLE:
 		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_GLOBAL_INDEX:
 		default:
 			/* Return error if type of relation is not supported */
 			ereport(ERROR,
@@ -4288,7 +4335,8 @@ IndexSetParentIndex(Relation partitionIdx, Oid parentOid)
 
 	/* Make sure this is an index */
 	Assert(partitionIdx->rd_rel->relkind == RELKIND_INDEX ||
-		   partitionIdx->rd_rel->relkind == RELKIND_PARTITIONED_INDEX);
+		   partitionIdx->rd_rel->relkind == RELKIND_PARTITIONED_INDEX ||
+		   partitionIdx->rd_rel->relkind == RELKIND_GLOBAL_INDEX);
 
 	/*
 	 * Scan pg_inherits for rows linking our index to some parent.

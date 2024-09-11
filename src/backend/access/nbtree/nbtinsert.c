@@ -150,6 +150,13 @@ _bt_doinsert(Relation rel, IndexTuple itup,
 			Assert(checkUnique != UNIQUE_CHECK_EXISTING);
 			is_unique = true;
 		}
+
+		/*
+		 * Ignore the PartitionId attribute for the global indexes until the
+		 * uniqueness established.
+		 */
+		if (RelationIsGlobalIndex(rel))
+			itup_key->keysz--;
 	}
 
 	/*
@@ -250,6 +257,13 @@ search:
 		/* Uniqueness is established -- restore heap tid as scantid */
 		if (itup_key->heapkeyspace)
 			itup_key->scantid = &itup->t_tid;
+
+		/*
+		 * Uniqueness is established -- consider the PartitionId for
+		 * (heapkeyspace).
+		 */
+		if (RelationIsGlobalIndex(rel))
+			itup_key->keysz++;
 	}
 
 	if (checkUnique != UNIQUE_CHECK_EXISTING)
@@ -571,10 +585,10 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 						if (OidIsValid(heapoid))
 						{
 							Assert(partrel != NULL);
-							relation_close(partrel, AccessShareLock);
+							relation_close(partrel, NoLock);
 						}
 
-						partrel = relation_open(curheapoid, AccessShareLock);
+						partrel = relation_open(curheapoid, NoLock);
 						heapoid = curheapoid;
 					}
 				}
@@ -617,6 +631,10 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 						if (nbuf != InvalidBuffer)
 							_bt_relbuf(rel, nbuf);
 						*is_unique = false;
+
+						if (partrel && partrel != heapRel)
+							table_close(partrel, NoLock);
+
 						return InvalidTransactionId;
 					}
 
@@ -635,6 +653,10 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 						*speculativeToken = SnapshotDirty.speculativeToken;
 						/* Caller releases lock on buf immediately */
 						insertstate->bounds_valid = false;
+
+						if (partrel && partrel != heapRel)
+							table_close(partrel, NoLock);
+
 						return xwait;
 					}
 
@@ -656,7 +678,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 					 * entry.
 					 */
 					htid = itup->t_tid;
-					if (table_index_fetch_tuple_check(partrel, &htid,
+					if (table_index_fetch_tuple_check(heapRel, &htid,
 													  SnapshotSelf, NULL))
 					{
 						/* Normal case --- it's still live */
@@ -791,6 +813,9 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 			/* Don't invalidate binary search bounds */
 		}
 	}
+
+	if (partrel && partrel != heapRel)
+		table_close(partrel, NoLock);
 
 	/*
 	 * If we are doing a recheck then we should have found the tuple we are

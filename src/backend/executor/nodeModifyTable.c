@@ -53,6 +53,7 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "access/table.h"
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "commands/trigger.h"
@@ -62,6 +63,7 @@
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
+#include "partitioning/partdesc.h"
 #include "optimizer/optimizer.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/lmgr.h"
@@ -69,7 +71,7 @@
 #include "utils/datum.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
-
+#include "utils/lsyscache.h"
 
 typedef struct MTTargetRelLookup
 {
@@ -4208,6 +4210,32 @@ ExecLookupResultRelByOid(ModifyTableState *node, Oid resultoid,
 	return NULL;
 }
 
+/*
+ * Traverse whole partition hierarchy and lock all partitioned and the leaf
+ * relations which has global indexes.  We need to do that because later we
+ * will be inserting tuple to those global indexes so we should be holding
+ * lock on all the partitioned table which has those global indexes and the
+ * leaf relation which are covered by those global indexes.
+ */
+static void
+LockPartitionRelations(Relation rel, LOCKMODE lockmode)
+{
+	PartitionDesc pd = RelationGetPartitionDesc(rel, true);
+
+	for (int i = 0; i < pd->nparts; i++)
+	{
+		if (get_rel_relkind(pd->oids[i]) == RELKIND_PARTITIONED_TABLE)
+		{
+			Relation	partRel = table_open(pd->oids[i], lockmode);
+
+			LockPartitionRelations(partRel, lockmode);
+			table_close(partRel, NoLock);
+		}
+		else if (get_rel_has_globalindex(pd->oids[i]))
+			LockRelationOid(pd->oids[i], lockmode);
+	}
+}
+
 /* ----------------------------------------------------------------
  *		ExecInitModifyTable
  * ----------------------------------------------------------------
@@ -4224,6 +4252,7 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	ListCell   *l;
 	int			i;
 	Relation	rel;
+	bool		hasglobalindexes = false;
 
 	/* check for unsupported flags */
 	Assert(!(eflags & (EXEC_FLAG_BACKWARD | EXEC_FLAG_MARK)));
@@ -4357,6 +4386,10 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 															 eflags);
 		}
 
+		if (!hasglobalindexes &&
+			resultRelInfo->ri_RelationDesc->rd_rel->relhasglobalindex)
+			hasglobalindexes = true;
+
 		/*
 		 * For UPDATE/DELETE/MERGE, find the appropriate junk attr now, either
 		 * a 'ctid' or 'wholerow' attribute depending on relkind.  For foreign
@@ -4436,6 +4469,15 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 		operation == CMD_INSERT)
 		mtstate->mt_partition_tuple_routing =
 			ExecSetupPartitionTupleRouting(estate, rel);
+
+	/*
+	 * If we have hasglobalindexes set on any of the result relation that shows
+	 * that there are some global indexes in the partition hierarchy.  So we
+	 * need to traverse the whole hierarchy and lock all partitioned relation
+	 * the leaf relations which has global indexes.
+	 */
+	if (hasglobalindexes)
+		LockPartitionRelations(rel, RowExclusiveLock);
 
 	/*
 	 * Initialize any WITH CHECK OPTION constraints if needed.

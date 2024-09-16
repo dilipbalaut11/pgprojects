@@ -4929,35 +4929,27 @@ RelationGetIndexList(Relation relation)
 	{
 		List	   *ancestors;
 		List	   *globalindexes = NIL;
-		Relation	parent;
 
 		/* Get the list of all the ancestors. */
 		ancestors = get_partition_ancestors(RelationGetRelid(relation));
 
-		/*
-		 * Get the root of the partition hirarchy this should be stored at the
-		 * end.
-		 */
-		if (list_length(ancestors) > 0)
+		foreach_oid(relid, ancestors)
 		{
-			foreach_oid(relid, ancestors)
+			if (get_rel_has_globalindex(relid))
 			{
-				parent = table_open(relid, AccessShareLock);
-				if (RelationGetForm(parent)->relhasglobalindex)
-				{
-					List *indexlist = RelationGetIndexListGuts(parent);
+				Relation parent = table_open(relid, NoLock);
+				List *indexlist = RelationGetIndexListGuts(parent);
 
-					foreach_oid(indexoid, indexlist)
-					{
-						if (get_rel_relkind(indexoid) == RELKIND_GLOBAL_INDEX)
-							globalindexes = lappend_oid(globalindexes, indexoid);
-					}
-					list_free(indexlist);
+				foreach_oid(indexoid, indexlist)
+				{
+					if (get_rel_relkind(indexoid) == RELKIND_GLOBAL_INDEX)
+						globalindexes = lappend_oid(globalindexes, indexoid);
 				}
-				table_close(parent, AccessShareLock);
+				list_free(indexlist);
+				table_close(parent, NoLock);
 			}
-			result = list_concat_unique_oid(result, globalindexes);
 		}
+		result = list_concat_unique_oid(result, globalindexes);
 	}
 
 	/* Sort the result list into OID order, per API spec. */

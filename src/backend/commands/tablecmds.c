@@ -18624,9 +18624,32 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd,
 	const char *trigger_name;
 	Oid			defaultPartOid;
 	List	   *partBoundConstraint;
+	List	   *ancestors;
 	ParseState *pstate = make_parsestate(NULL);
 
 	pstate->p_sourcetext = context->queryString;
+
+	/*
+	 * If the relation to which we are attaching has mark as it has global
+	 * index, then process to ancestor tree and find out the top most parent
+	 * has the global index and lock all the inheritors from that level.
+	 */
+	if (rel->rd_rel->relhasglobalindex)
+	{
+		Oid		toprelid = InvalidOid;
+
+		ancestors = get_partition_ancestors(RelationGetRelid(rel));
+		foreach_oid(relid, ancestors)
+		{
+			if (get_rel_has_globalindex(relid))
+				toprelid = relid;
+		}
+		if (OidIsValid(toprelid))
+		{
+			LockRelationOid(toprelid, AccessExclusiveLock);
+			(void) find_all_inheritors(toprelid, AccessExclusiveLock, NULL);
+		}
+	}
 
 	/*
 	 * We must lock the default partition if one exists, because attaching a

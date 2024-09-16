@@ -7632,13 +7632,13 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 	bool		rel_is_partitioned = IS_PARTITIONED_REL(rel);
 	PathTarget *scanjoin_target;
 	ListCell   *lc;
-	List	   *saved_pathlist;
+	List	   *global_index_path_list = NIL;
 
 	/* This recurses, so be paranoid. */
 	check_stack_depth();
 
 	/*
-	 * If the rel is partitioned, we want to drop its existing paths and
+	 * If the rel is partitioned, we want to drop its existing append paths and
 	 * generate new ones.  This function would still be correct if we kept the
 	 * existing paths: we'd modify them to generate the correct target above
 	 * the partitioning Append, and then they'd compete on cost with paths
@@ -7655,16 +7655,55 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 	 * stanza.  Hence, zap the main pathlist here, then allow
 	 * generate_useful_gather_paths to add path(s) to the main list, and
 	 * finally zap the partial pathlist.
-	 */
-
-	/*
-	 * FIXME: remove above comments.
-	 * For partition parent we can have a global index path so we don't need
-	 * to set the path to NULL.
+	 *
+	 * Note: All the partitioned rel paths which are build by appending child
+	 * rel paths will be rebuilt again so we need to preserve the global index
+	 * paths which are directly created on the partitioned relation.
 	 */
 	if (rel_is_partitioned)
 	{
-		saved_pathlist = rel->pathlist;
+		List	*newtarget = NIL;
+		PathTarget *index_scanjoin_target;
+
+		/*
+		 * Preprocess the scanjoin_targets and replace ROWID_VAR with the
+		 * partitioned rel's varno, TODO - explain the reasoning here.
+		 */
+		foreach(lc, scanjoin_targets)
+		{
+			PathTarget *target = lfirst_node(PathTarget, lc);
+
+			target = copy_pathtarget(target);
+			target->exprs = (List *)
+				adjust_appendrel_rowid_vars(root, (Node *) target->exprs,
+											rel->relid);
+			newtarget = lappend(newtarget, target);
+		}
+		/* Extract SRF-free scan/join target. */
+		index_scanjoin_target = linitial_node(PathTarget, newtarget);
+
+		/*
+		 * As explained in above comments, skip all paths other than the
+		 * global index paths as other paths will be build again. So process
+		 * the global index paths and apply the index_scanjoin_target to them.
+		 */
+		foreach(lc, rel->pathlist)
+		{
+			Path	*path = (Path *) lfirst(lc);
+			Path	*newpath;
+
+			if (nodeTag(path) != T_IndexPath)
+				continue;
+
+			newpath = (Path *) create_projection_path(root, rel, path,
+													  index_scanjoin_target);
+			global_index_path_list = lappend(global_index_path_list, newpath);
+		}
+
+		/*
+		 * For now set the rel->pathlist to NIL and once we have regenerated
+		 * the append paths add the other paths back to the list.
+		 */
 		rel->pathlist = NIL;
 	}
 
@@ -7830,47 +7869,8 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 		/* Build new paths for this relation by appending child paths. */
 		add_paths_to_append_rel(root, rel, live_children);
 
-		/*
-		 * FIXME: Ugly hack, we can not have ROWID_VAR in PathTarget, so in
-		 * order to fix that replace the ROWID_VAR.
-		 */
-		if (saved_pathlist)
-		{
-			List	   *index_path_list = NIL;
-			List	   *newtarget = NIL;
-
-			foreach(lc, scanjoin_targets)
-			{
-				PathTarget *target = lfirst_node(PathTarget, lc);
-
-				target = copy_pathtarget(target);
-				target->exprs = (List *)
-					adjust_appendrel_rowid_vars(root, (Node *) target->exprs);
-				newtarget = lappend(newtarget, target);
-			}
-			/* Extract SRF-free scan/join target. */
-			scanjoin_target = linitial_node(PathTarget, newtarget);
-
-			/*
-			* For partition parent we can have a global index path
-			*/
-			foreach(lc, saved_pathlist)
-			{
-				Path	   *subpath = (Path *) lfirst(lc);
-
-				/* TODO: Make path as T_GlobalIndexPath instead of T_IndexPath ? */
-				if (nodeTag(subpath) == T_IndexPath)
-				{
-					Path	   *newpath;
-
-					newpath = (Path *) create_projection_path(root, rel, subpath,
-															scanjoin_target);
-					index_path_list = lappend(index_path_list, newpath);
-				}
-			}
-			if (index_path_list)
-				rel->pathlist = index_path_list;
-		}
+		if (global_index_path_list)
+			rel->pathlist = list_concat(rel->pathlist, global_index_path_list);
 	}
 
 	/*

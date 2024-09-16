@@ -32,6 +32,7 @@ typedef struct
 {
 	PlannerInfo *root;
 	int			nappinfos;
+	int			varno;
 	AppendRelInfo **appinfos;
 } adjust_appendrel_attrs_context;
 
@@ -515,20 +516,21 @@ adjust_appendrel_attrs_mutator(Node *node,
 }
 
 /*
- * ROWID_VARs are not allowed in final PathTarget so here we are just replacing
- * it with some random value.
+ * Replace ROWID_VAR with the varno.
  *
- * Ugly hack: we are not going to use this varno ever this is a rowid var so
- * going to be fetched using the sysattr.  But we need to replace the
- * ROWID_VAR because final target list is not allowed to have ROWID_VAR in it.
+ * This is simmilar to the adjust_appendrel_attrs(), except here instead of
+ * preparing the scantarget for the appendrel we are preparing for the
+ * partitioned rel, so varno of the partitioned rel is passed as input and we
+ * need to replcae the ROWID_VAR with the input varno.
  */
 Node *
-adjust_appendrel_rowid_vars(PlannerInfo *root, Node *node)
+adjust_appendrel_rowid_vars(PlannerInfo *root, Node *node, int varno)
 {
 	adjust_appendrel_attrs_context context;
 
 	context.root = root;
 	context.nappinfos = 0;
+	context.varno = varno;
 
 	/* Should never be translating a Query tree. */
 	Assert(node == NULL || !IsA(node, Query));
@@ -554,13 +556,8 @@ adjust_appendrel_rowid_vars_mutator(Node *node,
 			/* Substitute the Var given in the RowIdentityVarInfo */
 			var = copyObject(ridinfo->rowidvar);
 
-			/*
-			 * Ugly hack: we are not going to use this varno ever this is a
-			 * rowid var so going to be fetched using the sysattr.  But we need
-			 * to replace the ROWID_VAR because final target list is not
-			 * allowed to have ROWID_VAR in it.
-			 */
-			var->varno = 1;
+			/* Replace the ROWID_VAR with the varno of the partitioned rel. */
+			var->varno = context->varno;
 			/* identity vars shouldn't have nulling rels */
 			Assert(var->varnullingrels == NULL);
 			/* varnosyn in the RowIdentityVarInfo is probably wrong */

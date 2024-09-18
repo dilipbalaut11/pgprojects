@@ -1077,7 +1077,7 @@ index_create(Relation heapRelation,
 	if (global_index)
 	{
 		Assert(inheritors != NIL);
-		AttachParittionsToGlobalIndex(indexRelation, inheritors, NULL);
+		AttachParittionsToGlobalIndex(indexRelation, inheritors);
 		foreach_oid(tableOid, inheritors)
 		{
 			Relation	childrel = table_open(tableOid, NoLock);

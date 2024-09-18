@@ -1233,7 +1233,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 			{
 				List *inheritor = list_make1_oid(relationId);
 
-				AttachParittionsToGlobalIndex(idxRel, inheritor, NULL);
+				AttachParittionsToGlobalIndex(idxRel, inheritor);
 
 				/* Update the stats that the relation has a index. */
 				index_update_stats(rel, true, true, -1.0);
@@ -5896,6 +5896,27 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 	}
 
 	/*
+	 * In this phase we will rebuild the global indexes for the partitioned
+	 * table if we are asked to do so.
+	 */
+	foreach(ltab, *wqueue)
+	{
+		AlteredTableInfo *tab = (AlteredTableInfo *) lfirst(ltab);
+		ReindexParams reindex_params = {0};
+
+		if (tab->globalindexoids == NIL)
+			continue;
+
+		Assert(tab->relkind == RELKIND_PARTITIONED_TABLE);
+
+		foreach_oid(indexoid, tab->globalindexoids)
+		{
+			reindex_index(NULL, indexoid, false,
+							get_rel_persistence(indexoid), &reindex_params);
+		}
+	}
+
+	/*
 	 * Foreign key constraints are checked in a final pass, since (a) it's
 	 * generally best to examine each one separately, and (b) it's at least
 	 * theoretically possible that we have changed both relations of the
@@ -5983,8 +6004,6 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 	BulkInsertState bistate;
 	int			ti_options;
 	ExprState  *partqualstate = NULL;
-	RelationPtr indexdescs = NULL;
-	IndexInfo **indexInfoArray = NULL;
 
 	/*
 	 * Open the relation(s).  We have surely already locked the existing
@@ -6050,14 +6069,6 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		partqualstate = ExecPrepareExpr(tab->partition_constraint, estate);
 	}
 
-	/*
-	 * If there are global indexes on the ancestors to which we are attaching
-	 * this partition, we need to scan the table and insert records into the
-	 * global indexes.
-	 */
-	if (tab->globalindexoids != NIL)
-		needscan = true;
-
 	foreach(l, tab->newvals)
 	{
 		NewColumnValue *ex = lfirst(l);
@@ -6096,7 +6107,6 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		List	   *dropped_attrs = NIL;
 		ListCell   *lc;
 		Snapshot	snapshot;
-		int			nglobalindexes = list_length(tab->globalindexoids);
 
 		if (newrel)
 			ereport(DEBUG1,
@@ -6169,41 +6179,6 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		 */
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
 		scan = table_beginscan(oldrel, snapshot, 0, NULL);
-
-		/*
-		 * We need to insert tuple into the global indexes so prepare index
-		 * relation descriptor and index info array for each global index.
-		 */
-		if (nglobalindexes > 0)
-		{
-			ListCell   *lc1,
-					   *lc2;
-			int			index = 0;
-
-			/* Allocate space for index descriptors and index info arrays */
-			indexdescs =
-				(RelationPtr) palloc(nglobalindexes * sizeof(Relation));
-			indexInfoArray =
-				(IndexInfo **) palloc(nglobalindexes * sizeof(IndexInfo *));
-
-			/*
-			 * Loop through global index oids and partition ids and build index
-			 * info for each global index.
-			 */
-			forboth(lc1, tab->globalindexoids,
-					lc2, tab->partids)
-			{
-				Oid			indexoid = lfirst_oid(lc1);
-				Relation	irel = index_open(indexoid, NoLock);
-				IndexInfo  *ii;
-
-				ii = BuildIndexInfo(irel);
-				ii->ii_partid = lfirst_int(lc2);;
-				indexdescs[index] = irel;
-				indexInfoArray[index] = ii;
-				index++;
-			}
-		}
 
 		/*
 		 * Switch to per-tuple memory context and reset it for each tuple
@@ -6359,64 +6334,9 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 				table_tuple_insert(newrel, insertslot, mycid,
 								   ti_options, bistate);
 
-			/*
-			 * If there are global indexes on the ancestors then insert tuple
-			 * into them.
-			 */
-			if (tab->globalindexoids != NIL)
-			{
-				Datum		values[INDEX_MAX_KEYS];
-				bool		isnull[INDEX_MAX_KEYS];
-				bool		is_null;
-				Datum		datum;
-				ItemPointer rootTuple;
-
-				/* Fetch the CTID of the root tuple from heap. */
-				datum = slot_getsysattr(insertslot,
-										SelfItemPointerAttributeNumber,
-										&is_null);
-
-				rootTuple = (ItemPointer) DatumGetPointer(datum);
-
-				/*
-				 * Loop through all the global indexes and insert the tuple
-				 * into them.
-				 */
-				for (i = 0; i < nglobalindexes; i++)
-				{
-					FormIndexDatum(indexInfoArray[i],
-								   insertslot,
-								   estate,
-								   values,
-								   isnull);
-
-					index_insert(indexdescs[i],
-								 values,
-								 isnull,
-								 rootTuple,
-								 oldrel,
-								 indexInfoArray[i]->ii_Unique ?
-								 UNIQUE_CHECK_YES : UNIQUE_CHECK_NO,
-								 false,
-								 indexInfoArray[i]);
-				}
-			}
-
 			ResetExprContext(econtext);
 
 			CHECK_FOR_INTERRUPTS();
-		}
-
-		/*
-		 * Close the global index relations and also free the memory allocated
-		 * for relation desc and index info arrays.
-		 */
-		if (nglobalindexes > 0)
-		{
-			for (i = 0; i < nglobalindexes; i++)
-				index_close(indexdescs[i], NoLock);
-			pfree(indexInfoArray);
-			pfree(indexdescs);
 		}
 
 		MemoryContextSwitchTo(oldCxt);
@@ -18435,13 +18355,13 @@ QueuePartitionConstraintValidation(List **wqueue, Relation scanrel,
 }
 
 /*
- * AttachToGlobalIndexes - Attach relation oids to the global index
+ * AttachParittionsToGlobalIndex - Attach relation oids to the global index
  *
  * Thi will create the mapping for the input 'reloids' to global index oid of
  * the input relation pointed by 'irel'.
  */
 void
-AttachParittionsToGlobalIndex(Relation irel, List *reloids, List **wqueue)
+AttachParittionsToGlobalIndex(Relation irel, List *reloids)
 {
 	/*
 	 * Loop through OID of each relation and attach to the global indexes.
@@ -18467,20 +18387,6 @@ AttachParittionsToGlobalIndex(Relation irel, List *reloids, List **wqueue)
 		partid = IndexGetNextPartitionID(irel);
 		InsertIndexPartitionEntry(irel, childoid, partid);
 
-		/*
-		 * If wqueue is valid then store the list of global index oids and
-		 * partition ids into the AlteredTableInfo which will be used by
-		 * ATRewriteTable() for inserting the tuple of the leaf partitions
-		 * to the global indexes added in this list.
-		 */
-		if (wqueue != NULL)
-		{
-			AlteredTableInfo *tab = ATGetQueueEntry(wqueue, childrel);
-
-			tab->globalindexoids = lappend_oid(tab->globalindexoids,
-											   RelationGetRelid(irel));
-			tab->partids = lappend_int(tab->partids, partid);
-		}
 		table_close(childrel, NoLock);
 	}
 }
@@ -18501,7 +18407,9 @@ static void
 AttachToGlobalIndexes(List **wqueue, Relation rel, List *reloids)
 {
 	List	   *indexoids;
+	List	   *globalindexoids = NIL;
 	bool		hasglobalindex = false;
+	AlteredTableInfo   *tab;
 
 	/*
 	 * Retrieve the list of all indexes from the parent to which we are
@@ -18529,11 +18437,13 @@ AttachToGlobalIndexes(List **wqueue, Relation rel, List *reloids)
 			continue;
 		}
 
+		globalindexoids = lappend_oid(globalindexoids, indexoid);
+
 		/* Flag to indicate that we have at least one global index. */
 		hasglobalindex = true;
 
 		/* Attach reloids to the global index. */
-		AttachParittionsToGlobalIndex(irel, reloids, wqueue);
+		AttachParittionsToGlobalIndex(irel, reloids);
 
 		/*
 		 * Invalidate the index relation cache of the global index so that its
@@ -18562,6 +18472,9 @@ AttachToGlobalIndexes(List **wqueue, Relation rel, List *reloids)
 			table_close(childrel, NoLock);
 		}
 	}
+
+	tab = ATGetQueueEntry(wqueue, rel);
+	tab->globalindexoids = globalindexoids;
 
 	/* Free the indexoids list memory. */
 	list_free(indexoids);

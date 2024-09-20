@@ -4210,32 +4210,6 @@ ExecLookupResultRelByOid(ModifyTableState *node, Oid resultoid,
 	return NULL;
 }
 
-/*
- * Traverse whole partition hierarchy and lock all partitioned and the leaf
- * relations which has global indexes.  We need to do that because later we
- * will be inserting tuple to those global indexes so we should be holding
- * lock on all the partitioned table which has those global indexes and the
- * leaf relation which are covered by those global indexes.
- */
-static void
-LockPartitionRelations(Relation rel, LOCKMODE lockmode)
-{
-	PartitionDesc pd = RelationGetPartitionDesc(rel, true);
-
-	for (int i = 0; i < pd->nparts; i++)
-	{
-		if (get_rel_relkind(pd->oids[i]) == RELKIND_PARTITIONED_TABLE)
-		{
-			Relation	partRel = table_open(pd->oids[i], lockmode);
-
-			LockPartitionRelations(partRel, lockmode);
-			table_close(partRel, NoLock);
-		}
-		else if (get_rel_has_globalindex(pd->oids[i]))
-			LockRelationOid(pd->oids[i], lockmode);
-	}
-}
-
 /* ----------------------------------------------------------------
  *		ExecInitModifyTable
  * ----------------------------------------------------------------
@@ -4469,15 +4443,6 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 		operation == CMD_INSERT)
 		mtstate->mt_partition_tuple_routing =
 			ExecSetupPartitionTupleRouting(estate, rel);
-
-	/*
-	 * If we have hasglobalindexes set on any of the result relation that shows
-	 * that there are some global indexes in the partition hierarchy.  So we
-	 * need to traverse the whole hierarchy and lock all partitioned relation
-	 * the leaf relations which has global indexes.
-	 */
-	if (hasglobalindexes)
-		LockPartitionRelations(rel, RowExclusiveLock);
 
 	/*
 	 * Initialize any WITH CHECK OPTION constraints if needed.

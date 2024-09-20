@@ -22,6 +22,7 @@
 #include "access/parallel.h"
 #include "access/sysattr.h"
 #include "access/table.h"
+#include "catalog/partition.h"
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_inherits.h"
@@ -58,6 +59,7 @@
 #include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
+#include "storage/lmgr.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/selfuncs.h"
@@ -294,6 +296,8 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	RelOptInfo *final_rel;
 	Path	   *best_path;
 	Plan	   *top_plan;
+	List	   *lockrelOids = NIL;
+	List	   *toprelOids = NIL;
 	ListCell   *lp,
 			   *lr;
 
@@ -533,6 +537,51 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 		lfirst(lp) = set_plan_references(subroot, subplan);
 	}
 
+	/*
+	 * During DML operations on tables with global indexes, it's necessary to
+	 * lock the entire partition tree up to the partitioned relation that holds
+	 * the global index. Here, we iterate through all result relations to
+	 * identify the top-level relations with a global index for each result
+	 * relation.
+	 */
+	foreach_int(resultrel, glob->resultRelations)
+	{
+		RangeTblEntry *rte = rt_fetch(resultrel, glob->finalrtable);
+
+		if (get_rel_has_globalindex(rte->relid))
+		{
+			List   *ancestors;
+			Oid		toprelid = rte->relid;
+
+			ancestors = get_partition_ancestors(rte->relid);
+			foreach_oid(relid, ancestors)
+			{
+				if (get_rel_has_globalindex(relid))
+					toprelid = relid;
+			}
+			toprelOids = list_append_unique_oid(toprelOids, toprelid);
+		}
+	}
+
+	/*
+	 * Iterate through all the top-level relations with a global index
+	 * identified in the previous loop, locking each of their child relations.
+	 * Additionally, store the list of top-level relations and their respective
+	 * children to ensure that the executor can acquire these locks when
+	 * executing a cached plan.
+	 */
+	foreach_oid(toprelid, toprelOids)
+	{
+		List	*inheritors;
+
+		LockRelationOid(toprelid, RowExclusiveLock);
+		inheritors = find_all_inheritors(toprelid,
+										 RowExclusiveLock,
+										 NULL);
+		lockrelOids = lappend_oid(lockrelOids, toprelid);
+		lockrelOids = list_concat(lockrelOids, inheritors);
+	}
+
 	/* build the PlannedStmt result */
 	result = makeNode(PlannedStmt);
 
@@ -559,6 +608,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	result->utilityStmt = parse->utilityStmt;
 	result->stmt_location = parse->stmt_location;
 	result->stmt_len = parse->stmt_len;
+	result->lockrelOids = lockrelOids;
 
 	result->jitFlags = PGJIT_NONE;
 	if (jit_enabled && jit_above_cost >= 0 &&

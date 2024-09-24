@@ -213,7 +213,6 @@ typedef struct IndexInfo
 	bool		ii_Concurrent;
 	bool		ii_BrokenHotChain;
 	bool		ii_Summarizing;
-	bool		ii_Global;
 	int			ii_ParallelWorkers;
 	Oid			ii_Am;
 	PartitionId	ii_partid;

@@ -1219,7 +1219,7 @@ _bt_load(BTWriteState *wstate, BTSpool *btspool, BTSpool *btspool2)
 	bool		load1;
 	TupleDesc	tupdes = RelationGetDescr(wstate->index);
 	int			i,
-				keysz = IndexGetNumberOfStoredKeyAttributes(wstate->index);
+				keysz = IndexRelationGetNumberOfKeyAttributes(wstate->index);
 	SortSupport sortKeys;
 	int64		tuples_done = 0;
 	bool		deduplicate;

@@ -730,17 +730,6 @@ _bt_indexdel_cmp(const void *arg1, const void *arg2)
 	return pg_cmp_u32(b1->partid, b2->partid);
 }
 
-static inline int32
-BTreePartIDCompare(Oid partid1, Oid partid2)
-{
-	if (partid1 < partid2)
-		return -1;
-	else if (partid1 > partid2)
-		return 1;
-	else
-		return 0;
-}
-
 /*
  *	Operator strategy numbers for B-tree have been moved to access/stratnum.h,
  *	because many places need to use them in ScanKeyInit() calls.

@@ -240,7 +240,7 @@ CheckIndexCompatible(Oid oldId,
 	 */
 	indexInfo = makeIndexInfo(numberOfAttributes, numberOfAttributes,
 							  accessMethodId, NIL, NIL, false, false,
-							  false, false, amsummarizing, false);
+							  false, false, amsummarizing);
 	typeIds = palloc_array(Oid, numberOfAttributes);
 	collationIds = palloc_array(Oid, numberOfAttributes);
 	opclassIds = palloc_array(Oid, numberOfAttributes);
@@ -640,7 +640,6 @@ DefineIndex(Oid tableId,
 	 * tid as a tiebreaker.  However, for global indexes, relying solely on
 	 * heap tid isn't adequate; we also require the partition identifier.
 	 */
-#if 0
 	if (stmt->global)
 	{
 		IndexElem	*newparam = makeNode(IndexElem);
@@ -649,7 +648,7 @@ DefineIndex(Oid tableId,
 		newparam->expr = NULL;
 		stmt->indexParams = lappend(stmt->indexParams, newparam);
 	}
-#endif
+
 	/*
 	 * count key attributes in index
 	 */
@@ -930,8 +929,7 @@ DefineIndex(Oid tableId,
 							  stmt->nulls_not_distinct,
 							  !concurrent,
 							  concurrent,
-							  amissummarizing,
-							  stmt->global);
+							  amissummarizing);
 
 	typeIds = palloc_array(Oid, numberOfAttributes);
 	collationIds = palloc_array(Oid, numberOfAttributes);

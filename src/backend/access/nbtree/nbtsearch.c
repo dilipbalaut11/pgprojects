@@ -698,7 +698,7 @@ _bt_compare(Relation rel,
 	int32		result;
 
 	Assert(_bt_check_natts(rel, key->heapkeyspace, page, offnum));
-	Assert(key->keysz <= IndexRelationGetNumberOfKeyAttributes(rel));
+	Assert(key->keysz <= IndexGetNumberOfStoredKeyAttributes(rel));
 	Assert(key->heapkeyspace || key->scantid == NULL);
 
 	/*
@@ -750,6 +750,8 @@ _bt_compare(Relation rel,
 			else
 				result = -1;	/* NOT_NULL "<" NULL */
 		}
+//		else if (RelationIsGlobalIndex(rel) && i == ncmpkey)
+//			result = BTreePartIDCompare(datum, scankey->sk_argument);
 		else
 		{
 			/*

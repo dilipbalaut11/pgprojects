@@ -68,7 +68,7 @@ _bt_dedup_pass(Relation rel, Buffer buf, IndexTuple newitem, Size newitemsz,
 	BTDedupState state;
 	Size		pagesaving PG_USED_FOR_ASSERTS_ONLY = 0;
 	bool		singlevalstrat = false;
-	int			nkeyatts = IndexRelationGetNumberOfKeyAttributes(rel);
+	int			nkeyatts = IndexGetNumberOfStoredKeyAttributes(rel);
 
 	/* Passed-in newitemsz is MAXALIGNED but does not include line pointer */
 	newitemsz += sizeof(ItemIdData);

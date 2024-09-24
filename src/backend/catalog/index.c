@@ -1438,7 +1438,8 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId,
 							oldInfo->ii_NullsNotDistinct,
 							false,	/* not ready for inserts */
 							true,
-							indexRelation->rd_indam->amsummarizing);
+							indexRelation->rd_indam->amsummarizing,
+							RelationIsGlobalIndex(indexRelation));
 
 	/*
 	 * Extract the list of column names and the column numbers for the new
@@ -2497,7 +2498,8 @@ BuildIndexInfo(Relation index)
 					   indexStruct->indnullsnotdistinct,
 					   indexStruct->indisready,
 					   false,
-					   index->rd_indam->amsummarizing);
+					   index->rd_indam->amsummarizing,
+					   RelationIsGlobalIndex(index));
 
 	/* fill in attribute numbers */
 	for (i = 0; i < numAtts; i++)
@@ -2556,7 +2558,8 @@ BuildDummyIndexInfo(Relation index)
 					   indexStruct->indnullsnotdistinct,
 					   indexStruct->indisready,
 					   false,
-					   index->rd_indam->amsummarizing);
+					   index->rd_indam->amsummarizing,
+					   RelationIsGlobalIndex(index));
 
 	/* fill in attribute numbers */
 	for (i = 0; i < numAtts; i++)
@@ -2778,6 +2781,7 @@ FormIndexDatum(IndexInfo *indexInfo,
 {
 	ListCell   *indexpr_item;
 	int			i;
+	int			curatt = 0;
 
 	if (indexInfo->ii_Expressions != NIL &&
 		indexInfo->ii_ExpressionsState == NIL)
@@ -2827,8 +2831,21 @@ FormIndexDatum(IndexInfo *indexInfo,
 											   &isNull);
 			indexpr_item = lnext(indexInfo->ii_ExpressionsState, indexpr_item);
 		}
-		values[i] = iDatum;
-		isnull[i] = isNull;
+
+		/*
+		 * For global index after adding all the key attribute also add the
+		 * partition id attribute.
+		 */
+		if (indexInfo->ii_Global && curatt == indexInfo->ii_NumIndexKeyAttrs)
+		{
+			values[curatt] = indexInfo->ii_partid;
+			isnull[curatt] = false;
+			curatt++;
+		}
+
+		values[curatt] = iDatum;
+		isnull[curatt] = isNull;
+		curatt++;
 	}
 
 	if (indexpr_item != NULL)

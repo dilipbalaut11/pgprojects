@@ -25,6 +25,7 @@
 #include "miscadmin.h"
 #include "utils/array.h"
 #include "utils/datum.h"
+#include "utils/fmgrprotos.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
@@ -137,11 +138,11 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 	int			i;
 
 	itupdesc = RelationGetDescr(rel);
-	indnkeyatts = IndexRelationGetNumberOfKeyAttributes(rel);
+	indnkeyatts = IndexGetNumberOfStoredKeyAttributes(rel);
 	indoption = rel->rd_indoption;
 	tupnatts = itup ? BTreeTupleGetNAtts(itup, rel) : 0;
 
-	Assert(tupnatts <= IndexRelationGetNumberOfAttributes(rel));
+	Assert(tupnatts <= IndexGetNumberOfStoredAttributes(rel));
 
 	/*
 	 * We'll execute search using scan key constructed on key columns.
@@ -171,12 +172,25 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 		Datum		arg;
 		bool		null;
 		int			flags;
+		Oid			collation;
+
 
 		/*
 		 * We can use the cached (default) support procs since no cross-type
 		 * comparison can be needed.
 		 */
-		procinfo = index_getprocinfo(rel, i + 1, BTORDER_PROC);
+		if (RelationIsGlobalIndex(rel) && i == indnkeyatts - 1)
+		{
+			FmgrInfo   procinfo1;
+
+			procinfo = &procinfo1;
+			collation = InvalidOid;
+		}
+		else
+		{
+			procinfo = index_getprocinfo(rel, i + 1, BTORDER_PROC);
+			collation = rel->rd_indcollation[i];
+		}
 
 		/*
 		 * Key arguments built from truncated attributes (or when caller
@@ -196,7 +210,7 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 									   (AttrNumber) (i + 1),
 									   InvalidStrategy,
 									   InvalidOid,
-									   rel->rd_indcollation[i],
+									   collation,
 									   procinfo,
 									   arg);
 		/* Record if any key attribute is NULL (or truncated) */
@@ -4646,7 +4660,7 @@ _bt_truncate(Relation rel, IndexTuple lastleft, IndexTuple firstright,
 			 BTScanInsert itup_key)
 {
 	TupleDesc	itupdesc = RelationGetDescr(rel);
-	int16		nkeyatts = IndexRelationGetNumberOfKeyAttributes(rel);
+	int16		nkeyatts = IndexGetNumberOfStoredKeyAttributes(rel);
 	int			keepnatts;
 	IndexTuple	pivot;
 	IndexTuple	tidpivot;
@@ -4678,7 +4692,7 @@ _bt_truncate(Relation rel, IndexTuple lastleft, IndexTuple firstright,
 		 * need to truncate away a posting list here instead.
 		 */
 		Assert(keepnatts == nkeyatts || keepnatts == nkeyatts + 1);
-		Assert(IndexRelationGetNumberOfAttributes(rel) == nkeyatts);
+		Assert(IndexGetNumberOfStoredAttributes(rel) == nkeyatts);
 		pivot->t_info &= ~INDEX_SIZE_MASK;
 		pivot->t_info |= MAXALIGN(BTreeTupleGetPostingOffset(firstright));
 	}
@@ -4790,7 +4804,7 @@ static int
 _bt_keep_natts(Relation rel, IndexTuple lastleft, IndexTuple firstright,
 			   BTScanInsert itup_key)
 {
-	int			nkeyatts = IndexRelationGetNumberOfKeyAttributes(rel);
+	int			nkeyatts = IndexGetNumberOfStoredKeyAttributes(rel);
 	TupleDesc	itupdesc = RelationGetDescr(rel);
 	int			keepnatts;
 	ScanKey		scankey;
@@ -4864,7 +4878,7 @@ int
 _bt_keep_natts_fast(Relation rel, IndexTuple lastleft, IndexTuple firstright)
 {
 	TupleDesc	itupdesc = RelationGetDescr(rel);
-	int			keysz = IndexRelationGetNumberOfKeyAttributes(rel);
+	int			keysz = IndexGetNumberOfStoredKeyAttributes(rel);
 	int			keepnatts;
 
 	keepnatts = 1;
@@ -4883,7 +4897,12 @@ _bt_keep_natts_fast(Relation rel, IndexTuple lastleft, IndexTuple firstright)
 		if (isNull1 != isNull2)
 			break;
 
-		if (!isNull1 &&
+		if (RelationIsGlobalIndex(rel) && attnum == keysz)
+		{
+			if (DatumGetPartitionId(datum1) != DatumGetPartitionId(datum2))
+				break;
+		}
+		else if (!isNull1 &&
 			!datum_image_eq(datum1, datum2, att->attbyval, att->attlen))
 			break;
 
@@ -5131,8 +5150,8 @@ _bt_allequalimage(Relation rel, bool debugmessage)
 	bool		allequalimage = true;
 
 	/* INCLUDE indexes can never support deduplication */
-	if (IndexRelationGetNumberOfAttributes(rel) !=
-		IndexRelationGetNumberOfKeyAttributes(rel))
+	if (IndexGetNumberOfStoredAttributes(rel) !=
+		IndexGetNumberOfStoredKeyAttributes(rel))
 		return false;
 
 	for (int i = 0; i < IndexRelationGetNumberOfKeyAttributes(rel); i++)

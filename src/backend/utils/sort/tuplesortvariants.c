@@ -370,7 +370,7 @@ tuplesort_begin_index_btree(Relation heapRel,
 			 enforceUnique ? 't' : 'f',
 			 workMem, sortopt & TUPLESORT_RANDOMACCESS ? 't' : 'f');
 
-	base->nKeys = IndexRelationGetNumberOfKeyAttributes(indexRel);
+	base->nKeys = IndexGetNumberOfStoredKeyAttributes(indexRel);
 
 	TRACE_POSTGRESQL_SORT_START(INDEX_SORT,
 								enforceUnique,

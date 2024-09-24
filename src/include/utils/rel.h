@@ -485,6 +485,12 @@ typedef struct ViewOptions
 	  VIEW_OPTION_CHECK_OPTION_CASCADED)
 
 /*
+ * Check whether the input relation is a global index or not.
+ */
+#define RelationIsGlobalIndex(relation) \
+	((relation)->rd_rel->relkind == RELKIND_GLOBAL_INDEX)
+
+/*
  * RelationIsValid
  *		True iff relation descriptor is valid.
  */
@@ -536,6 +542,33 @@ typedef struct ViewOptions
  */
 #define IndexRelationGetNumberOfKeyAttributes(relation) \
 		((relation)->rd_index->indnkeyatts)
+
+/*
+ * IndexRelationGetNumberOfAttributes
+ *		Returns the number of attributes in an index.
+ */
+static inline int
+IndexGetNumberOfStoredAttributes(Relation relation)
+{
+	if (RelationIsGlobalIndex(relation))
+		return relation->rd_index->indnatts + 1;
+	else
+		return relation->rd_index->indnatts;
+}
+
+/*
+ * IndexRelationGetNumberOfKeyAttributes
+ *		Returns the number of key attributes in an index.
+ */
+static inline int
+IndexGetNumberOfStoredKeyAttributes(Relation relation)
+{
+	if (RelationIsGlobalIndex(relation))
+		return relation->rd_index->indnkeyatts + 1;
+	else
+		return relation->rd_index->indnkeyatts;
+}
+
 
 /*
  * RelationGetDescr
@@ -716,12 +749,6 @@ RelationCloseSmgr(Relation relation)
 	 RelationNeedsWAL(relation) && \
 	 (relation)->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&	\
 	 !IsCatalogRelation(relation))
-
-/*
- * Check whether the input relation is a global index or not.
- */
-#define RelationIsGlobalIndex(relation) \
-	((relation)->rd_rel->relkind == RELKIND_GLOBAL_INDEX)
 
 /* routines in utils/cache/relcache.c */
 extern void RelationIncrementReferenceCount(Relation rel);

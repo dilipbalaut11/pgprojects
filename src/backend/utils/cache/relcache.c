@@ -316,7 +316,8 @@ static void IndexSupportInitialize(oidvector *indclass,
 								   Oid *opFamily,
 								   Oid *opcInType,
 								   StrategyNumber maxSupportNumber,
-								   AttrNumber maxAttributeNumber);
+								   AttrNumber maxAttributeNumber,
+								   AttrNumber partIdAttNumber);
 static OpClassCacheEnt *LookupOpclassInfo(Oid operatorClassOid,
 										  StrategyNumber numSupport);
 static void RelationCacheInitFileRemoveInDir(const char *tblspcpath);
@@ -1442,6 +1443,7 @@ RelationInitIndexAccessInfo(Relation relation)
 	int			indnatts;
 	int			indnkeyatts;
 	uint16		amsupport;
+	bool		is_global = RelationIsGlobalIndex(relation);
 
 	/*
 	 * Make a copy of the pg_index entry for the index.  Since pg_index
@@ -1471,11 +1473,12 @@ RelationInitIndexAccessInfo(Relation relation)
 	relation->rd_amhandler = aform->amhandler;
 	ReleaseSysCache(tuple);
 
-	indnatts = RelationGetNumberOfAttributes(relation);
-	if (indnatts != IndexRelationGetNumberOfAttributes(relation))
+	/* FIXME: error check should be relooked into */
+	indnatts = IndexGetNumberOfStoredAttributes(relation);
+	if (indnatts != IndexGetNumberOfStoredAttributes(relation))
 		elog(ERROR, "relnatts disagrees with indnatts for index %u",
 			 RelationGetRelid(relation));
-	indnkeyatts = IndexRelationGetNumberOfKeyAttributes(relation);
+	indnkeyatts = IndexGetNumberOfStoredKeyAttributes(relation);
 
 	/*
 	 * Make the private context to hold index access info.  The reason we need
@@ -1557,7 +1560,8 @@ RelationInitIndexAccessInfo(Relation relation)
 	 */
 	IndexSupportInitialize(indclass, relation->rd_support,
 						   relation->rd_opfamily, relation->rd_opcintype,
-						   amsupport, indnkeyatts);
+						   amsupport, indnkeyatts,
+						   is_global ? indnkeyatts - 1 : -1);
 
 	/*
 	 * Similarly extract indoption and copy it to the cache entry
@@ -1568,7 +1572,10 @@ RelationInitIndexAccessInfo(Relation relation)
 								 &isnull);
 	Assert(!isnull);
 	indoption = (int2vector *) DatumGetPointer(indoptionDatum);
-	memcpy(relation->rd_indoption, indoption->values, indnkeyatts * sizeof(int16));
+	if (is_global)
+		memcpy(relation->rd_indoption, indoption->values, (indnkeyatts - 1)* sizeof(int16));
+	else
+		memcpy(relation->rd_indoption, indoption->values, indnkeyatts * sizeof(int16));
 
 	(void) RelationGetIndexAttOptions(relation, false);
 
@@ -1577,7 +1584,7 @@ RelationInitIndexAccessInfo(Relation relation)
 	 * relation oid mapping.  For more details about this mapping read comments
 	 * atop IndexPartitionInfoData.
 	 */
-	if (RelationIsGlobalIndex(relation))
+	if (is_global)
 		BuildIndexPartitionInfo(relation, indexcxt);
 
 	/*
@@ -1610,7 +1617,8 @@ IndexSupportInitialize(oidvector *indclass,
 					   Oid *opFamily,
 					   Oid *opcInType,
 					   StrategyNumber maxSupportNumber,
-					   AttrNumber maxAttributeNumber)
+					   AttrNumber maxAttributeNumber,
+					   AttrNumber partidattnum)
 {
 	int			attIndex;
 
@@ -1622,8 +1630,12 @@ IndexSupportInitialize(oidvector *indclass,
 			elog(ERROR, "bogus pg_index tuple");
 
 		/* look up the info for this opclass, using a cache */
-		opcentry = LookupOpclassInfo(indclass->values[attIndex],
-									 maxSupportNumber);
+		if (attIndex == partidattnum)
+			opcentry = LookupOpclassInfo(INT4_BTREE_OPS_OID,
+										maxSupportNumber);
+		else
+			opcentry = LookupOpclassInfo(indclass->values[attIndex],
+										maxSupportNumber);
 
 		/* copy cached data into relcache entry */
 		opFamily[attIndex] = opcentry->opcfamily;

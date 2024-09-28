@@ -166,6 +166,9 @@ TidStoreCreateLocal(size_t max_bytes, bool insert_only)
 	size_t		minContextSize = ALLOCSET_DEFAULT_MINSIZE;
 	size_t		maxBlockSize = ALLOCSET_DEFAULT_MAXSIZE;
 
+	//FIXME: Use proper memory context and who will be owner of the memory context?
+	MemoryContext oldctx = MemoryContextSwitchTo(TopMemoryContext);
+
 	ts = palloc0(sizeof(TidStore));
 	ts->context = CurrentMemoryContext;
 
@@ -195,6 +198,7 @@ TidStoreCreateLocal(size_t max_bytes, bool insert_only)
 	}
 
 	ts->tree.local = local_ts_create(ts->rt_context);
+	MemoryContextSwitchTo(oldctx);
 
 	return ts;
 }

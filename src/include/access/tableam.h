@@ -19,6 +19,7 @@
 
 #include "access/relscan.h"
 #include "access/sdir.h"
+#include "access/tidstore.h"
 #include "access/xact.h"
 #include "executor/tuptable.h"
 #include "storage/read_stream.h"
@@ -659,7 +660,8 @@ typedef struct TableAmRoutine
 	 */
 	void		(*relation_vacuum) (Relation rel,
 									struct VacuumParams *params,
-									BufferAccessStrategy bstrategy);
+									BufferAccessStrategy bstrategy,
+									TidStore **dead_items);
 
 	/*
 	 * Prepare to analyze block `blockno` of `scan`. The scan has been started
@@ -1711,9 +1713,9 @@ table_relation_copy_for_cluster(Relation OldTable, Relation NewTable,
  */
 static inline void
 table_relation_vacuum(Relation rel, struct VacuumParams *params,
-					  BufferAccessStrategy bstrategy)
+					  BufferAccessStrategy bstrategy, TidStore **deaditems)
 {
-	rel->rd_tableam->relation_vacuum(rel, params, bstrategy);
+	rel->rd_tableam->relation_vacuum(rel, params, bstrategy, deaditems);
 }
 
 /*

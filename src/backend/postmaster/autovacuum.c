@@ -75,6 +75,7 @@
 #include "access/xact.h"
 #include "catalog/dependency.h"
 #include "catalog/namespace.h"
+#include "catalog/partition.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_namespace.h"
 #include "commands/dbcommands.h"
@@ -202,6 +203,7 @@ typedef struct autovac_table
 	int			at_storage_param_vac_cost_limit;
 	bool		at_dobalance;
 	bool		at_sharedrel;
+	bool		at_hasglobalindex;
 	char	   *at_relname;
 	char	   *at_nspname;
 	char	   *at_datname;
@@ -319,6 +321,7 @@ static void launcher_determine_sleep(bool canlaunch, bool recursing,
 									 struct timeval *nap);
 static void launch_worker(TimestampTz now);
 static List *get_database_list(void);
+static Oid get_top_ancestor_with_globalindex(Oid relid);
 static void rebuild_database_list(Oid newdb);
 static int	db_comparator(const void *a, const void *b);
 static void autovac_recalculate_workers_for_balance(void);
@@ -1865,6 +1868,30 @@ get_database_list(void)
 }
 
 /*
+ * For given input relation find the top most ancestor which has global index.
+ */
+static Oid
+get_top_ancestor_with_globalindex(Oid relid)
+{
+	List   *ancestors;
+	Oid		toprelid = relid;
+
+	/* Input relation must be covered under a global index. */
+	Assert(get_rel_has_globalindex(relid) && get_rel_relispartition(relid));
+
+	ancestors = get_partition_ancestors(relid);
+	foreach_oid(relid, ancestors)
+	{
+		if (get_rel_has_globalindex(relid))
+			toprelid = relid;
+	}
+
+	Assert(get_rel_relkind(toprelid) == RELKIND_PARTITIONED_TABLE);
+
+	return toprelid;
+}
+
+/*
  * Process a database table-by-table
  *
  * Note that CHECK_FOR_INTERRUPTS is supposed to be used in certain spots in
@@ -2033,8 +2060,21 @@ do_autovacuum(void)
 
 		/* Relations that need work are added to table_oids */
 		if (dovacuum || doanalyze)
+		{
 			table_oids = lappend_oid(table_oids, relid);
 
+			/*
+			 * If relation has global index then we will add only the top most
+			 * parent which has global index.  And during actual vacuum this
+			 * parent relation will expanded and all its children will be
+			 * vacuumed.
+			 */
+			if (get_rel_has_globalindex(relid))
+				table_oids = list_append_unique_oid(table_oids,
+									get_top_ancestor_with_globalindex(relid));
+			else
+				table_oids = lappend_oid(table_oids, relid);
+		}
 		/*
 		 * Remember TOAST associations for the second pass.  Note: we must do
 		 * this whether or not the table is going to be vacuumed, because we
@@ -2352,46 +2392,66 @@ do_autovacuum(void)
 		 * but it is very small.
 		 */
 		MemoryContextSwitchTo(AutovacMemCxt);
-		tab = table_recheck_autovac(relid, table_toast_map, pg_class_desc,
-									effective_multixact_freeze_max_age);
-		if (tab == NULL)
+
+		/*
+		 * FIXME: We need to reverify whether table still need vacuum or not
+		 * so if this is a partitioned table, we may get all the inheritors
+		 * and see if any of the inheritor need vacuum.
+		 *
+		 * FIXME: We need to VacuumUpdateCosts() here, because here we are
+		 * sending a parent table and vacuum cost suppose to be set at leaf
+		 * level.  Maybe we should create autovac_table, for each leaf here
+		 * itself and keep all the related tabs together.  And set
+		 * av_storage_param_cost_delay and av_storage_param_cost_limit
+		 */
+		if (get_rel_has_globalindex(relid))
 		{
-			/* someone else vacuumed the table, or it went away */
-			LWLockAcquire(AutovacuumScheduleLock, LW_EXCLUSIVE);
-			MyWorkerInfo->wi_tableoid = InvalidOid;
-			MyWorkerInfo->wi_sharedrel = false;
-			LWLockRelease(AutovacuumScheduleLock);
-			continue;
+			tab = palloc(sizeof(autovac_table));
+			tab->at_relid = relid;
+			tab->at_hasglobalindex = true;
 		}
-
-		/*
-		 * Save the cost-related storage parameter values in global variables
-		 * for reference when updating vacuum_cost_delay and vacuum_cost_limit
-		 * during vacuuming this table.
-		 */
-		av_storage_param_cost_delay = tab->at_storage_param_vac_cost_delay;
-		av_storage_param_cost_limit = tab->at_storage_param_vac_cost_limit;
-
-		/*
-		 * We only expect this worker to ever set the flag, so don't bother
-		 * checking the return value. We shouldn't have to retry.
-		 */
-		if (tab->at_dobalance)
-			pg_atomic_test_set_flag(&MyWorkerInfo->wi_dobalance);
 		else
-			pg_atomic_clear_flag(&MyWorkerInfo->wi_dobalance);
+		{
+			tab = table_recheck_autovac(relid, table_toast_map, pg_class_desc,
+										effective_multixact_freeze_max_age);
+			if (tab == NULL)
+			{
+				/* someone else vacuumed the table, or it went away */
+				LWLockAcquire(AutovacuumScheduleLock, LW_EXCLUSIVE);
+				MyWorkerInfo->wi_tableoid = InvalidOid;
+				MyWorkerInfo->wi_sharedrel = false;
+				LWLockRelease(AutovacuumScheduleLock);
+				continue;
+			}
 
-		LWLockAcquire(AutovacuumLock, LW_SHARED);
-		autovac_recalculate_workers_for_balance();
-		LWLockRelease(AutovacuumLock);
+			/*
+			 * Save the cost-related storage parameter values in global variables
+			 * for reference when updating vacuum_cost_delay and vacuum_cost_limit
+			 * during vacuuming this table.
+			 */
+			av_storage_param_cost_delay = tab->at_storage_param_vac_cost_delay;
+			av_storage_param_cost_limit = tab->at_storage_param_vac_cost_limit;
 
-		/*
-		 * We wait until this point to update cost delay and cost limit
-		 * values, even though we reloaded the configuration file above, so
-		 * that we can take into account the cost-related storage parameters.
-		 */
-		VacuumUpdateCosts();
+			/*
+			 * We only expect this worker to ever set the flag, so don't bother
+			 * checking the return value. We shouldn't have to retry.
+			 */
+			if (tab->at_dobalance)
+				pg_atomic_test_set_flag(&MyWorkerInfo->wi_dobalance);
+			else
+				pg_atomic_clear_flag(&MyWorkerInfo->wi_dobalance);
 
+			LWLockAcquire(AutovacuumLock, LW_SHARED);
+			autovac_recalculate_workers_for_balance();
+			LWLockRelease(AutovacuumLock);
+
+			/*
+			 * We wait until this point to update cost delay and cost limit
+			 * values, even though we reloaded the configuration file above, so
+			 * that we can take into account the cost-related storage parameters.
+			 */
+			VacuumUpdateCosts();
+		}
 
 		/* clean up memory before each iteration */
 		MemoryContextReset(PortalContext);
@@ -2825,6 +2885,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 		tab->at_relname = NULL;
 		tab->at_nspname = NULL;
 		tab->at_datname = NULL;
+		tab->at_hasglobalindex = false;
 
 		/*
 		 * If any of the cost delay parameters has been set individually for
@@ -3097,7 +3158,7 @@ autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
 
 	/* Set up one VacuumRelation target, identified by OID, for vacuum() */
 	rangevar = makeRangeVar(tab->at_nspname, tab->at_relname, -1);
-	rel = makeVacuumRelation(rangevar, tab->at_relid, NIL);
+	rel = makeVacuumRelation(rangevar, tab->at_relid, NIL, InvalidOid);
 	rel_list = list_make1(rel);
 
 	vac_context = AllocSetContextCreate(CurrentMemoryContext,

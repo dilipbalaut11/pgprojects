@@ -154,8 +154,9 @@ typedef struct LVRelState
 	/* Doing index vacuuming, index cleanup, rel truncation? */
 	bool		do_index_vacuuming;
 	bool		do_index_cleanup;
+	bool		do_heap_vacuum_only;
 	bool		do_rel_truncate;
-
+	bool		has_global_indexes;
 	/* VACUUM operation's cutoffs for freezing and pruning */
 	struct VacuumCutoffs cutoffs;
 	GlobalVisState *vistest;
@@ -293,7 +294,7 @@ static void restore_vacuum_error_info(LVRelState *vacrel,
  */
 void
 heap_vacuum_rel(Relation rel, VacuumParams *params,
-				BufferAccessStrategy bstrategy)
+				BufferAccessStrategy bstrategy, TidStore **dead_items)
 {
 	LVRelState *vacrel;
 	bool		verbose,
@@ -356,8 +357,11 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 
 	/* Set up high level stuff about rel and its indexes */
 	vacrel->rel = rel;
-	vac_open_indexes(vacrel->rel, RowExclusiveLock, &vacrel->nindexes,
-					 &vacrel->indrels);
+	vac_open_indexes(vacrel->rel,
+					 RowExclusiveLock,
+					 &vacrel->nindexes,
+					 &vacrel->indrels,
+					 &vacrel->has_global_indexes);
 	vacrel->bstrategy = bstrategy;
 	if (instrument && vacrel->nindexes > 0)
 	{
@@ -488,19 +492,35 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	 * is already dangerously old.)
 	 */
 	lazy_check_wraparound_failsafe(vacrel);
-	dead_items_alloc(vacrel, params->nworkers);
 
 	/*
-	 * Call lazy_scan_heap to perform all required heap pruning, index
-	 * vacuuming, and heap vacuuming (plus related processing)
+	 * If only vacuum is requested then caller must pass the dead item as input
+	 * so we don't need to allocate it again.  Also we don't need to do index
+	 * vacuuming and and index cleanup so set those flags to false.
 	 */
-	lazy_scan_heap(vacrel);
+	if (params->options & VACOPT_HEAP_VACUUM_ONLY)
+	{
+		Assert(*dead_items != NULL);
+		vacrel->consider_bypass_optimization = false;
+		vacrel->do_index_vacuuming = false;
+		vacrel->do_index_cleanup = false;
+		vacrel->do_heap_vacuum_only = true;
+		vacrel->dead_items = *dead_items;
+		lazy_vacuum(vacrel);
+	}
+	else
+	{
+		vacrel->do_heap_vacuum_only = false;
+		dead_items_alloc(vacrel, params->nworkers);
+		lazy_scan_heap(vacrel);
+	}
 
 	/*
 	 * Free resources managed by dead_items_alloc.  This ends parallel mode in
 	 * passing when necessary.
 	 */
-	dead_items_cleanup(vacrel);
+	if (!vacrel->has_global_indexes)
+		dead_items_cleanup(vacrel);
 	Assert(!IsInParallelMode());
 
 	/*
@@ -516,6 +536,7 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	vac_close_indexes(vacrel->nindexes, vacrel->indrels, NoLock);
 
 	/* Optionally truncate rel */
+	/* FIXME properly check the truncation cases. */
 	if (should_attempt_truncation(vacrel))
 		lazy_truncate_heap(vacrel);
 
@@ -569,10 +590,17 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	 * don't know the tuple count.  In practice that can't happen, since we
 	 * scan every page that isn't skipped using the visibility map.
 	 */
-	vac_update_relstats(rel, new_rel_pages, vacrel->new_live_tuples,
-						new_rel_allvisible, vacrel->nindexes > 0,
-						vacrel->NewRelfrozenXid, vacrel->NewRelminMxid,
-						&frozenxid_updated, &minmulti_updated, false);
+
+	/*
+	 * FIXME: This need to fixed because some information like new_live_tuples
+	 * are available after the prune phase whereas other information are
+	 * vailable only after the vacuum phase and truncation.
+	 */
+	if (!vacrel->do_heap_vacuum_only)
+		vac_update_relstats(rel, new_rel_pages, vacrel->new_live_tuples,
+							new_rel_allvisible, vacrel->nindexes > 0,
+							vacrel->NewRelfrozenXid, vacrel->NewRelminMxid,
+							&frozenxid_updated, &minmulti_updated, false);
 
 	/*
 	 * Report results to the cumulative stats system, too.
@@ -783,6 +811,12 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 
 		if (instrument)
 			pfree(indnames[i]);
+	}
+
+	if (vacrel->has_global_indexes)
+	{
+		Assert(dead_items != NULL);
+		*dead_items = vacrel->dead_items;
 	}
 }
 
@@ -1872,9 +1906,9 @@ lazy_vacuum(LVRelState *vacrel)
 
 	/* Should not end up here with no indexes */
 	Assert(vacrel->nindexes > 0);
-	Assert(vacrel->lpdead_item_pages > 0);
+	//Assert(vacrel->lpdead_item_pages > 0);
 
-	if (!vacrel->do_index_vacuuming)
+	if (!vacrel->do_index_vacuuming && !vacrel->do_heap_vacuum_only)
 	{
 		Assert(!vacrel->do_index_cleanup);
 		dead_items_reset(vacrel);
@@ -1937,7 +1971,12 @@ lazy_vacuum(LVRelState *vacrel)
 				  (TidStoreMemoryUsage(vacrel->dead_items) < (32L * 1024L * 1024L)));
 	}
 
-	if (bypass)
+
+	if (vacrel->do_heap_vacuum_only)
+	{
+		lazy_vacuum_heap_rel(vacrel);
+	}
+	else if (bypass)
 	{
 		/*
 		 * There are almost zero TIDs.  Behave as if there were precisely
@@ -1957,7 +1996,8 @@ lazy_vacuum(LVRelState *vacrel)
 		 * We successfully completed a round of index vacuuming.  Do related
 		 * heap vacuuming now.
 		 */
-		lazy_vacuum_heap_rel(vacrel);
+		if (!vacrel->has_global_indexes)
+			lazy_vacuum_heap_rel(vacrel);
 	}
 	else
 	{
@@ -1979,7 +2019,8 @@ lazy_vacuum(LVRelState *vacrel)
 	 * Forget the LP_DEAD items that we just vacuumed (or just decided to not
 	 * vacuum)
 	 */
-	dead_items_reset(vacrel);
+	if (!vacrel->has_global_indexes)
+		dead_items_reset(vacrel);
 }
 
 /*
@@ -2032,6 +2073,14 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 		{
 			Relation	indrel = vacrel->indrels[idx];
 			IndexBulkDeleteResult *istat = vacrel->indstats[idx];
+
+			/*
+			 * Check the flag whether we are vacuuming the local indexes or the
+			 * global indexes and accordingly decide whether to vacuum this
+			 * index or skip it.
+			 */
+			if (RelationIsGlobalIndex(indrel))
+				continue;
 
 			vacrel->indstats[idx] = lazy_vacuum_one_index(indrel, istat,
 														  old_live_tuples,
@@ -2116,9 +2165,9 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 	TidStoreIter *iter;
 	TidStoreIterResult *iter_result;
 
-	Assert(vacrel->do_index_vacuuming);
-	Assert(vacrel->do_index_cleanup);
-	Assert(vacrel->num_index_scans > 0);
+	Assert(vacrel->do_heap_vacuum_only || vacrel->do_index_vacuuming);
+	Assert(vacrel->do_heap_vacuum_only || vacrel->do_index_cleanup);
+	Assert(vacrel->do_heap_vacuum_only || vacrel->num_index_scans > 0);
 
 	/* Report that we are now vacuuming the heap */
 	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
@@ -2179,7 +2228,7 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 	 * We set all LP_DEAD items from the first heap pass to LP_UNUSED during
 	 * the second heap pass.  No more, no less.
 	 */
-	Assert(vacrel->num_index_scans > 1 ||
+	Assert(vacrel->do_heap_vacuum_only || vacrel->num_index_scans > 1 ||
 		   (vacrel->dead_items_info->num_items == vacrel->lpdead_items &&
 			vacuumed_pages == vacrel->lpdead_item_pages));
 
@@ -2212,7 +2261,7 @@ lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
 	bool		all_frozen;
 	LVSavedErrInfo saved_err_info;
 
-	Assert(vacrel->do_index_vacuuming);
+	Assert(vacrel->do_heap_vacuum_only || vacrel->do_index_vacuuming);
 
 	pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_VACUUMED, blkno);
 

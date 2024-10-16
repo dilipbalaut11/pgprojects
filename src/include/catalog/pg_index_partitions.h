@@ -74,6 +74,30 @@ typedef struct IndexPartitionInfoEntry
 #define		FirstValidPartitionId		1
 #define		PartIdIsValid(partid)	((bool) ((partid) != InvalidPartitionId))
 
+/*
+ * The "partitionid" is a special purpose attribute this attribute is not have
+ * entry in the pg_attribute table.  But this is just used for getting the
+ * FormData_pg_attribute entry for partition id attribute.
+ *
+ * TODO: We need to find some better way than doing this, maybe support this
+ * as expression attribute?
+ */
+#define PartitionIdAttributeNumber				(-100)
+
+static const FormData_pg_attribute partitionid_attr = {
+	.attname = {""},
+	.atttypid = INT4OID,
+	.attlen = sizeof(int32),
+	.attnum = PartitionIdAttributeNumber,
+	.attcacheoff = -1,
+	.atttypmod = -1,
+	.attbyval = true,
+	.attalign = TYPALIGN_INT,
+	.attstorage = TYPSTORAGE_PLAIN,
+	.attnotnull = true,
+	.attislocal = true,
+};
+
 extern void BuildIndexPartitionInfo(Relation relation, MemoryContext context);
 extern PartitionId IndexGetRelationPartitionId(Relation irel, Oid reloid);
 extern Oid IndexGetPartitionReloid(Relation irel, PartitionId partid);

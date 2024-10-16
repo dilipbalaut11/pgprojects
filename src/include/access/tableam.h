@@ -207,9 +207,15 @@ typedef struct TM_FailureData
  * ndeltids is 0 on return from call to tableam, in which case no index tuple
  * deletions are possible.  Simple deletion callers can rely on any entries
  * they know to be deletable appearing in the final array as deletable.
+ *
+ * Note: For global indexes, the TID alone is insufficient to identify the
+ * heap tuple. We also need the partition ID that indicates which partition the
+ * TID belongs to. Later, when accessing the heap, the partition ID can be
+ * converted to the corresponding relation ID.
  */
 typedef struct TM_IndexDelete
 {
+	PartitionId		partid;		/* partition id only for global indexes */
 	ItemPointerData tid;		/* table TID from index tuple */
 	int16		id;				/* Offset into TM_IndexStatus array */
 } TM_IndexDelete;

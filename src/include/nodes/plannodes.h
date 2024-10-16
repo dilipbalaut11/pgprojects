@@ -88,6 +88,8 @@ typedef struct PlannedStmt
 
 	List	   *relationOids;	/* OIDs of relations the plan depends on */
 
+	List	   *lockrelOids;	/* OIDs of relation to be locked */
+
 	List	   *invalItems;		/* other dependencies, as PlanInvalItems */
 
 	List	   *paramExecTypes; /* type OIDs for PARAM_EXEC Params */

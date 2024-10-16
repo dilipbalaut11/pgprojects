@@ -429,7 +429,8 @@ bt_index_check_internal(Oid indrelid, bool parentcheck, bool heapallindexed,
 static inline void
 btree_index_checkable(Relation rel)
 {
-	if (rel->rd_rel->relkind != RELKIND_INDEX ||
+	if ((rel->rd_rel->relkind != RELKIND_INDEX &&
+		rel->rd_rel->relkind != RELKIND_GLOBAL_INDEX) ||
 		rel->rd_rel->relam != BTREE_AM_OID)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),

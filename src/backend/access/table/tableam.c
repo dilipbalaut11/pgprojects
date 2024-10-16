@@ -71,6 +71,16 @@ table_slot_callbacks(Relation relation)
 		 */
 		tts_cb = &TTSOpsHeapTuple;
 	}
+	/*
+	 * TODO : We need to fix this and get the TupleTableSlotOps using the AM
+	 * callback.  But at present partitioned table do not have rd_tableam
+	 * because they do not have any underlying storage but now we have global
+	 * index so we might need to think of initializing a proper slot.
+	 */
+	else if(relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		tts_cb = &TTSOpsBufferHeapTuple;
+	}
 	else
 	{
 		/*
@@ -79,8 +89,7 @@ table_slot_callbacks(Relation relation)
 		 * centralize the knowledge that a heap slot is the right thing in
 		 * that case here.
 		 */
-		Assert(relation->rd_rel->relkind == RELKIND_VIEW ||
-			   relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
+		Assert(relation->rd_rel->relkind == RELKIND_VIEW);
 		tts_cb = &TTSOpsVirtual;
 	}
 

@@ -22,6 +22,7 @@
 #include "access/parallel.h"
 #include "access/sysattr.h"
 #include "access/table.h"
+#include "catalog/partition.h"
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_inherits.h"
@@ -59,6 +60,7 @@
 #include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
 #include "rewrite/rewriteManip.h"
+#include "storage/lmgr.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/selfuncs.h"
@@ -296,6 +298,8 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	RelOptInfo *final_rel;
 	Path	   *best_path;
 	Plan	   *top_plan;
+	List	   *lockrelOids = NIL;
+	List	   *toprelOids = NIL;
 	ListCell   *lp,
 			   *lr;
 
@@ -541,6 +545,51 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 		lfirst(lp) = set_plan_references(subroot, subplan);
 	}
 
+	/*
+	 * During DML operations on tables with global indexes, it's necessary to
+	 * lock the entire partition tree up to the partitioned relation that holds
+	 * the global index. Here, we iterate through all result relations to
+	 * identify the top-level relations with a global index for each result
+	 * relation.
+	 */
+	foreach_int(resultrel, glob->resultRelations)
+	{
+		RangeTblEntry *rte = rt_fetch(resultrel, glob->finalrtable);
+
+		if (get_rel_has_globalindex(rte->relid))
+		{
+			List   *ancestors;
+			Oid		toprelid = rte->relid;
+
+			ancestors = get_partition_ancestors(rte->relid);
+			foreach_oid(relid, ancestors)
+			{
+				if (get_rel_has_globalindex(relid))
+					toprelid = relid;
+			}
+			toprelOids = list_append_unique_oid(toprelOids, toprelid);
+		}
+	}
+
+	/*
+	 * Iterate through all the top-level relations with a global index
+	 * identified in the previous loop, locking each of their child relations.
+	 * Additionally, store the list of top-level relations and their respective
+	 * children to ensure that the executor can acquire these locks when
+	 * executing a cached plan.
+	 */
+	foreach_oid(toprelid, toprelOids)
+	{
+		List	*inheritors;
+
+		LockRelationOid(toprelid, RowExclusiveLock);
+		inheritors = find_all_inheritors(toprelid,
+										 RowExclusiveLock,
+										 NULL);
+		lockrelOids = lappend_oid(lockrelOids, toprelid);
+		lockrelOids = list_concat(lockrelOids, inheritors);
+	}
+
 	/* build the PlannedStmt result */
 	result = makeNode(PlannedStmt);
 
@@ -567,6 +616,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	result->utilityStmt = parse->utilityStmt;
 	result->stmt_location = parse->stmt_location;
 	result->stmt_len = parse->stmt_len;
+	result->lockrelOids = lockrelOids;
 
 	result->jitFlags = PGJIT_NONE;
 	if (jit_enabled && jit_above_cost >= 0 &&
@@ -7740,12 +7790,13 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 	bool		rel_is_partitioned = IS_PARTITIONED_REL(rel);
 	PathTarget *scanjoin_target;
 	ListCell   *lc;
+	List	   *global_index_path_list = NIL;
 
 	/* This recurses, so be paranoid. */
 	check_stack_depth();
 
 	/*
-	 * If the rel is partitioned, we want to drop its existing paths and
+	 * If the rel is partitioned, we want to drop its existing append paths and
 	 * generate new ones.  This function would still be correct if we kept the
 	 * existing paths: we'd modify them to generate the correct target above
 	 * the partitioning Append, and then they'd compete on cost with paths
@@ -7762,9 +7813,57 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 	 * stanza.  Hence, zap the main pathlist here, then allow
 	 * generate_useful_gather_paths to add path(s) to the main list, and
 	 * finally zap the partial pathlist.
+	 *
+	 * Note: All the partitioned rel paths which are build by appending child
+	 * rel paths will be rebuilt again so we need to preserve the global index
+	 * paths which are directly created on the partitioned relation.
 	 */
 	if (rel_is_partitioned)
+	{
+		List	*newtarget = NIL;
+		PathTarget *index_scanjoin_target;
+
+		/*
+		 * Preprocess the scanjoin_targets and replace ROWID_VAR with the
+		 * partitioned rel's varno, TODO - explain the reasoning here.
+		 */
+		foreach(lc, scanjoin_targets)
+		{
+			PathTarget *target = lfirst_node(PathTarget, lc);
+
+			target = copy_pathtarget(target);
+			target->exprs = (List *)
+				adjust_appendrel_rowid_vars(root, (Node *) target->exprs,
+											rel->relid);
+			newtarget = lappend(newtarget, target);
+		}
+		/* Extract SRF-free scan/join target. */
+		index_scanjoin_target = linitial_node(PathTarget, newtarget);
+
+		/*
+		 * As explained in above comments, skip all paths other than the
+		 * global index paths as other paths will be build again. So process
+		 * the global index paths and apply the index_scanjoin_target to them.
+		 */
+		foreach(lc, rel->pathlist)
+		{
+			Path	*path = (Path *) lfirst(lc);
+			Path	*newpath;
+
+			if (nodeTag(path) != T_IndexPath)
+				continue;
+
+			newpath = (Path *) create_projection_path(root, rel, path,
+													  index_scanjoin_target);
+			global_index_path_list = lappend(global_index_path_list, newpath);
+		}
+
+		/*
+		 * For now set the rel->pathlist to NIL and once we have regenerated
+		 * the append paths add the other paths back to the list.
+		 */
 		rel->pathlist = NIL;
+	}
 
 	/*
 	 * If the scan/join target is not parallel-safe, partial paths cannot
@@ -7927,6 +8026,9 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 
 		/* Build new paths for this relation by appending child paths. */
 		add_paths_to_append_rel(root, rel, live_children);
+
+		if (global_index_path_list)
+			rel->pathlist = list_concat(rel->pathlist, global_index_path_list);
 	}
 
 	/*

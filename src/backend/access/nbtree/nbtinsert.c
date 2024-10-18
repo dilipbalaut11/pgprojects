@@ -2884,6 +2884,7 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 	int			ndeadblocks;
 	TM_IndexDeleteOp delstate;
 	OffsetNumber offnum;
+	PartidDeltidMapping *mapping;
 
 	/* Get array of table blocks pointed to by LP_DEAD-set tuples */
 	deadblocks = _bt_deadblocks(rel, page, deletable, ndeletable, newitem,
@@ -2897,6 +2898,9 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 	delstate.ndeltids = 0;
 	delstate.deltids = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexDelete));
 	delstate.status = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexStatus));
+
+	/* Allocate memory for partittion id to deleted tid array mapping. */
+	mapping = palloc(MaxTIDsPerBTreePage * sizeof(PartidDeltidMapping));
 
 	for (offnum = minoff;
 		 offnum <= maxoff;
@@ -2927,7 +2931,6 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 			 * TID's table block is among those pointed to by the TIDs from
 			 * LP_DEAD-bit set tuples on page -- add TID to deltids
 			 */
-			odeltid->partid = tidblock.partid;
 			odeltid->tid = itup->t_tid;
 			odeltid->id = delstate.ndeltids;
 			ostatus->idxoffnum = offnum;
@@ -2935,6 +2938,9 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 			ostatus->promising = false; /* unused */
 			ostatus->freespace = 0; /* unused */
 
+			/* Create mapping entry. */
+			mapping->partid = tidblock.partid;
+			mapping->idx = delstate.ndeltids;
 			delstate.ndeltids++;
 		}
 		else
@@ -2963,7 +2969,6 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 				 * TID's table block is among those pointed to by the TIDs
 				 * from LP_DEAD-bit set tuples on page -- add TID to deltids
 				 */
-				odeltid->partid = partid;
 				odeltid->tid = *tid;
 				odeltid->id = delstate.ndeltids;
 				ostatus->idxoffnum = offnum;
@@ -2973,6 +2978,10 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 
 				odeltid++;
 				ostatus++;
+
+				/* Create mapping entry. */
+				mapping->partid = tidblock.partid;
+				mapping->idx = delstate.ndeltids;
 				delstate.ndeltids++;
 			}
 		}
@@ -2983,7 +2992,7 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 	Assert(delstate.ndeltids >= ndeletable);
 
 	/* Physically delete LP_DEAD tuples (plus any delete-safe extra TIDs) */
-	_bt_delitems_delete_check(rel, buffer, heapRel, &delstate);
+	_bt_delitems_delete_check(rel, buffer, heapRel, &delstate, mapping);
 
 	pfree(delstate.deltids);
 	pfree(delstate.status);

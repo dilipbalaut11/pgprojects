@@ -724,8 +724,8 @@ BTreeTupleGetMaxHeapTID(IndexTuple itup)
 static inline int
 _bt_indexdel_cmp(const void *arg1, const void *arg2)
 {
-	TM_IndexDelete *b1 = ((TM_IndexDelete *) arg1);
-	TM_IndexDelete *b2 = ((TM_IndexDelete *) arg2);
+	PartidDeltidMapping *b1 = ((PartidDeltidMapping *) arg1);
+	PartidDeltidMapping *b2 = ((PartidDeltidMapping *) arg2);
 
 	return pg_cmp_u32(b1->partid, b2->partid);
 }
@@ -1322,7 +1322,8 @@ extern void _bt_delitems_vacuum(Relation rel, Buffer buf,
 								BTVacuumPosting *updatable, int nupdatable);
 extern void _bt_delitems_delete_check(Relation rel, Buffer buf,
 									  Relation heapRel,
-									  TM_IndexDeleteOp *delstate);
+									  TM_IndexDeleteOp *delstate,
+									  PartidDeltidMapping *mapping);
 extern void _bt_pagedel(Relation rel, Buffer leafbuf, BTVacState *vstate);
 extern void _bt_pendingfsm_init(Relation rel, BTVacState *vstate,
 								bool cleanuponly);

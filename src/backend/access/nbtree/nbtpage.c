@@ -1690,7 +1690,8 @@ _bt_delitems_delete_check_guts(Relation rel, Buffer buf, Relation heapRel,
  */
 void
 _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
-						  TM_IndexDeleteOp *delstate)
+						  TM_IndexDeleteOp *delstate,
+						  PartidDeltidMapping *mapping)
 {
 	/*
 	 * For global index we need to delete the items for each partition
@@ -1704,15 +1705,28 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 		TM_IndexDeleteOp partdelstate = *delstate;
 
 		/*
-		 * Sort the deleted items in reloid order and then process the items
-		 * one PartitionId at a time.
+		 * Sort the mapping array in partittion id order so that we avoid
+		 * calling tableAM for same relation multiple times.
 		 */
-		qsort(delstate->deltids, delstate->ndeltids, sizeof(TM_IndexDelete),
+		qsort(mapping, delstate->ndeltids, sizeof(PartidDeltidMapping),
 			  _bt_indexdel_cmp);
 
-		prevpartid = delstate->deltids[0].partid;
 		for (ndeltid = 0; ndeltid < delstate->ndeltids; ndeltid++)
 		{
+
+			/*
+			 * If ndeltid is not same as the index present in the mapping then
+			 * swap it with the correct entry.
+			 */
+			if (mapping[ndeltid].idx != ndeltid)
+			{
+				int				idx = mapping[ndeltid].idx;
+				TM_IndexDelete	tmp = delstate->deltids[idx];
+
+				delstate->deltids[idx] = delstate->deltids[ndeltid];
+				delstate->deltids[ndeltid] = tmp;
+			}
+
 			/*
 			 * If this item belong to a different PartitionID mean we need to
 			 * process delete for all the items of the previous PartitionID.
@@ -1720,7 +1734,7 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 			 * items of the last PartitionId.
 			 */
 			if (PartIdIsValid(prevpartid) &&
-				(delstate->deltids[ndeltid].partid != prevpartid ||
+				(mapping[0].partid != prevpartid ||
 				 ndeltid == delstate->ndeltids - 1))
 			{
 				Oid			reloid = IndexGetPartitionReloid(rel, prevpartid);
@@ -1735,7 +1749,7 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 				table_close(childRel, AccessShareLock);
 			}
 
-			prevpartid = delstate->deltids[ndeltid].partid;
+			prevpartid = mapping[ndeltid].partid;
 		}
 	}
 	else

@@ -22,7 +22,8 @@
 
 static void _bt_bottomupdel_finish_pending(Relation rel, Page page,
 										   BTDedupState state,
-										   TM_IndexDeleteOp *delstate);
+										   TM_IndexDeleteOp *delstate,
+										   PartidDeltidMapping *mapping);
 static bool _bt_do_singleval(Relation rel, Page page, BTDedupState state,
 							 OffsetNumber minoff, IndexTuple newitem);
 static void _bt_singleval_fillfactor(Page page, BTDedupState state,
@@ -316,6 +317,7 @@ _bt_bottomupdel_pass(Relation rel, Buffer buf, Relation heapRel,
 	BTDedupState state;
 	TM_IndexDeleteOp delstate;
 	bool		neverdedup;
+	PartidDeltidMapping *mapping;
 	int			nkeyatts = IndexRelationGetNumberOfKeyAttributes(rel);
 
 	/* Passed-in newitemsz is MAXALIGNED but does not include line pointer */
@@ -334,6 +336,9 @@ _bt_bottomupdel_pass(Relation rel, Buffer buf, Relation heapRel,
 	state->nitems = 0;
 	state->phystupsize = 0;
 	state->nintervals = 0;
+
+	/* Allocate memory for partittion id to deleted tid array mapping. */
+	mapping = palloc(MaxTIDsPerBTreePage * sizeof(PartidDeltidMapping));
 
 	/*
 	 * Initialize tableam state that describes bottom-up index deletion
@@ -383,14 +388,15 @@ _bt_bottomupdel_pass(Relation rel, Buffer buf, Relation heapRel,
 		else
 		{
 			/* Finalize interval -- move its TIDs to delete state */
-			_bt_bottomupdel_finish_pending(rel, page, state, &delstate);
+			_bt_bottomupdel_finish_pending(rel, page, state, &delstate,
+										   mapping);
 
 			/* itup starts new pending interval */
 			_bt_dedup_start_pending(state, itup, offnum);
 		}
 	}
 	/* Finalize final interval -- move its TIDs to delete state */
-	_bt_bottomupdel_finish_pending(rel, page, state, &delstate);
+	_bt_bottomupdel_finish_pending(rel, page, state, &delstate, mapping);
 
 	/*
 	 * We don't give up now in the event of having few (or even zero)
@@ -408,7 +414,7 @@ _bt_bottomupdel_pass(Relation rel, Buffer buf, Relation heapRel,
 	pfree(state);
 
 	/* Ask tableam which TIDs are deletable, then physically delete them */
-	_bt_delitems_delete_check(rel, buf, heapRel, &delstate);
+	_bt_delitems_delete_check(rel, buf, heapRel, &delstate, mapping);
 
 	pfree(delstate.deltids);
 	pfree(delstate.status);
@@ -647,7 +653,8 @@ _bt_dedup_finish_pending(Page newpage, BTDedupState state)
  */
 static void
 _bt_bottomupdel_finish_pending(Relation rel, Page page, BTDedupState state,
-							   TM_IndexDeleteOp *delstate)
+							   TM_IndexDeleteOp *delstate,
+							   PartidDeltidMapping *mapping)
 {
 	bool		dupinterval = (state->nitems > 1);
 	PartitionId	partid = InvalidPartitionId;
@@ -681,7 +688,6 @@ _bt_bottomupdel_finish_pending(Relation rel, Page page, BTDedupState state,
 		if (!BTreeTupleIsPosting(itup))
 		{
 			/* Simple case: A plain non-pivot tuple */
-			ideltid->partid = partid;
 			ideltid->tid = itup->t_tid;
 			ideltid->id = delstate->ndeltids;
 			istatus->idxoffnum = offnum;
@@ -689,6 +695,9 @@ _bt_bottomupdel_finish_pending(Relation rel, Page page, BTDedupState state,
 			istatus->promising = dupinterval;	/* simple rule */
 			istatus->freespace = ItemIdGetLength(itemid) + sizeof(ItemIdData);
 
+			/* Create mapping entry. */
+			mapping->partid = partid;
+			mapping->idx = delstate->ndeltids;
 			delstate->ndeltids++;
 		}
 		else
@@ -740,7 +749,6 @@ _bt_bottomupdel_finish_pending(Relation rel, Page page, BTDedupState state,
 			{
 				ItemPointer htid = BTreeTupleGetPostingN(itup, p);
 
-				ideltid->partid = partid;
 				ideltid->tid = *htid;
 				ideltid->id = delstate->ndeltids;
 				istatus->idxoffnum = offnum;
@@ -753,6 +761,11 @@ _bt_bottomupdel_finish_pending(Relation rel, Page page, BTDedupState state,
 
 				ideltid++;
 				istatus++;
+
+				/* Create mapping entry. */
+				mapping->partid = partid;
+				mapping->idx = delstate->ndeltids;
+
 				delstate->ndeltids++;
 			}
 		}

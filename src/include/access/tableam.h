@@ -17,6 +17,7 @@
 #ifndef TABLEAM_H
 #define TABLEAM_H
 
+#include "c.h"
 #include "access/relscan.h"
 #include "access/sdir.h"
 #include "access/xact.h"
@@ -215,7 +216,6 @@ typedef struct TM_FailureData
  */
 typedef struct TM_IndexDelete
 {
-	PartitionId		partid;		/* partition id only for global indexes */
 	ItemPointerData tid;		/* table TID from index tuple */
 	int16		id;				/* Offset into TM_IndexStatus array */
 } TM_IndexDelete;
@@ -260,6 +260,22 @@ typedef struct TM_IndexDeleteOp
 	TM_IndexDelete *deltids;
 	TM_IndexStatus *status;
 } TM_IndexDeleteOp;
+
+/*
+ * This maintain a entry with respect to each entry of *deltids in
+ * TM_IndexDeleteOp structure.  For each entry it will keep the partition id
+ * for that tid and the index into the *deltids array.  We need this so that
+ * later we can sort deleted tids in partittion id order in order to call the
+ * table AM menthod the check the deleted tids.  Alternatively we could
+ * directly store the partid inside TM_IndexDelete but that would cause change
+ * in AM level structure which is not necessary.
+ */
+typedef struct PartidDeltidMapping
+{
+	PartitionId		partid;	/* Partition id of the entry in deltids array
+							   in TM_IndexDeleteOp. */
+	int				idx;	/* Index in deltids array in TM_IndexDeleteOp */
+} PartidDeltidMapping;
 
 /* "options" flag bits for table_tuple_insert */
 /* TABLE_INSERT_SKIP_WAL was 0x0001; RelationNeedsWAL() now governs */

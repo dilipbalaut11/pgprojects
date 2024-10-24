@@ -4919,11 +4919,6 @@ RelationGetIndexList(Relation relation)
 	/*
 	 * If this is a partition relation, retrieve the list of all global indexes
 	 * from its ancestors and append them to this list.
-	 *
-	 * FIXME: The input relation is already locked, and now we're locking
-	 * other relations in partition hierarchy order. However, since one of
-	 * the relations in the hierarchy is already locked, this disrupts the
-	 * locking order and poses a risk of deadlock.
 	 */
 	if (RelationGetForm(relation)->relhasglobalindex)
 	{
@@ -4937,7 +4932,17 @@ RelationGetIndexList(Relation relation)
 		{
 			if (get_rel_has_globalindex(relid))
 			{
-				Relation parent = table_open(relid, NoLock);
+				/*
+				 * FIXME: When this is called by DDL or DML operation from
+				 * the executor all parent relations which has global indexes
+				 * must already be locked, but in some cases where this is
+				 * directly accessed via planner or some other extensions
+				 * the parent relation might not be locked already.  One
+				 * solution to this problem is create global index on all
+				 * relations but let them point to the common storage of the
+				 * top level relation's global index.
+				 */
+				Relation parent = table_open(relid, AccessShareLock);
 				List *indexlist = RelationGetIndexListGuts(parent);
 
 				foreach_oid(indexoid, indexlist)
@@ -4946,7 +4951,7 @@ RelationGetIndexList(Relation relation)
 						globalindexes = lappend_oid(globalindexes, indexoid);
 				}
 				list_free(indexlist);
-				table_close(parent, NoLock);
+				table_close(parent, AccessShareLock);
 			}
 		}
 		result = list_concat_unique_oid(result, globalindexes);

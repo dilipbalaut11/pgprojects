@@ -1199,6 +1199,12 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		}
 	}
 
+	/*
+	 * We need to check the index predicate for the parent relation, as the
+	 * parent relation may have global index scan paths.
+	 */
+	check_index_predicates(root, rel);
+
 	if (has_live_children)
 	{
 		/*
@@ -1296,6 +1302,12 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 
 	/* Add paths to the append relation. */
 	add_paths_to_append_rel(root, rel, live_childrels);
+
+	/*
+	 * Partiotioned relation may have global indexes so lets consider index
+	 * scan paths.
+	 */
+	create_index_paths(root, rel);
 }
 
 

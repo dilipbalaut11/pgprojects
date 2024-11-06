@@ -124,6 +124,14 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		CHECK_FOR_INTERRUPTS();
 
 		/*
+		 * For global index we need to get the heapoid of the parittion
+		 * relation from the scan descriptor stored by index scan in order to
+		 * check the visibility map of that relation.
+		 */
+		if (scandesc->xs_global_index)
+			global_indexscan_setup_partrel(scandesc);
+
+		/*
 		 * We can skip the heap fetch if the TID references a heap page on
 		 * which all tuples are known visible to everybody.  In any case,
 		 * we'll use the index tuple not the heap tuple as the data source.

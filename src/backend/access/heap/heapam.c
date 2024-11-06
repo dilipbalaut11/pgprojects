@@ -4168,7 +4168,8 @@ check_inplace_rel_lock(HeapTuple oldtup)
 	else
 		dbid = MyDatabaseId;
 
-	if (classForm->relkind == RELKIND_INDEX)
+	if (classForm->relkind == RELKIND_INDEX ||
+		classForm->relkind == RELKIND_GLOBAL_INDEX)
 	{
 		Relation	irel = index_open(relid, AccessShareLock);
 

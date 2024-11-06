@@ -1395,6 +1395,7 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 		Oid			keycoltype;
 		Oid			keycolcollation;
 
+
 		/*
 		 * Ignore non-key attributes if told to.
 		 */
@@ -1407,6 +1408,10 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 			appendStringInfoString(&buf, ") INCLUDE (");
 			sep = "";
 		}
+
+		/* Ignore internal PartitionIdAttributeNumber. */
+		if (attnum == PartitionIdAttributeNumber)
+			continue;
 
 		if (!colno)
 			appendStringInfoString(&buf, sep);
@@ -1507,6 +1512,12 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 
 		if (idxrec->indnullsnotdistinct)
 			appendStringInfoString(&buf, " NULLS NOT DISTINCT");
+
+		/*
+		 * If this is a global index, append "GLOBAL"
+		 */
+		if (idxrelrec->relkind == RELKIND_GLOBAL_INDEX)
+			appendStringInfoString(&buf, " GLOBAL");
 
 		/*
 		 * If it has options, append "WITH (options)"

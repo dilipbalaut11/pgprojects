@@ -35,6 +35,7 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/pathnodes.h"
 #include "nodes/supportnodes.h"
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
@@ -267,15 +268,6 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			}
 
 			/*
-			 * TODO: Global index scan paths are not yet supported.
-			 */
-			if (RelationIsGlobalIndex(indexRelation))
-			{
-				index_close(indexRelation, NoLock);
-				continue;
-			}
-
-			/*
 			 * If the index is valid, but cannot yet be used, ignore it; but
 			 * mark the plan we are generating as transient. See
 			 * src/backend/access/heap/README.HOT for discussion.
@@ -291,7 +283,13 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 
 			info = makeNode(IndexOptInfo);
 
+			/* Set a flag to indicate this is a global index. */
+			if (RelationIsGlobalIndex(indexRelation))
+				info->idxkind = (index->indrelid == relationObjectId) ?
+								INDEX_GLOBAL_DIRECT : INDEX_GLOBAL_INDIRECT;
+
 			info->indexoid = index->indexrelid;
+			info->indrelid = index->indrelid;
 			info->reltablespace =
 				RelationGetForm(indexRelation)->reltablespace;
 			info->rel = rel;
@@ -331,13 +329,27 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 				info->amoptionalkey = amroutine->amoptionalkey;
 				info->amsearcharray = amroutine->amsearcharray;
 				info->amsearchnulls = amroutine->amsearchnulls;
-				info->amcanparallel = amroutine->amcanparallel;
 				info->amhasgettuple = (amroutine->amgettuple != NULL);
-				info->amhasgetbitmap = amroutine->amgetbitmap != NULL &&
-					relation->rd_tableam->scan_bitmap_next_block != NULL;
 				info->amcanmarkpos = (amroutine->ammarkpos != NULL &&
 									  amroutine->amrestrpos != NULL);
 				info->amcostestimate = amroutine->amcostestimate;
+
+				/*
+				 * TODO: Currently parallel and bitmap scans are not supported
+				 * for the global indexes.
+				 */
+				if (info->idxkind != INDEX_LOCAL)
+				{
+					info->amcanparallel = false;
+					info->amhasgetbitmap = false;
+				}
+				else
+				{
+					info->amcanparallel = amroutine->amcanparallel;
+					info->amhasgetbitmap = amroutine->amgetbitmap != NULL &&
+					relation->rd_tableam->scan_bitmap_next_block != NULL;
+				}
+
 				Assert(info->amcostestimate != NULL);
 
 				/* Fetch index opclass options */
@@ -1916,7 +1928,13 @@ build_index_tlist(PlannerInfo *root, IndexOptInfo *index,
 			/* simple column */
 			const FormData_pg_attribute *att_tup;
 
-			if (indexkey < 0)
+			/*
+			 * If the attribute number is PartitionIdAttributeNumber then
+			 * directly assign to the predefined partitionid_attr constant.
+			 */
+			if (indexkey == PartitionIdAttributeNumber)
+				att_tup = &partitionid_attr;
+			else if (indexkey < 0)
 				att_tup = SystemAttributeDefinition(indexkey);
 			else
 				att_tup = TupleDescAttr(heapRelation->rd_att, indexkey - 1);

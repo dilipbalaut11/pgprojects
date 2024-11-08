@@ -15,6 +15,7 @@
 
 #include "postgres_fe.h"
 
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -64,9 +65,10 @@ static void dropTablespaces(PGconn *conn);
 static void dumpTablespaces(PGconn *conn);
 static void dropDBs(PGconn *conn);
 static void dumpUserConfig(PGconn *conn, const char *username);
-static void dumpDatabases(PGconn *conn);
+static void dumpDatabases(PGconn *conn, bool directory_format);
 static void dumpTimestamp(const char *msg);
-static int	runPgDump(const char *dbname, const char *create_opts);
+static int runPgDump(const char *dbname, const char *create_opts,
+					 char *dbfile);
 static void buildShSecLabels(PGconn *conn,
 							 const char *catalog_name, Oid objectId,
 							 const char *objtype, const char *objname,
@@ -117,6 +119,7 @@ static char role_catalog[10];
 
 static FILE *OPF;
 static char *filename = NULL;
+static char *database_dir = NULL;
 
 static SimpleStringList database_exclude_patterns = {NULL, NULL};
 static SimpleStringList database_exclude_names = {NULL, NULL};
@@ -147,6 +150,7 @@ main(int argc, char *argv[])
 		{"password", no_argument, NULL, 'W'},
 		{"no-privileges", no_argument, NULL, 'x'},
 		{"no-acl", no_argument, NULL, 'x'},
+		{"format", required_argument, NULL, 'F'},
 
 		/*
 		 * the following options don't have an equivalent short option letter
@@ -188,17 +192,20 @@ main(int argc, char *argv[])
 	char	   *pgdb = NULL;
 	char	   *use_role = NULL;
 	const char *dumpencoding = NULL;
+	const char *format;
 	trivalue	prompt_password = TRI_DEFAULT;
 	bool		data_only = false;
 	bool		globals_only = false;
 	bool		roles_only = false;
 	bool		tablespaces_only = false;
+	bool		directory_format = false;
 	PGconn	   *conn;
 	int			encoding;
 	const char *std_strings;
 	int			c,
 				ret;
 	int			optindex;
+	FILE	   *toc_file;
 
 	pg_logging_init(argv[0]);
 	pg_logging_set_level(PG_LOG_WARNING);
@@ -237,7 +244,7 @@ main(int argc, char *argv[])
 
 	pgdumpopts = createPQExpBuffer();
 
-	while ((c = getopt_long(argc, argv, "acd:E:f:gh:l:Op:rsS:tU:vwWx", long_options, &optindex)) != -1)
+	while ((c = getopt_long(argc, argv, "acd:E:f:F:gh:l:Op:rsS:tU:vwWx", long_options, &optindex)) != -1)
 	{
 		switch (c)
 		{
@@ -265,7 +272,17 @@ main(int argc, char *argv[])
 				appendPQExpBufferStr(pgdumpopts, " -f ");
 				appendShellString(pgdumpopts, filename);
 				break;
-
+			case 'F':
+				format = optarg;
+				if (strcmp(format, "directory") == 0)
+					directory_format = true;
+				else if (strcmp(format, "plain") != 0)
+				{
+					pg_log_error("invalid format specified: %s", format);
+					pg_log_error_hint("Try \"%s --help\" for more information.", progname);
+					exit_nicely(1);
+				}
+				break;
 			case 'g':
 				globals_only = true;
 				break;
@@ -497,9 +514,32 @@ main(int argc, char *argv[])
 						   &database_exclude_names);
 
 	/*
-	 * Open the output file if required, otherwise use stdout
+	 * Open the output file if required, otherwise use stdout.
 	 */
-	if (filename)
+	if (directory_format)
+	{
+		char	toc_path[MAXPGPATH];
+
+		/*
+		 * If directory format is specified then we must provide the directory
+		 * name.
+		 */
+		if (!filename || strcmp(filename, "") == 0)
+			pg_fatal("no output directory specified");
+
+		/* TODO: accept the empty existing directory. */
+		if (mkdir(filename, 0700) < 0)
+			pg_fatal("could not create directory \"%s\": %m",
+					 filename);
+
+		snprintf(toc_path, MAXPGPATH, "%s/toc.dat", filename);
+		toc_file = fopen(toc_path, "w");
+		if (!toc_file)
+			pg_fatal("could not open TOC file: %s", strerror(errno));
+
+		OPF = toc_file;
+	}
+	else if (filename)
 	{
 		OPF = fopen(filename, PG_BINARY_W);
 		if (!OPF)
@@ -607,7 +647,7 @@ main(int argc, char *argv[])
 	}
 
 	if (!globals_only && !roles_only && !tablespaces_only)
-		dumpDatabases(conn);
+		dumpDatabases(conn, directory_format);
 
 	PQfinish(conn);
 
@@ -620,7 +660,7 @@ main(int argc, char *argv[])
 		fclose(OPF);
 
 		/* sync the resulting file, errors are not fatal */
-		if (dosync)
+		if (dosync && !directory_format)
 			(void) fsync_fname(filename, false);
 	}
 
@@ -637,6 +677,7 @@ help(void)
 
 	printf(_("\nGeneral options:\n"));
 	printf(_("  -f, --file=FILENAME          output file name\n"));
+	printf(_("  -F, --format=d|p             output file format (directory, plain text (default))\n"));
 	printf(_("  -v, --verbose                verbose mode\n"));
 	printf(_("  -V, --version                output version information, then exit\n"));
 	printf(_("  --lock-wait-timeout=TIMEOUT  fail after waiting TIMEOUT for a table lock\n"));
@@ -1487,11 +1528,12 @@ expand_dbname_patterns(PGconn *conn,
  * Dump contents of databases.
  */
 static void
-dumpDatabases(PGconn *conn)
+dumpDatabases(PGconn *conn, bool directory_format)
 {
 	PGresult   *res;
 	int			i;
-
+	char		db_subdir[MAXPGPATH];
+	char		dbfilepath[MAXPGPATH];
 	/*
 	 * Skip databases marked not datallowconn, since we'd be unable to connect
 	 * to them anyway.  This must agree with dropDBs().
@@ -1504,7 +1546,7 @@ dumpDatabases(PGconn *conn)
 	 * doesn't have some failure mode with --clean.
 	 */
 	res = executeQuery(conn,
-					   "SELECT datname "
+					   "SELECT datname, oid "
 					   "FROM pg_database d "
 					   "WHERE datallowconn AND datconnlimit != -2 "
 					   "ORDER BY (datname <> 'template1'), datname");
@@ -1512,15 +1554,31 @@ dumpDatabases(PGconn *conn)
 	if (PQntuples(res) > 0)
 		fprintf(OPF, "--\n-- Databases\n--\n\n");
 
+	/*
+	 * If directory format is specified then create a subdirectory under the
+	 * main directory and each database dump file will be created under the
+	 * subdirectory.
+	 */
+	if (directory_format)
+	{
+		snprintf(db_subdir, MAXPGPATH, "%s/databases", filename);
+		if (mkdir(db_subdir, 0755) != 0)
+			pg_log_error("could not create subdirectory \"%s\": %m", db_subdir);
+	}
+
 	for (i = 0; i < PQntuples(res); i++)
 	{
 		char	   *dbname = PQgetvalue(res, i, 0);
+		char	   *oid = PQgetvalue(res, i, 1);
 		const char *create_opts;
 		int			ret;
 
 		/* Skip template0, even if it's not marked !datallowconn. */
 		if (strcmp(dbname, "template0") == 0)
 			continue;
+
+		if (directory_format)
+			snprintf(dbfilepath, MAXPGPATH, "-f %s/%s", db_subdir, oid);
 
 		/* Skip any explicitly excluded database */
 		if (simple_string_list_member(&database_exclude_names, dbname))
@@ -1531,7 +1589,8 @@ dumpDatabases(PGconn *conn)
 
 		pg_log_info("dumping database \"%s\"", dbname);
 
-		fprintf(OPF, "--\n-- Database \"%s\" dump\n--\n\n", dbname);
+		if (!directory_format)
+			fprintf(OPF, "--\n-- Database \"%s\" dump\n--\n\n", dbname);
 
 		/*
 		 * We assume that "template1" and "postgres" already exist in the
@@ -1549,20 +1608,21 @@ dumpDatabases(PGconn *conn)
 			{
 				create_opts = "";
 				/* Since pg_dump won't emit a \connect command, we must */
-				fprintf(OPF, "\\connect %s\n\n", dbname);
+				if (!directory_format)
+					fprintf(OPF, "\\connect %s\n\n", dbname);
 			}
 		}
 		else
 			create_opts = "--create";
 
-		if (filename)
+		if (!directory_format && filename)
 			fclose(OPF);
 
-		ret = runPgDump(dbname, create_opts);
+		ret = runPgDump(dbname, create_opts, dbfilepath);
 		if (ret != 0)
 			pg_fatal("pg_dump failed on database \"%s\", exiting", dbname);
 
-		if (filename)
+		if (!directory_format && filename)
 		{
 			OPF = fopen(filename, PG_BINARY_A);
 			if (!OPF)
@@ -1580,7 +1640,7 @@ dumpDatabases(PGconn *conn)
  * Run pg_dump on dbname, with specified options.
  */
 static int
-runPgDump(const char *dbname, const char *create_opts)
+runPgDump(const char *dbname, const char *create_opts, char *dbfile)
 {
 	PQExpBufferData connstrbuf;
 	PQExpBufferData cmd;
@@ -1589,17 +1649,26 @@ runPgDump(const char *dbname, const char *create_opts)
 	initPQExpBuffer(&connstrbuf);
 	initPQExpBuffer(&cmd);
 
-	printfPQExpBuffer(&cmd, "\"%s\" %s %s", pg_dump_bin,
-					  pgdumpopts->data, create_opts);
-
-	/*
-	 * If we have a filename, use the undocumented plain-append pg_dump
-	 * format.
-	 */
-	if (filename)
-		appendPQExpBufferStr(&cmd, " -Fa ");
+	if (dbfile)
+	{
+		printfPQExpBuffer(&cmd, "\"%s\" %s %s", pg_dump_bin,
+						  dbfile, create_opts);
+		appendPQExpBufferStr(&cmd, " -Fa ");				  
+	}
 	else
-		appendPQExpBufferStr(&cmd, " -Fp ");
+	{
+		printfPQExpBuffer(&cmd, "\"%s\" %s %s", pg_dump_bin,
+						pgdumpopts->data, create_opts);
+
+		/*
+		* If we have a filename, use the undocumented plain-append pg_dump
+		* format.
+		*/
+		if (filename)
+			appendPQExpBufferStr(&cmd, " -Fa ");
+		else
+			appendPQExpBufferStr(&cmd, " -Fp ");
+	}
 
 	/*
 	 * Append the database name to the already-constructed stem of connection

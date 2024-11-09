@@ -284,12 +284,10 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			info = makeNode(IndexOptInfo);
 
 			/* Set a flag to indicate this is a global index. */
-			if (RelationIsGlobalIndex(indexRelation))
-				info->idxkind = (index->indrelid == relationObjectId) ?
-								INDEX_GLOBAL_DIRECT : INDEX_GLOBAL_INDIRECT;
+			info->relkind = indexRelation->rd_rel->relkind;
 
 			info->indexoid = index->indexrelid;
-			info->indrelid = index->indrelid;
+			info->indtoprelid = index->indtoprelid;
 			info->reltablespace =
 				RelationGetForm(indexRelation)->reltablespace;
 			info->rel = rel;
@@ -338,7 +336,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 				 * TODO: Currently parallel and bitmap scans are not supported
 				 * for the global indexes.
 				 */
-				if (info->idxkind != INDEX_LOCAL)
+				if (info->relkind == RELKIND_GLOBAL_INDEX)
 				{
 					info->amcanparallel = false;
 					info->amhasgetbitmap = false;
@@ -489,7 +487,8 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			 * than the table.  We must ignore partitioned indexes here as
 			 * there are not physical indexes.
 			 */
-			if (indexRelation->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
+			if (indexRelation->rd_rel->relkind != RELKIND_PARTITIONED_INDEX &&
+				indexRelation->rd_rel->relkind != RELKIND_GLOBAL_PARTITION_INDEX)
 			{
 				if (info->indpred == NIL)
 				{

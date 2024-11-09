@@ -1543,6 +1543,8 @@ ProcessUtilitySlow(ParseState *pstate,
 									InvalidOid, /* no predefined OID */
 									InvalidOid, /* no parent index */
 									InvalidOid, /* no parent constraint */
+									InvalidOid,
+									InvalidRelFileNumber,
 									inheritors, /* list of inheritor's OID */
 									nparts, /* # of partitions, or -1 */
 									is_alter_table,

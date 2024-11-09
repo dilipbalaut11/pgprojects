@@ -1137,7 +1137,7 @@ struct IndexOptInfo
 	 * we need to explicitely need it as global index might have defined on
 	 * some upper level parent relations.
 	 */
-	Oid			indrelid;
+	Oid			indtoprelid;
 	/* back-link to index's table; don't print, else infinite recursion */
 	RelOptInfo *rel pg_node_attr(read_write_ignore);
 
@@ -1202,7 +1202,7 @@ struct IndexOptInfo
 	List	   *indrestrictinfo;
 
 	/* whether the index is local or direct global or indirect global */
-	IndexKind	idxkind;
+	char		relkind;
 
 	/* true if index predicate matches query */
 	bool		predOK;

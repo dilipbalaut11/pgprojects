@@ -20,6 +20,7 @@
 #include "access/stratnum.h"
 #include "access/sysattr.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_class.h"
 #include "catalog/pg_index_partitions.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_opfamily.h"
@@ -260,7 +261,9 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 		 * For partitioned relations, we can only consider global index scan
 		 * paths.
 		 */
-		if (ispartitioned && index->idxkind != INDEX_GLOBAL_DIRECT)
+		if (ispartitioned && index->relkind != RELKIND_GLOBAL_INDEX)
+			continue;
+		if (!ispartitioned && index->relkind == RELKIND_GLOBAL_PARTITION_INDEX)
 			continue;
 
 		/*
@@ -268,7 +271,6 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 		 * Check comments in get_relation_info() where we are adding
 		 * IndexOptInfo nodes.
 		 */
-		Assert(ispartitioned || index->idxkind != INDEX_GLOBAL_DIRECT);
 
 		/* Protect limited-size array in IndexClauseSets */
 		Assert(index->nkeycolumns <= INDEX_MAX_KEYS);

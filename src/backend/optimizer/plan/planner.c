@@ -8307,19 +8307,19 @@ lock_additional_rel(PlannerInfo *root)
 		IndexOptInfo *index = (IndexOptInfo *) lfirst(lc);
 		List		 *childrel = NIL;
 
-		if (index->idxkind == INDEX_LOCAL)
+		if (index->relkind != RELKIND_GLOBAL_PARTITION_INDEX)
 			continue;
 
-		if (list_member_oid(lockreloids, index->indrelid))
+		if (list_member_oid(lockreloids, index->indtoprelid))
 			continue;
 
 		/*
 		 * Acquire lock on top level parent on which the global index is
 		 * created and also lock all its inheritors.
 		 */
-		LockRelationOid(index->indrelid, RowExclusiveLock);
-		lockreloids = lappend_oid(lockreloids, index->indrelid);
-		childrel = find_all_inheritors(index->indrelid, RowExclusiveLock,
+		LockRelationOid(index->indtoprelid, RowExclusiveLock);
+		lockreloids = lappend_oid(lockreloids, index->indtoprelid);
+		childrel = find_all_inheritors(index->indtoprelid, RowExclusiveLock,
 										NULL);
 		lockreloids = list_concat(lockreloids, childrel);
 	}

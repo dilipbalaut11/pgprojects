@@ -207,10 +207,19 @@ ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
 	foreach(l, indexoidlist)
 	{
 		Oid			indexOid = lfirst_oid(l);
+		Relation	indexChildDesc;
 		Relation	indexDesc;
 		IndexInfo  *ii;
 
-		indexDesc = index_open(indexOid, RowExclusiveLock);
+		indexChildDesc = index_open(indexOid, RowExclusiveLock);
+		if (OidIsValid(indexChildDesc->rd_index->indtopindexid))
+		{
+			indexDesc = index_open(indexChildDesc->rd_index->indtopindexid,
+								   RowExclusiveLock);
+			index_close(indexChildDesc, RowExclusiveLock);
+		}
+		else
+			indexDesc = indexChildDesc;
 
 		/* extract index key information from the index's pg_index info */
 		ii = BuildIndexInfo(indexDesc);

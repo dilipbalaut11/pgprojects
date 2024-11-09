@@ -543,6 +543,8 @@ DefineIndex(Oid tableId,
 			Oid indexRelationId,
 			Oid parentIndexId,
 			Oid parentConstraintId,
+			Oid	parentRelationId,
+			RelFileNumber parentRelfilenumber,
 			List *inheritors,
 			int total_parts,
 			bool is_alter_table,
@@ -1218,7 +1220,15 @@ DefineIndex(Oid tableId,
 	if (stmt->primary)
 		flags |= INDEX_CREATE_IS_PRIMARY;
 	if (stmt->global)
-		flags |= INDEX_CREATE_GLOBAL;
+	{
+		if (OidIsValid(parentRelationId))
+		{
+			flags |= INDEX_CREATE_SKIP_BUILD;
+			flags |= INDEX_CREATE_GLOBAL_CHILD;
+		}
+		else
+			flags |= INDEX_CREATE_GLOBAL;
+	}
 
 	/*
 	 * If the table is partitioned, and recursion was declined but partitions
@@ -1241,8 +1251,9 @@ DefineIndex(Oid tableId,
 
 	indexRelationId =
 		index_create(rel, indexRelationName, indexRelationId, parentIndexId,
-					 parentConstraintId,
-					 stmt->oldNumber, indexInfo, indexColNames,
+					 parentConstraintId, parentRelationId,
+					 RelFileNumberIsValid(parentRelfilenumber) ?
+					 parentRelfilenumber : stmt->oldNumber, indexInfo, indexColNames,
 					 accessMethodId, tablespaceId,
 					 collationIds, opclassIds, opclassOptions,
 					 coloptions, NULL, reloptions,
@@ -1292,7 +1303,7 @@ DefineIndex(Oid tableId,
 	 * partition, there will be just one global index which will hold data from
 	 * all the children.
 	 */
-	if (partitioned && !stmt->global)
+	if (partitioned)
 	{
 		PartitionDesc partdesc;
 
@@ -1357,6 +1368,12 @@ DefineIndex(Oid tableId,
 			indexInfo = BuildIndexInfo(parentIndex);
 
 			parentDesc = RelationGetDescr(rel);
+
+			if (stmt->global && !OidIsValid(parentRelationId))
+			{
+				parentRelationId = RelationGetRelid(rel);
+				parentRelfilenumber = parentIndex->rd_rel->relfilenode;
+			}
 
 			/*
 			 * For each partition, scan all existing indexes; if one matches
@@ -1526,6 +1543,8 @@ DefineIndex(Oid tableId,
 									InvalidOid, /* no predefined OID */
 									indexRelationId,	/* this is our child */
 									createdConstraintId,
+									parentRelationId,
+									parentRelfilenumber,
 									NIL,
 									-1,
 									is_alter_table, check_rights,

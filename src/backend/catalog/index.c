@@ -111,7 +111,7 @@ static void InitializeAttributeOids(Relation indexRelation,
 									int numatts, Oid indexoid);
 static void AppendAttributeTuples(Relation indexRelation, const Datum *attopts, const NullableDatum *stattargets);
 static void UpdateIndexRelation(Oid indexoid, Oid heapoid,
-								Oid parentIndexId,
+								Oid parentIndexId, Oid parentheapoid,
 								const IndexInfo *indexInfo,
 								const Oid *collationOids,
 								const Oid *opclassOids,
@@ -572,6 +572,7 @@ static void
 UpdateIndexRelation(Oid indexoid,
 					Oid heapoid,
 					Oid parentIndexId,
+					Oid parentheapoid,
 					const IndexInfo *indexInfo,
 					const Oid *collationOids,
 					const Oid *opclassOids,
@@ -645,6 +646,8 @@ UpdateIndexRelation(Oid indexoid,
 	 */
 	values[Anum_pg_index_indexrelid - 1] = ObjectIdGetDatum(indexoid);
 	values[Anum_pg_index_indrelid - 1] = ObjectIdGetDatum(heapoid);
+	values[Anum_pg_index_indtoprelid - 1] = ObjectIdGetDatum(parentheapoid);
+	values[Anum_pg_index_indtopindexid - 1] = ObjectIdGetDatum(parentIndexId);
 	values[Anum_pg_index_indnatts - 1] = Int16GetDatum(indexInfo->ii_NumIndexAttrs);
 	values[Anum_pg_index_indnkeyatts - 1] = Int16GetDatum(indexInfo->ii_NumIndexKeyAttrs);
 	values[Anum_pg_index_indisunique - 1] = BoolGetDatum(indexInfo->ii_Unique);
@@ -738,6 +741,7 @@ index_create(Relation heapRelation,
 			 Oid indexRelationId,
 			 Oid parentIndexRelid,
 			 Oid parentConstraintId,
+			 Oid parentHeapRelid,
 			 RelFileNumber relFileNumber,
 			 IndexInfo *indexInfo,
 			 const List *indexColNames,
@@ -782,8 +786,13 @@ index_create(Relation heapRelation,
 	/* partitioned indexes must never be "built" by themselves */
 	Assert(!partitioned || (flags & INDEX_CREATE_SKIP_BUILD));
 
-	if (global_index)
+	if (flags & INDEX_CREATE_GLOBAL)
 		relkind = RELKIND_GLOBAL_INDEX;
+	else if (flags & INDEX_CREATE_GLOBAL_CHILD)
+	{
+		relkind = RELKIND_GLOBAL_PARTITION_INDEX;
+		create_storage = false;
+	}
 	else if (partitioned)
 		relkind = RELKIND_PARTITIONED_INDEX;
 	else
@@ -977,7 +986,7 @@ index_create(Relation heapRelation,
 			 * storage we create here will be replaced later, but we need to
 			 * have something on disk in the meanwhile.
 			 */
-			Assert(create_storage);
+			Assert(create_storage); //FIXME for global index check binary upgrade
 		}
 		else
 		{
@@ -1061,7 +1070,7 @@ index_create(Relation heapRelation,
 	 * ----------------
 	 */
 	UpdateIndexRelation(indexRelationId, heapRelationId, parentIndexRelid,
-						indexInfo,
+						parentHeapRelid, indexInfo,
 						collationIds, opclassIds, coloptions,
 						isprimary, is_exclusion,
 						(constr_flags & INDEX_CONSTR_CREATE_DEFERRABLE) == 0,
@@ -1489,6 +1498,7 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId,
 							  InvalidOid,	/* indexRelationId */
 							  InvalidOid,	/* parentIndexRelid */
 							  InvalidOid,	/* parentConstraintId */
+							  InvalidOid,
 							  InvalidRelFileNumber, /* relFileNumber */
 							  newInfo,
 							  indexColNames,

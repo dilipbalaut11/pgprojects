@@ -1208,7 +1208,8 @@ retry:
 	 */
 	if (relation->rd_rel->relkind == RELKIND_INDEX ||
 		relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX ||
-		relation->rd_rel->relkind == RELKIND_GLOBAL_INDEX)
+		relation->rd_rel->relkind == RELKIND_GLOBAL_INDEX ||
+		relation->rd_rel->relkind == RELKIND_GLOBAL_PARTITION_INDEX)
 		RelationInitIndexAccessInfo(relation);
 	else if (RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind) ||
 			 relation->rd_rel->relkind == RELKIND_SEQUENCE)
@@ -4880,6 +4881,7 @@ RelationGetIndexList(Relation relation)
 
 	result = RelationGetIndexListGuts(relation);
 
+#if 0
 	/*
 	 * If this relation potentially has global indexes on itself or on any of
 	 * its ancestors, retrieve the list of all global indexes from ancestor
@@ -4921,7 +4923,7 @@ RelationGetIndexList(Relation relation)
 		}
 		result = list_concat_unique_oid(result, globalindexes);
 	}
-
+#endif
 	/* Sort the result list into OID order, per API spec. */
 	list_sort(result, list_oid_cmp);
 

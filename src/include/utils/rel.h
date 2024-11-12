@@ -726,6 +726,15 @@ RelationCloseSmgr(Relation relation)
 #define RelationIsGlobalIndex(relation) \
 	((relation)->rd_rel->relkind == RELKIND_GLOBAL_INDEX)
 
+/*
+ * Check whether the input relation is a global index or not.
+ */
+#define RelationIsPartitionGlobalIndex(relation) \
+	((relation)->rd_rel->relkind == RELKIND_GLOBAL_PARTITION_INDEX)
+
+#define RelationIsGlobalIndexOrChild(relation) \
+	(RelationIsGlobalIndex(relation) || RelationIsPartitionGlobalIndex(relation))
+
 /* routines in utils/cache/relcache.c */
 extern void RelationIncrementReferenceCount(Relation rel);
 extern void RelationDecrementReferenceCount(Relation rel);

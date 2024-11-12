@@ -303,6 +303,55 @@ InvalidateIndexPartitionEntries(List *reloids, Oid indexoid)
 }
 
 /*
+ * InvalidateIndexPartitionEntries - Invalidate pg_index_partitions entries
+ *
+ * Set reloid as Invalid in pg_index_partitions entries with respect to the
+ * given reloid.  If a valid global indexoids list is given then only
+ * invalidate the reloid entires which are related to the input global index
+ * oids.
+ */
+void
+InvalidateRelationIndexPartitionEntries(Oid reloid)
+{
+	Relation	catalogRelation;
+	SysScanDesc scan;
+	ScanKeyData key;
+	HeapTuple	tuple;
+
+	/*
+	 * Find pg_inherits entries by inhparent.  (We need to scan them all in
+	 * order to verify that no other partition is pending detach.)
+	 */
+	catalogRelation = table_open(IndexPartitionsRelationId, RowExclusiveLock);
+
+	ScanKeyInit(&key,
+				Anum_pg_index_partitions_reloid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(reloid));
+
+	scan = systable_beginscan(catalogRelation, IndexPartitionsReloidIndexId, true,
+							  NULL, 1, &key);
+
+	while ((tuple = systable_getnext(scan)) != NULL)
+	{
+		Form_pg_index_partitions form = (Form_pg_index_partitions) GETSTRUCT(tuple);
+		HeapTuple	newtup;
+
+		newtup = heap_copytuple(tuple);
+		((Form_pg_index_partitions) GETSTRUCT(newtup))->reloid = InvalidOid;
+
+		CatalogTupleUpdate(catalogRelation,
+						   &tuple->t_self,
+						   newtup);
+		heap_freetuple(newtup);
+	}
+
+	/* Done */
+	systable_endscan(scan);
+	table_close(catalogRelation, RowExclusiveLock);
+}
+
+/*
  * IndexGetNextPartitionID - Get the next partition ID of the global index
  *
  * Obtain the next partition ID to be allocated for the specified global index

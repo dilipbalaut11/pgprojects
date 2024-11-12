@@ -319,7 +319,8 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			 * We don't have an AM for partitioned indexes, so we'll just
 			 * NULLify the AM related fields for those.
 			 */
-			if (indexRelation->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
+			if (indexRelation->rd_rel->relkind != RELKIND_PARTITIONED_INDEX &&
+			    !RelationIsPartitionGlobalIndex(indexRelation))
 			{
 				/* We copy just the fields we need, not all of rd_indam */
 				amroutine = indexRelation->rd_indam;

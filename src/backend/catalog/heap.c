@@ -1867,16 +1867,10 @@ heap_drop_with_catalog(Oid relid)
 	 * relation so nothing to do for them.
 	 */
 	if (rel->rd_rel->relkind == RELKIND_RELATION &&
-		get_rel_relispartition(relid))
+		get_rel_has_globalindex(relid))
 	{
-		List	*indexids = RelationGetIndexList(rel);
-		List	*reloids = list_make1_oid(relid);
-
 		/* Detach the reloid from the global indexes. */
-		DetachFromGlobalIndexes(indexids, reloids);
-
-		list_free(indexids);
-		list_free(reloids);
+		InvalidateRelationIndexPartitionEntries(relid);
 	}
 
 	/*

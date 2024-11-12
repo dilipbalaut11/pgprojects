@@ -544,7 +544,6 @@ DefineIndex(Oid tableId,
 			Oid parentIndexId,
 			Oid parentConstraintId,
 			Oid	parentRelationId,
-			RelFileNumber parentRelfilenumber,
 			List *inheritors,
 			int total_parts,
 			bool is_alter_table,
@@ -650,7 +649,7 @@ DefineIndex(Oid tableId,
 	 * tid as a tiebreaker.  However, for global indexes, relying solely on
 	 * heap tid isn't adequate; we also require the partition identifier.
 	 */
-	if (stmt->global)
+	if (stmt->global && !OidIsValid(parentRelationId))
 	{
 		IndexElem	*newparam = makeNode(IndexElem);
 
@@ -1219,16 +1218,13 @@ DefineIndex(Oid tableId,
 		flags |= INDEX_CREATE_PARTITIONED;
 	if (stmt->primary)
 		flags |= INDEX_CREATE_IS_PRIMARY;
-	if (stmt->global)
+	if (OidIsValid(parentRelationId))
 	{
-		if (OidIsValid(parentRelationId))
-		{
-			flags |= INDEX_CREATE_SKIP_BUILD;
-			flags |= INDEX_CREATE_GLOBAL_CHILD;
-		}
-		else
-			flags |= INDEX_CREATE_GLOBAL;
+		flags |= INDEX_CREATE_SKIP_BUILD;
+		flags |= INDEX_CREATE_GLOBAL_CHILD;
 	}
+	else if (stmt->global)
+		flags |= INDEX_CREATE_GLOBAL;
 
 	/*
 	 * If the table is partitioned, and recursion was declined but partitions
@@ -1252,8 +1248,7 @@ DefineIndex(Oid tableId,
 	indexRelationId =
 		index_create(rel, indexRelationName, indexRelationId, parentIndexId,
 					 parentConstraintId, parentRelationId,
-					 RelFileNumberIsValid(parentRelfilenumber) ?
-					 parentRelfilenumber : stmt->oldNumber, indexInfo, indexColNames,
+					 stmt->oldNumber, indexInfo, indexColNames,
 					 accessMethodId, tablespaceId,
 					 collationIds, opclassIds, opclassOptions,
 					 coloptions, NULL, reloptions,
@@ -1370,10 +1365,7 @@ DefineIndex(Oid tableId,
 			parentDesc = RelationGetDescr(rel);
 
 			if (stmt->global && !OidIsValid(parentRelationId))
-			{
 				parentRelationId = RelationGetRelid(rel);
-				parentRelfilenumber = parentIndex->rd_rel->relfilenode;
-			}
 
 			/*
 			 * For each partition, scan all existing indexes; if one matches
@@ -1390,7 +1382,7 @@ DefineIndex(Oid tableId,
 				Oid			child_save_userid;
 				int			child_save_sec_context;
 				int			child_save_nestlevel;
-				List	   *childidxs;
+				List	   *childidxs = NIL;
 				ListCell   *cell;
 				AttrMap    *attmap;
 				bool		found = false;
@@ -1426,7 +1418,9 @@ DefineIndex(Oid tableId,
 					continue;
 				}
 
-				childidxs = RelationGetIndexList(childrel);
+				if (!stmt->global && !parentRelationId)
+					childidxs = RelationGetIndexList(childrel);
+
 				attmap =
 					build_attrmap_by_name(RelationGetDescr(childrel),
 										  parentDesc,
@@ -1475,7 +1469,8 @@ DefineIndex(Oid tableId,
 						}
 
 						/* Attach index to parent and we're done. */
-						IndexSetParentIndex(cldidx, indexRelationId);
+						if (!RelationIsGlobalIndexOrChild(cldidx))
+							IndexSetParentIndex(cldidx, indexRelationId);
 						if (createdConstraintId != InvalidOid)
 							ConstraintSetParentConstraint(cldConstrOid,
 														  createdConstraintId,
@@ -1530,6 +1525,11 @@ DefineIndex(Oid tableId,
 														parentIndex,
 														attmap,
 														NULL);
+					if (stmt->global)
+					{
+						childStmt->global = false;
+						childStmt->unique = false;
+					}
 
 					/*
 					 * Recurse as the starting user ID.  Callee will use that
@@ -1541,10 +1541,10 @@ DefineIndex(Oid tableId,
 					childAddr =
 						DefineIndex(childRelid, childStmt,
 									InvalidOid, /* no predefined OID */
-									indexRelationId,	/* this is our child */
+									RelationIsPartitionGlobalIndex(parentIndex) ?
+									parentIndexId : indexRelationId,	/* this is our child */
 									createdConstraintId,
 									parentRelationId,
-									parentRelfilenumber,
 									NIL,
 									-1,
 									is_alter_table, check_rights,
@@ -4571,8 +4571,7 @@ IndexSetParentIndex(Relation partitionIdx, Oid parentOid)
 
 	/* Make sure this is an index */
 	Assert(partitionIdx->rd_rel->relkind == RELKIND_INDEX ||
-		   partitionIdx->rd_rel->relkind == RELKIND_PARTITIONED_INDEX ||
-		   partitionIdx->rd_rel->relkind == RELKIND_GLOBAL_INDEX);
+		   partitionIdx->rd_rel->relkind == RELKIND_PARTITIONED_INDEX);
 
 	/*
 	 * Scan pg_inherits for rows linking our index to some parent.

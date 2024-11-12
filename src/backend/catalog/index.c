@@ -1108,7 +1108,7 @@ index_create(Relation heapRelation,
 		CacheInvalidateRelcache(heapRelation);
 
 	/* update pg_inherits and the parent's relhassubclass, if needed */
-	if (OidIsValid(parentIndexRelid))
+	if (OidIsValid(parentIndexRelid) && relkind != RELKIND_GLOBAL_PARTITION_INDEX)
 	{
 		StoreSingleInheritance(indexRelationId, parentIndexRelid, 1);
 		LockRelationOid(parentIndexRelid, ShareUpdateExclusiveLock);
@@ -1208,7 +1208,12 @@ index_create(Relation heapRelation,
 		 * addition to*, not instead of, all other dependencies.  Otherwise
 		 * we'll be short some dependencies after DETACH PARTITION.)
 		 */
-		if (OidIsValid(parentIndexRelid))
+		if (flags & INDEX_CREATE_GLOBAL_CHILD)
+		{
+			ObjectAddressSet(referenced, RelationRelationId, parentIndexRelid);
+			recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
+		}
+		else if (OidIsValid(parentIndexRelid))
 		{
 			ObjectAddressSet(referenced, RelationRelationId, parentIndexRelid);
 			recordDependencyOn(&myself, &referenced, DEPENDENCY_PARTITION_PRI);
@@ -4150,6 +4155,7 @@ reindex_relation(const ReindexStmt *stmt, Oid relid, int flags,
 	{
 		Oid			indexOid = lfirst_oid(indexId);
 		Oid			indexNamespaceId = get_rel_namespace(indexOid);
+		char		relkind;
 
 		/*
 		 * Skip any invalid indexes on a TOAST table.  These can only be
@@ -4180,7 +4186,9 @@ reindex_relation(const ReindexStmt *stmt, Oid relid, int flags,
 		 * caller will handle them separately. This prevents redundant
 		 * reindexing and ensures that global indexes are processed only once.
 		 */
-		if (get_rel_relkind(indexOid) == RELKIND_GLOBAL_INDEX)
+		relkind = get_rel_relkind(indexOid);
+		if (relkind == RELKIND_GLOBAL_INDEX ||
+			relkind == RELKIND_GLOBAL_PARTITION_INDEX)
 			continue;
 
 		reindex_index(stmt, indexOid, !(flags & REINDEX_REL_CHECK_CONSTRAINTS),

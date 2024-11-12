@@ -1284,7 +1284,6 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 						RelationGetRelid(idxRel),
 						constraintOid,
 						InvalidOid,
-						InvalidRelFileNumber,
 						NIL,
 						-1,
 						false, false, false, false, false);
@@ -9289,7 +9288,6 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 						  InvalidOid,	/* no parent index */
 						  InvalidOid,	/* no parent constraint */
 						  InvalidOid,
-						  InvalidRelFileNumber,
 						  NIL,
 						  -1,	/* total_parts unknown */
 						  true, /* is_alter_table */
@@ -18760,6 +18758,16 @@ AttachToGlobalIndexes(List **wqueue, Relation rel, List *reloids)
 	{
 		Relation	irel = index_open(indexoid, RowExclusiveLock);
 
+		if (RelationIsPartitionGlobalIndex(irel))
+		{
+			Relation	parent = index_open(irel->rd_index->indtopindexid,
+											RowExclusiveLock);
+
+			index_close(irel, RowExclusiveLock);
+			irel = parent;
+			Assert(RelationIsGlobalIndex(irel));
+		}
+
 		/* We don't need to do anything if this is not a global index. */
 		if (!RelationIsGlobalIndex(irel))
 		{
@@ -18767,7 +18775,7 @@ AttachToGlobalIndexes(List **wqueue, Relation rel, List *reloids)
 			continue;
 		}
 
-		globalindexoids = lappend_oid(globalindexoids, indexoid);
+		globalindexoids = lappend_oid(globalindexoids, RelationGetRelid(irel));
 
 		/* Flag to indicate that we have at least one global index. */
 		hasglobalindex = true;
@@ -18810,6 +18818,53 @@ AttachToGlobalIndexes(List **wqueue, Relation rel, List *reloids)
 	list_free(indexoids);
 }
 
+/*
+ * DropPartitionGlobalIndexes - Drop child global indexes which are detached
+ *
+ * Lookup the indtoprelid of each child global index and if that is not in a
+ * childreloids which are still attached then drop those global indexes.
+ *
+ * TODO: pass a hash over childreloids and do hash lookup for
+ * performance.
+ */
+static void
+DropPartitionGlobalIndexes(Relation rel, List *childreloids)
+{
+	List	   *indexes = RelationGetIndexList(rel);
+
+	/*
+	 * All indexes under the child relation which are pointing to the parent
+	 * should be dropped.
+	 */
+	foreach_oid(idxid, indexes)
+	{
+		Relation idx = index_open(idxid, AccessExclusiveLock);
+
+		if (!RelationIsPartitionGlobalIndex(idx))
+		{
+			index_close(idx, AccessExclusiveLock);
+			continue;
+		}
+		index_close(idx, AccessExclusiveLock);
+
+		/*
+		 * TODO: prepare a hash over childreloids and do hash lookup for
+		 * performance.
+		 */
+		if (!list_member_oid(childreloids, idx->rd_index->indtoprelid))
+		{
+			ObjectAddress object;
+
+			object.classId = RelationRelationId;
+			object.objectId = idxid;
+			object.objectSubId = 0;
+
+			performDeletion(&object, DROP_CASCADE, 0);
+		}
+	}
+
+	list_free(indexes);
+}
 /*
  * DetachFromGlobalIndexes - Detach reloids from all global indexes
  *
@@ -19255,11 +19310,23 @@ AttachPartitionEnsureIndexes(List **wqueue, Relation rel, Relation attachrel)
 		bool		found = false;
 		Oid			constraintOid;
 
+#if 0
+		if (RelationIsPartitionGlobalIndex(idxRel))
+		{
+			Relation	parent = index_open(idxRel->rd_index->indtopindexid,
+											AccessShareLock);
+
+			index_close(idxRel, AccessShareLock);
+			idxRel = parent;
+		}
+#endif
 		/*
 		 * Ignore indexes in the partitioned table other than partitioned
 		 * indexes.
 		 */
-		if (idxRel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
+		if (idxRel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX &&
+			idxRel->rd_rel->relkind != RELKIND_GLOBAL_INDEX &&
+			idxRel->rd_rel->relkind != RELKIND_GLOBAL_PARTITION_INDEX)
 		{
 			index_close(idxRel, AccessShareLock);
 			continue;
@@ -19290,7 +19357,8 @@ AttachPartitionEnsureIndexes(List **wqueue, Relation rel, Relation attachrel)
 			if (!attachrelIdxRels[i]->rd_index->indisvalid)
 				continue;
 
-			if (CompareIndexInfo(attachInfos[i], info,
+			if (!RelationIsGlobalIndexOrChild(idxRel) &&
+				CompareIndexInfo(attachInfos[i], info,
 								 attachrelIdxRels[i]->rd_indcollation,
 								 idxRel->rd_indcollation,
 								 attachrelIdxRels[i]->rd_opfamily,
@@ -19319,7 +19387,8 @@ AttachPartitionEnsureIndexes(List **wqueue, Relation rel, Relation attachrel)
 				}
 
 				/* bingo. */
-				IndexSetParentIndex(attachrelIdxRels[i], idx);
+				if (!RelationIsGlobalIndexOrChild(attachrelIdxRels[i]))
+					IndexSetParentIndex(attachrelIdxRels[i], idx);
 				if (OidIsValid(constraintOid))
 					ConstraintSetParentConstraint(cldConstrOid, constraintOid,
 												  RelationGetRelid(attachrel));
@@ -19338,15 +19407,38 @@ AttachPartitionEnsureIndexes(List **wqueue, Relation rel, Relation attachrel)
 		{
 			IndexStmt  *stmt;
 			Oid			conOid;
+			Oid			parentindex;
+			Oid			parentrel;
 
 			stmt = generateClonedIndexStmt(NULL,
 										   idxRel, attmap,
 										   &conOid);
+
+			if (RelationIsPartitionGlobalIndex(idxRel))
+			{
+				parentindex = idxRel->rd_index->indtopindexid;
+				parentrel = idxRel->rd_index->indtoprelid;
+				stmt->global = false;
+				stmt->unique = false;
+			}
+			else if (RelationIsGlobalIndex(idxRel))
+			{
+				parentindex = RelationGetRelid(idxRel);
+				parentrel = idxRel->rd_index->indrelid;
+				stmt->global = false;
+				stmt->unique = false;
+			}
+			else
+			{
+				parentindex = RelationGetRelid(idxRel);
+				parentrel = InvalidOid;
+			}
+
+
 			DefineIndex(RelationGetRelid(attachrel), stmt, InvalidOid,
-						RelationGetRelid(idxRel),
+						parentindex,
 						conOid,
-						InvalidOid,
-						InvalidRelFileNumber,
+						parentrel,
 						NIL,
 						-1,
 						true, false, false, false, false);
@@ -19906,9 +19998,16 @@ DetachPartitionFinalize(Relation rel, Relation partRel, bool concurrent,
 			continue;
 
 		parentidx = get_partition_parent(idxid, false);
-		Assert((IndexGetRelation(parentidx, false) == RelationGetRelid(rel)));
 
 		idx = index_open(idxid, AccessExclusiveLock);
+		if (RelationIsGlobalIndexOrChild(idx))
+		{
+			index_close(idx, NoLock);
+			continue;
+		}
+
+		Assert((IndexGetRelation(parentidx, false) == RelationGetRelid(rel)));
+
 		IndexSetParentIndex(idx, InvalidOid);
 
 		/*
@@ -19926,6 +20025,8 @@ DetachPartitionFinalize(Relation rel, Relation partRel, bool concurrent,
 
 		index_close(idx, NoLock);
 	}
+
+	list_free(indexes);
 
 	/* Update pg_class tuple */
 	classRel = table_open(RelationRelationId, RowExclusiveLock);
@@ -19990,17 +20091,23 @@ DetachPartitionFinalize(Relation rel, Relation partRel, bool concurrent,
 	indexes = RelationGetIndexList(rel);
 	if (partRel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
-		/*
-		 * All inheritors are already locked so we don't need to lock it here.
-		 */
 		children = find_all_inheritors(RelationGetRelid(partRel),
-									   NoLock, NULL);
+									   AccessExclusiveLock, NULL);
 	}
 	else
 		children = list_make1_oid(RelationGetRelid(partRel));
 
+	foreach_oid(childid, children)
+	{
+		Relation rel = relation_open(childid, NoLock);
+
+		DropPartitionGlobalIndexes(rel, children);
+		relation_close(rel, NoLock);
+	}
+
 	/* Detach the relation and its children from ancestor's global indexes. */
 	DetachFromGlobalIndexes(indexes, children);
+
 	list_free(indexes);
 
 	/*
@@ -20370,7 +20477,8 @@ ATExecAttachPartitionIdx(List **wqueue, Relation parentIdx, RangeVar *name)
 		}
 
 		/* All good -- do it */
-		IndexSetParentIndex(partIdx, RelationGetRelid(parentIdx));
+		if (!RelationIsGlobalIndexOrChild(partIdx))
+			IndexSetParentIndex(partIdx, RelationGetRelid(parentIdx));
 		if (OidIsValid(constraintOid))
 			ConstraintSetParentConstraint(cldConstrId, constraintOid,
 										  RelationGetRelid(partTbl));
@@ -20716,12 +20824,17 @@ LockPartitionsForGlobalIndex(Relation rel, LOCKMODE lockmode)
 		Oid			reloid;
 
 		idxrel = index_open(indexid, AccessShareLock);
-		if (!RelationIsGlobalIndex(idxrel))
+		if (!RelationIsGlobalIndex(idxrel) &&
+			!RelationIsPartitionGlobalIndex(idxrel))
 		{
 			index_close(idxrel, AccessShareLock);
 			continue;
 		}
-		reloid = idxrel->rd_index->indrelid;
+		if (RelationIsPartitionGlobalIndex(idxrel))
+			reloid = idxrel->rd_index->indtoprelid;
+		else
+			reloid = idxrel->rd_index->indrelid;
+
 		index_close(idxrel, AccessShareLock);
 		if (list_member_oid(parentreloids, reloid))
 			continue;
@@ -20730,4 +20843,5 @@ LockPartitionsForGlobalIndex(Relation rel, LOCKMODE lockmode)
 		LockRelationOid(reloid, lockmode);
 		(void) find_all_inheritors(reloid, lockmode, NULL);
 	}
+	list_free(parentreloids);
 }

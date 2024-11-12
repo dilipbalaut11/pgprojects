@@ -31,11 +31,11 @@ CATALOG(pg_index,2610,IndexRelationId) BKI_SCHEMA_MACRO
 	Oid			indexrelid BKI_LOOKUP(pg_class);	/* OID of the index */
 	Oid			indrelid BKI_LOOKUP(pg_class);	/* OID of the relation it
 												 * indexes */
-	Oid			indtoprelid BKI_LOOKUP(pg_class); /* OID of the partitioned
-												   * relation it defined on,
-												   * only valid for the global
-												   * indexes. */
-	Oid			indtopindexid BKI_LOOKUP(pg_class); /* OID of the top index */
+	Oid			indtoprelid;	/* OID of the partitioned
+								 * relation it defined on,
+								 * only valid for the global
+								 * indexes. */
+	Oid			indtopindexid;	/* OID of the top index */
 	int16		indnatts;		/* total number of columns in index */
 	int16		indnkeyatts;	/* number of key columns in index */
 	bool		indisunique;	/* is this a unique index? */

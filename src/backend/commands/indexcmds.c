@@ -543,7 +543,7 @@ DefineIndex(Oid tableId,
 			Oid indexRelationId,
 			Oid parentIndexId,
 			Oid parentConstraintId,
-			Oid	parentRelationId,
+			Oid	topRelationId,
 			List *inheritors,
 			int total_parts,
 			bool is_alter_table,
@@ -575,6 +575,7 @@ DefineIndex(Oid tableId,
 	bool		exclusion;
 	bool		partitioned;
 	bool		safe_index;
+	bool		global_child = OidIsValid(topRelationId);
 	Datum		reloptions;
 	int16	   *coloptions;
 	IndexInfo  *indexInfo;
@@ -649,7 +650,7 @@ DefineIndex(Oid tableId,
 	 * tid as a tiebreaker.  However, for global indexes, relying solely on
 	 * heap tid isn't adequate; we also require the partition identifier.
 	 */
-	if (stmt->global && !OidIsValid(parentRelationId))
+	if (stmt->global)
 	{
 		IndexElem	*newparam = makeNode(IndexElem);
 
@@ -981,7 +982,8 @@ DefineIndex(Oid tableId,
 	 *
 	 * If we are creating a global index the we do not have this problem.
 	 */
-	if (partitioned && !stmt->global && (stmt->unique || exclusion))
+	if (partitioned && !stmt->global && !global_child &&
+		(stmt->unique || exclusion))
 	{
 		PartitionKey key = RelationGetPartitionKey(rel);
 		const char *constraint_type;
@@ -1218,12 +1220,12 @@ DefineIndex(Oid tableId,
 		flags |= INDEX_CREATE_PARTITIONED;
 	if (stmt->primary)
 		flags |= INDEX_CREATE_IS_PRIMARY;
-	if (OidIsValid(parentRelationId))
+	if (global_child)
 	{
 		flags |= INDEX_CREATE_SKIP_BUILD;
 		flags |= INDEX_CREATE_GLOBAL_CHILD;
 	}
-	else if (stmt->global)
+	if (stmt->global)
 		flags |= INDEX_CREATE_GLOBAL;
 
 	/*
@@ -1247,7 +1249,7 @@ DefineIndex(Oid tableId,
 
 	indexRelationId =
 		index_create(rel, indexRelationName, indexRelationId, parentIndexId,
-					 parentConstraintId, parentRelationId,
+					 parentConstraintId, topRelationId,
 					 stmt->oldNumber, indexInfo, indexColNames,
 					 accessMethodId, tablespaceId,
 					 collationIds, opclassIds, opclassOptions,
@@ -1364,8 +1366,8 @@ DefineIndex(Oid tableId,
 
 			parentDesc = RelationGetDescr(rel);
 
-			if (stmt->global && !OidIsValid(parentRelationId))
-				parentRelationId = RelationGetRelid(rel);
+			if (stmt->global)
+				topRelationId = RelationGetRelid(rel);
 
 			/*
 			 * For each partition, scan all existing indexes; if one matches
@@ -1418,7 +1420,7 @@ DefineIndex(Oid tableId,
 					continue;
 				}
 
-				if (!stmt->global && !parentRelationId)
+				if (!stmt->global && !global_child)
 					childidxs = RelationGetIndexList(childrel);
 
 				attmap =
@@ -1524,12 +1526,8 @@ DefineIndex(Oid tableId,
 					childStmt = generateClonedIndexStmt(NULL,
 														parentIndex,
 														attmap,
-														NULL);
-					if (stmt->global)
-					{
-						childStmt->global = false;
-						childStmt->unique = false;
-					}
+														NULL,
+														true);
 
 					/*
 					 * Recurse as the starting user ID.  Callee will use that
@@ -1544,7 +1542,7 @@ DefineIndex(Oid tableId,
 									RelationIsPartitionGlobalIndex(parentIndex) ?
 									parentIndexId : indexRelationId,	/* this is our child */
 									createdConstraintId,
-									parentRelationId,
+									topRelationId,
 									NIL,
 									-1,
 									is_alter_table, check_rights,

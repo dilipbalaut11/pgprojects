@@ -1386,7 +1386,8 @@ expandTableLikeClause(RangeVar *heapRel, TableLikeClause *table_like_clause)
 			index_stmt = generateClonedIndexStmt(heapRel,
 												 parent_index,
 												 attmap,
-												 NULL);
+												 NULL,
+												 false);
 
 			/* Copy comment on index, if requested */
 			if (table_like_clause->options & CREATE_TABLE_LIKE_COMMENTS)
@@ -1513,7 +1514,7 @@ transformOfType(CreateStmtContext *cxt, TypeName *ofTypename)
 IndexStmt *
 generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 						const AttrMap *attmap,
-						Oid *constraintOid)
+						Oid *constraintOid, bool childindex)
 {
 	Oid			source_relid = RelationGetRelid(source_idx);
 	HeapTuple	ht_idxrel;
@@ -1580,10 +1581,15 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 	index->oldNumber = InvalidRelFileNumber;
 	index->oldCreateSubid = InvalidSubTransactionId;
 	index->oldFirstRelfilelocatorSubid = InvalidSubTransactionId;
+
 	index->unique = idxrec->indisunique;
+	if (idxrelrec->relkind == RELKIND_GLOBAL_INDEX && childindex)
+		index->global = false;
+	else
+		index->global = (idxrelrec->relkind == RELKIND_GLOBAL_INDEX);
+
 	index->nulls_not_distinct = idxrec->indnullsnotdistinct;
 	index->primary = idxrec->indisprimary;
-	index->global = (idxrelrec->relkind == RELKIND_GLOBAL_INDEX);
 	index->iswithoutoverlaps = (idxrec->indisprimary || idxrec->indisunique) && idxrec->indisexclusion;
 	index->transformed = true;	/* don't need transformIndexStmt */
 	index->concurrent = false;

@@ -39,6 +39,7 @@ extern List *expandTableLikeClause(RangeVar *heapRel,
 extern IndexStmt *generateClonedIndexStmt(RangeVar *heapRel,
 										  Relation source_idx,
 										  const struct AttrMap *attmap,
-										  Oid *constraintOid);
+										  Oid *constraintOid,
+										  bool childindex);
 
 #endif							/* PARSE_UTILCMD_H */

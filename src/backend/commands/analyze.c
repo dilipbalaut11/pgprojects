@@ -656,7 +656,7 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 			AnlIndexData *thisdata = &indexdata[ind];
 			double		totalindexrows;
 
-			if (RelationIsPartitionGlobalIndex(Irel[ind]))
+			if (!RELKIND_HAS_STORAGE(Irel[ind]->rd_rel->relkind))
 				continue;
 			totalindexrows = ceil(thisdata->tupleFract * totalrows);
 			vac_update_relstats(Irel[ind],

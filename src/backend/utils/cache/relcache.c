@@ -322,7 +322,6 @@ static OpClassCacheEnt *LookupOpclassInfo(Oid operatorClassOid,
 										  StrategyNumber numSupport);
 static void RelationCacheInitFileRemoveInDir(const char *tblspcpath);
 static void unlink_initfile(const char *initfilename, int elevel);
-static List *RelationGetIndexListGuts(Relation relation);
 
 
 /*
@@ -4748,21 +4747,50 @@ RelationGetFKeyList(Relation relation)
 }
 
 /*
- * Guts if RelationGetIndexList function.  For details read comments atop
- * RelationGetIndexList.
+ * RelationGetIndexList -- get a list of OIDs of indexes on this relation
+ *
+ * The index list is created only if someone requests it.  We scan pg_index
+ * to find relevant indexes, and add the list to the relcache entry so that
+ * we won't have to compute it again.  Note that shared cache inval of a
+ * relcache entry will delete the old list and set rd_indexvalid to false,
+ * so that we must recompute the index list on next request.  This handles
+ * creation or deletion of an index.
+ *
+ * Indexes that are marked not indislive are omitted from the returned list.
+ * Such indexes are expected to be dropped momentarily, and should not be
+ * touched at all by any caller of this function.
+ *
+ * The returned list is guaranteed to be sorted in order by OID.  This is
+ * needed by the executor, since for index types that we obtain exclusive
+ * locks on when updating the index, all backends must lock the indexes in
+ * the same order or we will get deadlocks (see ExecOpenIndices()).  Any
+ * consistent ordering would do, but ordering by OID is easy.
+ *
+ * Since shared cache inval causes the relcache's copy of the list to go away,
+ * we return a copy of the list palloc'd in the caller's context.  The caller
+ * may list_free() the returned list after scanning it. This is necessary
+ * since the caller will typically be doing syscache lookups on the relevant
+ * indexes, and syscache lookup could cause SI messages to be processed!
+ *
+ * In exactly the same way, we update rd_pkindex, which is the OID of the
+ * relation's primary key index if any, else InvalidOid; and rd_replidindex,
+ * which is the pg_class OID of an index to be used as the relation's
+ * replication identity index, or InvalidOid if there is no such index.
  */
-static List *
-RelationGetIndexListGuts(Relation relation)
+List *
+RelationGetIndexList(Relation relation)
 {
 	Relation	indrel;
 	SysScanDesc indscan;
 	ScanKeyData skey;
 	HeapTuple	htup;
 	List	   *result;
+	List	   *oldlist;
 	char		replident = relation->rd_rel->relreplident;
 	Oid			pkeyIndex = InvalidOid;
 	Oid			candidateIndex = InvalidOid;
 	bool		pkdeferrable = false;
+	MemoryContext oldcxt;
 
 	/* Quick exit if we already computed the list. */
 	if (relation->rd_indexvalid)
@@ -4825,6 +4853,13 @@ RelationGetIndexListGuts(Relation relation)
 
 	table_close(indrel, AccessShareLock);
 
+	/* Sort the result list into OID order, per API spec. */
+	list_sort(result, list_oid_cmp);
+
+	/* Now save a copy of the completed list in the relcache entry. */
+	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+	oldlist = relation->rd_indexlist;
+	relation->rd_indexlist = list_copy(result);
 	relation->rd_pkindex = pkeyIndex;
 	relation->rd_ispkdeferrable = pkdeferrable;
 	if (replident == REPLICA_IDENTITY_DEFAULT && OidIsValid(pkeyIndex) && !pkdeferrable)
@@ -4833,104 +4868,6 @@ RelationGetIndexListGuts(Relation relation)
 		relation->rd_replidindex = candidateIndex;
 	else
 		relation->rd_replidindex = InvalidOid;
-
-	return result;
-}
-
-/*
- * RelationGetIndexList -- get a list of OIDs of indexes on this relation
- *
- * The index list is created only if someone requests it.  We scan pg_index
- * to find relevant indexes, and add the list to the relcache entry so that
- * we won't have to compute it again.  Note that shared cache inval of a
- * relcache entry will delete the old list and set rd_indexvalid to false,
- * so that we must recompute the index list on next request.  This handles
- * creation or deletion of an index.
- *
- * Indexes that are marked not indislive are omitted from the returned list.
- * Such indexes are expected to be dropped momentarily, and should not be
- * touched at all by any caller of this function.
- *
- * The returned list is guaranteed to be sorted in order by OID.  This is
- * needed by the executor, since for index types that we obtain exclusive
- * locks on when updating the index, all backends must lock the indexes in
- * the same order or we will get deadlocks (see ExecOpenIndices()).  Any
- * consistent ordering would do, but ordering by OID is easy.
- *
- * Since shared cache inval causes the relcache's copy of the list to go away,
- * we return a copy of the list palloc'd in the caller's context.  The caller
- * may list_free() the returned list after scanning it. This is necessary
- * since the caller will typically be doing syscache lookups on the relevant
- * indexes, and syscache lookup could cause SI messages to be processed!
- *
- * In exactly the same way, we update rd_pkindex, which is the OID of the
- * relation's primary key index if any, else InvalidOid; and rd_replidindex,
- * which is the pg_class OID of an index to be used as the relation's
- * replication identity index, or InvalidOid if there is no such index.
- */
-List *
-RelationGetIndexList(Relation relation)
-{
-	List	   *result;
-	List	   *oldlist;
-	MemoryContext oldcxt;
-
-	/* Quick exit if we already computed the list. */
-	if (relation->rd_indexvalid)
-		return list_copy(relation->rd_indexlist);
-
-	result = RelationGetIndexListGuts(relation);
-
-#if 0
-	/*
-	 * If this relation potentially has global indexes on itself or on any of
-	 * its ancestors, retrieve the list of all global indexes from ancestor
-	 * relations and append them to this list.
-	 */
-	if (RelationGetForm(relation)->relhasglobalindex)
-	{
-		List	   *ancestors;
-		List	   *globalindexes = NIL;
-
-		/* Get the list of all the ancestors. */
-		ancestors = get_partition_ancestors(RelationGetRelid(relation));
-
-		foreach_oid(relid, ancestors)
-		{
-			if (get_rel_has_globalindex(relid))
-			{
-				/*
-				 * FIXME: When this is called by DDL or DML operation from
-				 * the executor all parent relations which has global indexes
-				 * must already be locked, but in some cases where this is
-				 * directly accessed via planner or some other extensions
-				 * the parent relation might not be locked already.  One
-				 * solution to this problem is create global index on all
-				 * relations but let them point to the common storage of the
-				 * top level relation's global index.
-				 */
-				Relation parent = table_open(relid, AccessShareLock);
-				List *indexlist = RelationGetIndexListGuts(parent);
-
-				foreach_oid(indexoid, indexlist)
-				{
-					if (get_rel_relkind(indexoid) == RELKIND_GLOBAL_INDEX)
-						globalindexes = lappend_oid(globalindexes, indexoid);
-				}
-				list_free(indexlist);
-				table_close(parent, AccessShareLock);
-			}
-		}
-		result = list_concat_unique_oid(result, globalindexes);
-	}
-#endif
-	/* Sort the result list into OID order, per API spec. */
-	list_sort(result, list_oid_cmp);
-
-	/* Now save a copy of the completed list in the relcache entry. */
-	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
-	oldlist = relation->rd_indexlist;
-	relation->rd_indexlist = list_copy(result);
 	relation->rd_indexvalid = true;
 	MemoryContextSwitchTo(oldcxt);
 

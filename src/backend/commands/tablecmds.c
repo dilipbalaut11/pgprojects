@@ -1217,6 +1217,8 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	{
 		Oid			parentId = linitial_oid(inheritOids);
 		Relation	parent;
+		Oid			parentindex;
+		Oid			topRelid;
 		List	   *idxlist;
 		ListCell   *cell;
 
@@ -1252,6 +1254,44 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 				}
 			}
 
+			attmap = build_attrmap_by_name(RelationGetDescr(rel),
+										   RelationGetDescr(parent),
+										   false);
+			idxstmt =
+				generateClonedIndexStmt(NULL, idxRel,
+										attmap, &constraintOid, true);
+
+			/*
+			 * Child of the global index is not global and we don't need to
+			 * worry about this having unique constraint as this doesn't have
+			 * any storage.
+			 */
+			if (RelationIsPartitionGlobalIndex(idxRel))
+			{
+				parentindex = idxRel->rd_index->indtopindexid;
+				topRelid = idxRel->rd_index->indtoprelid;
+			}
+			else if (RelationIsGlobalIndex(idxRel))
+			{
+				parentindex = RelationGetRelid(idxRel);
+				topRelid = idxRel->rd_index->indrelid;
+			}
+			else
+			{
+				parentindex = RelationGetRelid(idxRel);
+				topRelid = InvalidOid;
+			}
+
+			DefineIndex(RelationGetRelid(rel),
+						idxstmt,
+						InvalidOid,
+						parentindex,
+						constraintOid,
+						topRelid,
+						NIL,
+						-1,
+						false, false, false, false, false);
+
 			/*
 			 * Global indexes are only exist on the partitioned table on which
 			 * it is created so we don't need to copy it to child relation.
@@ -1268,25 +1308,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 
 				/* Update the stats that the relation has a index. */
 				index_update_stats(rel, true, true, -1.0);
-				index_close(idxRel, AccessShareLock);
-				continue;
 			}
-
-			attmap = build_attrmap_by_name(RelationGetDescr(rel),
-										   RelationGetDescr(parent),
-										   false);
-			idxstmt =
-				generateClonedIndexStmt(NULL, idxRel,
-										attmap, &constraintOid);
-			DefineIndex(RelationGetRelid(rel),
-						idxstmt,
-						InvalidOid,
-						RelationGetRelid(idxRel),
-						constraintOid,
-						InvalidOid,
-						NIL,
-						-1,
-						false, false, false, false, false);
 
 			index_close(idxRel, AccessShareLock);
 		}
@@ -18758,6 +18780,10 @@ AttachToGlobalIndexes(List **wqueue, Relation rel, List *reloids)
 	{
 		Relation	irel = index_open(indexoid, RowExclusiveLock);
 
+		/*
+		 * We always create mapping with the top global index so if this is
+		 * a partition global index then fetch the Oid of the top global index.
+		 */
 		if (RelationIsPartitionGlobalIndex(irel))
 		{
 			Relation	parent = index_open(irel->rd_index->indtopindexid,
@@ -18822,7 +18848,12 @@ AttachToGlobalIndexes(List **wqueue, Relation rel, List *reloids)
  * DropPartitionGlobalIndexes - Drop child global indexes which are detached
  *
  * Lookup the indtoprelid of each child global index and if that is not in a
- * childreloids which are still attached then drop those global indexes.
+ * childreloids which are still attached then drop those child global indexes.
+ *
+ * Child global indexes just maintain a catalog entry on child table with
+ * respect to the top global index and they do not have storage so we don't
+ * need to keep them after they are detached from the parent table unlike we
+ * do for the child of the partitioned indexes.
  *
  * TODO: pass a hash over childreloids and do hash lookup for
  * performance.
@@ -18847,10 +18878,6 @@ DropPartitionGlobalIndexes(Relation rel, List *childreloids)
 		}
 		index_close(idx, AccessExclusiveLock);
 
-		/*
-		 * TODO: prepare a hash over childreloids and do hash lookup for
-		 * performance.
-		 */
 		if (!list_member_oid(childreloids, idx->rd_index->indtoprelid))
 		{
 			ObjectAddress object;
@@ -19310,16 +19337,6 @@ AttachPartitionEnsureIndexes(List **wqueue, Relation rel, Relation attachrel)
 		bool		found = false;
 		Oid			constraintOid;
 
-#if 0
-		if (RelationIsPartitionGlobalIndex(idxRel))
-		{
-			Relation	parent = index_open(idxRel->rd_index->indtopindexid,
-											AccessShareLock);
-
-			index_close(idxRel, AccessShareLock);
-			idxRel = parent;
-		}
-#endif
 		/*
 		 * Ignore indexes in the partitioned table other than partitioned
 		 * indexes.
@@ -19408,37 +19425,38 @@ AttachPartitionEnsureIndexes(List **wqueue, Relation rel, Relation attachrel)
 			IndexStmt  *stmt;
 			Oid			conOid;
 			Oid			parentindex;
-			Oid			parentrel;
+			Oid			topRelid;
 
 			stmt = generateClonedIndexStmt(NULL,
 										   idxRel, attmap,
-										   &conOid);
+										   &conOid, true);
 
+			/*
+			 * Child of the global index is not global and we don't need to
+			 * worry about this having unique constraint as this doesn't have
+			 * any storage.
+			 */
 			if (RelationIsPartitionGlobalIndex(idxRel))
 			{
 				parentindex = idxRel->rd_index->indtopindexid;
-				parentrel = idxRel->rd_index->indtoprelid;
-				stmt->global = false;
-				stmt->unique = false;
+				topRelid = idxRel->rd_index->indtoprelid;
 			}
 			else if (RelationIsGlobalIndex(idxRel))
 			{
 				parentindex = RelationGetRelid(idxRel);
-				parentrel = idxRel->rd_index->indrelid;
-				stmt->global = false;
-				stmt->unique = false;
+				topRelid = idxRel->rd_index->indrelid;
 			}
 			else
 			{
 				parentindex = RelationGetRelid(idxRel);
-				parentrel = InvalidOid;
+				topRelid = InvalidOid;
 			}
 
 
 			DefineIndex(RelationGetRelid(attachrel), stmt, InvalidOid,
 						parentindex,
 						conOid,
-						parentrel,
+						topRelid,
 						NIL,
 						-1,
 						true, false, false, false, false);
@@ -20097,12 +20115,17 @@ DetachPartitionFinalize(Relation rel, Relation partRel, bool concurrent,
 	else
 		children = list_make1_oid(RelationGetRelid(partRel));
 
+	/*
+	 * While detaching the partition we also need to ensure that we drop
+	 * partition global index from the detached partition relation and all its
+	 * inheritors.
+	 */
 	foreach_oid(childid, children)
 	{
-		Relation rel = relation_open(childid, NoLock);
+		Relation childrel = relation_open(childid, NoLock);
 
-		DropPartitionGlobalIndexes(rel, children);
-		relation_close(rel, NoLock);
+		DropPartitionGlobalIndexes(childrel, children);
+		relation_close(childrel, NoLock);
 	}
 
 	/* Detach the relation and its children from ancestor's global indexes. */
@@ -20830,6 +20853,15 @@ LockPartitionsForGlobalIndex(Relation rel, LOCKMODE lockmode)
 			index_close(idxrel, AccessShareLock);
 			continue;
 		}
+
+		/*
+		 * For a partition of global index, retrieve the 'indtoprelid from the
+		 * pg_index entry. This represents the relation where the global index
+		 * is actually defined, and we need to lock all inheritors of this
+		 * relation.  In contrast, for a global index, simply retrieve the
+		 * 'indrelid' since the global index is directly defined on that
+		 * relation.
+		 */
 		if (RelationIsPartitionGlobalIndex(idxrel))
 			reloid = idxrel->rd_index->indtoprelid;
 		else

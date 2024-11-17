@@ -111,7 +111,7 @@ static void InitializeAttributeOids(Relation indexRelation,
 									int numatts, Oid indexoid);
 static void AppendAttributeTuples(Relation indexRelation, const Datum *attopts, const NullableDatum *stattargets);
 static void UpdateIndexRelation(Oid indexoid, Oid heapoid,
-								Oid parentIndexId, Oid parentheapoid,
+								Oid parentIndexId, Oid parentRelationId,
 								const IndexInfo *indexInfo,
 								const Oid *collationOids,
 								const Oid *opclassOids,
@@ -572,7 +572,7 @@ static void
 UpdateIndexRelation(Oid indexoid,
 					Oid heapoid,
 					Oid parentIndexId,
-					Oid parentheapoid,
+					Oid parentRelationId,
 					const IndexInfo *indexInfo,
 					const Oid *collationOids,
 					const Oid *opclassOids,
@@ -646,7 +646,7 @@ UpdateIndexRelation(Oid indexoid,
 	 */
 	values[Anum_pg_index_indexrelid - 1] = ObjectIdGetDatum(indexoid);
 	values[Anum_pg_index_indrelid - 1] = ObjectIdGetDatum(heapoid);
-	values[Anum_pg_index_indtoprelid - 1] = ObjectIdGetDatum(parentheapoid);
+	values[Anum_pg_index_indtoprelid - 1] = ObjectIdGetDatum(parentRelationId);
 	values[Anum_pg_index_indtopindexid - 1] = ObjectIdGetDatum(parentIndexId);
 	values[Anum_pg_index_indnatts - 1] = Int16GetDatum(indexInfo->ii_NumIndexAttrs);
 	values[Anum_pg_index_indnkeyatts - 1] = Int16GetDatum(indexInfo->ii_NumIndexKeyAttrs);
@@ -741,7 +741,7 @@ index_create(Relation heapRelation,
 			 Oid indexRelationId,
 			 Oid parentIndexRelid,
 			 Oid parentConstraintId,
-			 Oid parentHeapRelid,
+			 Oid parentRelationId,
 			 RelFileNumber relFileNumber,
 			 IndexInfo *indexInfo,
 			 const List *indexColNames,
@@ -775,6 +775,7 @@ index_create(Relation heapRelation,
 	bool		concurrent = (flags & INDEX_CREATE_CONCURRENT) != 0;
 	bool		partitioned = (flags & INDEX_CREATE_PARTITIONED) != 0;
 	bool		global_index = (flags & INDEX_CREATE_GLOBAL) != 0;
+	bool		global_child = (flags & INDEX_CREATE_GLOBAL_CHILD) != 0;
 	char		relkind;
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
@@ -786,9 +787,9 @@ index_create(Relation heapRelation,
 	/* partitioned indexes must never be "built" by themselves */
 	Assert(!partitioned || (flags & INDEX_CREATE_SKIP_BUILD));
 
-	if (flags & INDEX_CREATE_GLOBAL)
+	if (global_index)
 		relkind = RELKIND_GLOBAL_INDEX;
-	else if (flags & INDEX_CREATE_GLOBAL_CHILD)
+	else if (global_child)
 	{
 		relkind = RELKIND_GLOBAL_PARTITION_INDEX;
 		create_storage = false;
@@ -986,7 +987,11 @@ index_create(Relation heapRelation,
 			 * storage we create here will be replaced later, but we need to
 			 * have something on disk in the meanwhile.
 			 */
-			Assert(create_storage); //FIXME for global index check binary upgrade
+			/*
+			 * FIXME for global index child do we need to do something for
+			 * binary upgrade.
+			 */
+			Assert(create_storage);
 		}
 		else
 		{
@@ -1070,7 +1075,7 @@ index_create(Relation heapRelation,
 	 * ----------------
 	 */
 	UpdateIndexRelation(indexRelationId, heapRelationId, parentIndexRelid,
-						parentHeapRelid, indexInfo,
+						parentRelationId, indexInfo,
 						collationIds, opclassIds, coloptions,
 						isprimary, is_exclusion,
 						(constr_flags & INDEX_CONSTR_CREATE_DEFERRABLE) == 0,
@@ -1107,8 +1112,14 @@ index_create(Relation heapRelation,
 	else
 		CacheInvalidateRelcache(heapRelation);
 
-	/* update pg_inherits and the parent's relhassubclass, if needed */
-	if (OidIsValid(parentIndexRelid) && relkind != RELKIND_GLOBAL_PARTITION_INDEX)
+	/*
+	 * Update pg_inherits and the parent's relhassubclass, if needed.  This is
+	 * only done for child index of the partitioned index for global child
+	 * index we do not maintain child to parent relation in pg_inherits.
+	 *
+	 * TODO explain reason for the same.
+	 */
+	if (OidIsValid(parentIndexRelid) && !global_child)
 	{
 		StoreSingleInheritance(indexRelationId, parentIndexRelid, 1);
 		LockRelationOid(parentIndexRelid, ShareUpdateExclusiveLock);
@@ -1206,9 +1217,13 @@ index_create(Relation heapRelation,
 		 * If this is an index partition, create partition dependencies on
 		 * both the parent index and the table.  (Note: these must be *in
 		 * addition to*, not instead of, all other dependencies.  Otherwise
-		 * we'll be short some dependencies after DETACH PARTITION.)
+		 * we'll be short some dependencies after DETACH PARTITION.).  For
+		 * global child index we don't need additional dependency with parent
+		 * table because if the partition is detached the global child index
+		 * would be dropped.  For more detail read comments atop
+		 * DropPartitionGlobalIndexes.
 		 */
-		if (flags & INDEX_CREATE_GLOBAL_CHILD)
+		if (global_child)
 		{
 			ObjectAddressSet(referenced, RelationRelationId, parentIndexRelid);
 			recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
@@ -1503,7 +1518,7 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId,
 							  InvalidOid,	/* indexRelationId */
 							  InvalidOid,	/* parentIndexRelid */
 							  InvalidOid,	/* parentConstraintId */
-							  InvalidOid,
+							  InvalidOid,	/* parentRelationId */
 							  InvalidRelFileNumber, /* relFileNumber */
 							  newInfo,
 							  indexColNames,
@@ -4185,6 +4200,7 @@ reindex_relation(const ReindexStmt *stmt, Oid relid, int flags,
 		 * Skip global indexes when reindexing individual relations, as the
 		 * caller will handle them separately. This prevents redundant
 		 * reindexing and ensures that global indexes are processed only once.
+		 * Also skip global partition index as they do not have any storage.
 		 */
 		relkind = get_rel_relkind(indexOid);
 		if (relkind == RELKIND_GLOBAL_INDEX ||

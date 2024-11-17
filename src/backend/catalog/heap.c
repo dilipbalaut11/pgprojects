@@ -1863,15 +1863,12 @@ heap_drop_with_catalog(Oid relid)
 	/*
 	 * If leaf relation of a partitioned table is being drop then detach it
 	 * from the global indexes i.e. remove all the mappings from
-	 * pg_index_partition relation.  We don't have any mapping for non-leaf
-	 * relation so nothing to do for them.
+	 * pg_index_partition catalog for thi relation.  We don't create any
+	 * mapping for non-leaf relation so nothing to do for them.
 	 */
 	if (rel->rd_rel->relkind == RELKIND_RELATION &&
 		get_rel_has_globalindex(relid))
-	{
-		/* Detach the reloid from the global indexes. */
 		InvalidateRelationIndexPartitionEntries(relid);
-	}
 
 	/*
 	 * Schedule unlinking of the relation's physical files at commit.

@@ -334,7 +334,6 @@ InvalidateRelationIndexPartitionEntries(Oid reloid)
 
 	while ((tuple = systable_getnext(scan)) != NULL)
 	{
-		Form_pg_index_partitions form = (Form_pg_index_partitions) GETSTRUCT(tuple);
 		HeapTuple	newtup;
 
 		newtup = heap_copytuple(tuple);

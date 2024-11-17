@@ -156,3 +156,85 @@ SELECT * FROM parent_table WHERE value = 9000;
 
 -- Cleanup
 DROP TABLE range_parted;
+DROP TABLE parent_table;
+
+--Multilevel partition test
+CREATE TABLE parent_table (
+    id INT,
+    category TEXT,
+    sub_category TEXT,
+    value INT
+) PARTITION BY RANGE (id);
+
+DO $$
+DECLARE
+    range_start INT;
+    range_end INT;
+    range_partition_name TEXT;
+    list_partition_name TEXT;
+    hash_partition_name TEXT;
+    i INT;
+    j INT;
+    k INT;
+BEGIN
+    -- Create range partitions
+    FOR i IN 0..2 LOOP
+        range_start := i * 1000;
+        range_end := (i + 1) * 1000;
+        range_partition_name := format('parent_table_%s', i);
+        EXECUTE format('CREATE TABLE %I PARTITION OF parent_table FOR VALUES FROM (%s) TO (%s) PARTITION BY LIST(category)', range_partition_name, range_start, range_end);
+
+        -- Create list partitions within each range partition
+        FOR j IN 1..2 LOOP
+            list_partition_name := format('%s_list_%s', range_partition_name, j);
+            EXECUTE format('CREATE TABLE %I PARTITION OF %I FOR VALUES IN (''%s'') PARTITION BY HASH (id)', list_partition_name, range_partition_name, j);
+
+            -- Create hash partitions within each list partition
+            FOR k IN 0..2 LOOP
+                hash_partition_name := format('%s_hash_%s', list_partition_name, k);
+                EXECUTE format('CREATE TABLE %I PARTITION OF %I FOR VALUES WITH (MODULUS 3, REMAINDER %s)', hash_partition_name, list_partition_name, k);
+            END LOOP;
+        END LOOP;
+    END LOOP;
+END $$;
+
+DO $$
+DECLARE
+    i INT := 1;
+BEGIN
+    WHILE i <= 2999 LOOP
+        INSERT INTO parent_table (id, category, sub_category, value)
+        VALUES (i, '' || (i % 2 + 1), '' || (i % 10 + 1), i);
+        i := i + 1;
+    END LOOP;
+END $$;
+
+CREATE INDEX global_index_pt on parent_table(category) global;
+SELECT indexrelid::regclass, indrelid::regclass, indtoprelid::regclass, indtopindexid::regclass FROM pg_index WHERE indtopindexid::regclass ='global_index_pt'::regclass;
+CREATE INDEX global_index_pt_0 on parent_table_0(sub_category) global;
+CREATE UNIQUE INDEX global_index_pt_l_2 on parent_table_2_list_2(value) global;
+SELECT indexrelid::regclass, indrelid::regclass, indtoprelid::regclass, indtopindexid::regclass FROM pg_index WHERE indtopindexid::regclass ='global_index_pt'::regclass;
+SELECT indexrelid::regclass, indrelid::regclass, indtoprelid::regclass, indtopindexid::regclass FROM pg_index WHERE indtopindexid::regclass ='global_index_pt_0'::regclass;
+SELECT indexrelid::regclass, indrelid::regclass, indtoprelid::regclass, indtopindexid::regclass FROM pg_index WHERE indtopindexid::regclass ='global_index_pt_l_2'::regclass;
+EXPLAIN (COSTS OFF) SELECT * FROM parent_table WHERE category='1';
+SELECT * FROM parent_table WHERE category='1';
+EXPLAIN (COSTS OFF) UPDATE parent_table SET category='2' WHERE category='1';
+UPDATE parent_table SET category='2' WHERE category='1';
+SELECT * FROM parent_table WHERE category='1';
+
+ALTER TABLE parent_table DETACH PARTITION parent_table_0;
+SELECT indexrelid::regclass, indrelid::regclass, indtoprelid::regclass, indtopindexid::regclass FROM pg_index WHERE indtopindexid::regclass ='global_index_pt'::regclass;
+SELECT indexrelid::regclass, indrelid::regclass, indtoprelid::regclass, indtopindexid::regclass FROM pg_index WHERE indtopindexid::regclass ='global_index_pt_0'::regclass;
+SELECT indexrelid::regclass, indrelid::regclass, indtoprelid::regclass, indtopindexid::regclass FROM pg_index WHERE indtopindexid::regclass ='global_index_pt_l_2'::regclass;
+EXPLAIN (COSTS OFF) SELECT * FROM parent_table WHERE category='1';
+SELECT * FROM parent_table WHERE category='1';
+
+ALTER TABLE parent_table ATTACH PARTITION parent_table_0 FOR VALUES FROM (0) to (1000);
+SELECT indexrelid::regclass, indrelid::regclass, indtoprelid::regclass, indtopindexid::regclass FROM pg_index WHERE indtopindexid::regclass ='global_index_pt'::regclass;
+SELECT indexrelid::regclass, indrelid::regclass, indtoprelid::regclass, indtopindexid::regclass FROM pg_index WHERE indtopindexid::regclass ='global_index_pt_0'::regclass;
+SELECT indexrelid::regclass, indrelid::regclass, indtoprelid::regclass, indtopindexid::regclass FROM pg_index WHERE indtopindexid::regclass ='global_index_pt_l_2'::regclass;
+EXPLAIN (COSTS OFF) SELECT * FROM parent_table WHERE category='1';
+SELECT * FROM parent_table WHERE category='1';
+
+
+DROP TABLE parent_table;

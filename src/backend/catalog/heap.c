@@ -1204,6 +1204,7 @@ heap_create_with_catalog(const char *relname,
 			 */
 			Assert(relkind != RELKIND_INDEX);
 			Assert(relkind != RELKIND_PARTITIONED_INDEX);
+			Assert(relkind != RELKIND_GLOBAL_INDEX);
 
 			if (relkind == RELKIND_TOASTVALUE)
 			{
@@ -1321,7 +1322,8 @@ heap_create_with_catalog(const char *relname,
 	if (!(relkind == RELKIND_SEQUENCE ||
 		  relkind == RELKIND_TOASTVALUE ||
 		  relkind == RELKIND_INDEX ||
-		  relkind == RELKIND_PARTITIONED_INDEX))
+		  relkind == RELKIND_PARTITIONED_INDEX ||
+		  relkind == RELKIND_GLOBAL_INDEX))
 	{
 		Oid			new_array_oid;
 		ObjectAddress new_type_addr;
@@ -1857,6 +1859,16 @@ heap_drop_with_catalog(Oid relid)
 	 */
 	if (relid == defaultPartOid)
 		update_default_partition_oid(parentOid, InvalidOid);
+
+	/*
+	 * If leaf relation of a partitioned table is being drop then detach it
+	 * from the global indexes i.e. remove all the mappings from
+	 * pg_index_partition catalog for thi relation.  We don't create any
+	 * mapping for non-leaf relation so nothing to do for them.
+	 */
+	if (rel->rd_rel->relkind == RELKIND_RELATION &&
+		get_rel_has_globalindex(relid))
+		InvalidateIndexPartitionEntries(NULL, InvalidOid, relid);
 
 	/*
 	 * Schedule unlinking of the relation's physical files at commit.
@@ -2966,6 +2978,9 @@ RemoveStatistics(Oid relid, AttrNumber attnum)
  *
  * The routine will truncate and then reconstruct the indexes on
  * the specified relation.  Caller must hold exclusive lock on rel.
+ *
+ * TODO: Handle the global indexes, global indexes should not be rebuild while
+ * truncating each leaf relation.
  */
 static void
 RelationTruncateIndexes(Relation heapRelation)

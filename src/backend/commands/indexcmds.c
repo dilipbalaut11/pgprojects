@@ -24,6 +24,7 @@
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
+#include "catalog/heap.h"
 #include "catalog/index.h"
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
@@ -31,6 +32,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_database.h"
+#include "catalog/pg_index_partitions.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
@@ -109,6 +111,7 @@ static void ReindexMultipleTables(const ReindexStmt *stmt,
 static void reindex_error_callback(void *arg);
 static void ReindexPartitions(const ReindexStmt *stmt, Oid relid,
 							  const ReindexParams *params, bool isTopLevel);
+static void  ReindexGlobalIndexes(List *reloids, const ReindexParams *params);
 static void ReindexMultipleInternal(const ReindexStmt *stmt, const List *relids,
 									const ReindexParams *params);
 static bool ReindexRelationConcurrently(const ReindexStmt *stmt,
@@ -516,9 +519,14 @@ WaitForOlderSnapshots(TransactionId limitXmin, bool progress)
  * 'indexRelationId': normally InvalidOid, but during bootstrap can be
  *		nonzero to specify a preselected OID for the index.
  * 'parentIndexId': the OID of the parent index; InvalidOid if not the child
- *		of a partitioned index.
+ *		of a partitioned index.  In case of global index this would be the
+ *		top level global index OID instead of parent index OID.
  * 'parentConstraintId': the OID of the parent constraint; InvalidOid if not
  *		the child of a constraint (only used when recursing)
+ * 'topRelationId': the OID of the top level parent relation on which global
+ * 		index is created if this is a child of a global index, InvalidOID
+ * 		otherwise.
+ * 'inheritors' List of all inheritor's OIDs if this is a partitioned relation;
  * 'total_parts': total number of direct and indirect partitions of relation;
  *		pass -1 if not known or rel is not partitioned.
  * 'is_alter_table': this is due to an ALTER rather than a CREATE operation.
@@ -538,6 +546,8 @@ DefineIndex(Oid tableId,
 			Oid indexRelationId,
 			Oid parentIndexId,
 			Oid parentConstraintId,
+			Oid	topRelationId,
+			List *inheritors,
 			int total_parts,
 			bool is_alter_table,
 			bool check_rights,
@@ -568,6 +578,7 @@ DefineIndex(Oid tableId,
 	bool		exclusion;
 	bool		partitioned;
 	bool		safe_index;
+	bool		global_child = OidIsValid(topRelationId);
 	Datum		reloptions;
 	int16	   *coloptions;
 	IndexInfo  *indexInfo;
@@ -629,6 +640,27 @@ DefineIndex(Oid tableId,
 	 */
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_INDEX_OID,
 								 InvalidOid);
+
+	/*
+	 * If this is a global index, we must append a partition identifier to
+	 * uniquely identify the heap tuple.  Therefore, in this design, we have
+	 * opted to include the partition-id as the last key column.
+	 *
+	 * The rationale behind storing it as the last key column is that in
+	 * various scenarios, we would treat this column as an extended
+	 * index key column.  Essentially, each index tuple must be uniquely
+	 * identified. Therefore, if we encounter duplicate keys, we utilize heap
+	 * tid as a tiebreaker.  However, for global indexes, relying solely on
+	 * heap tid isn't adequate; we also require the partition identifier.
+	 */
+	if (stmt->global)
+	{
+		IndexElem	*newparam = makeNode(IndexElem);
+
+		newparam->name = NULL;
+		newparam->expr = NULL;
+		stmt->indexParams = lappend(stmt->indexParams, newparam);
+	}
 
 	/*
 	 * count key attributes in index
@@ -951,10 +983,10 @@ DefineIndex(Oid tableId,
 	 * violate uniqueness by putting values that ought to be unique in
 	 * different partitions.
 	 *
-	 * We could lift this limitation if we had global indexes, but those have
-	 * their own problems, so this is a useful feature combination.
+	 * If we are creating a global index the we do not have this problem.
 	 */
-	if (partitioned && (stmt->unique || exclusion))
+	if (partitioned && !stmt->global && !global_child &&
+		(stmt->unique || exclusion))
 	{
 		PartitionKey key = RelationGetPartitionKey(rel);
 		const char *constraint_type;
@@ -1109,7 +1141,7 @@ DefineIndex(Oid tableId,
 	{
 		AttrNumber	attno = indexInfo->ii_IndexAttrNumbers[i];
 
-		if (attno < 0)
+		if (attno < 0 && !stmt->global)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("index creation on system columns is not supported")));
@@ -1181,16 +1213,25 @@ DefineIndex(Oid tableId,
 	flags = constr_flags = 0;
 	if (stmt->isconstraint)
 		flags |= INDEX_CREATE_ADD_CONSTRAINT;
-	if (skip_build || concurrent || partitioned)
+	if (skip_build || concurrent || (partitioned && !stmt->global))
 		flags |= INDEX_CREATE_SKIP_BUILD;
 	if (stmt->if_not_exists)
 		flags |= INDEX_CREATE_IF_NOT_EXISTS;
 	if (concurrent)
 		flags |= INDEX_CREATE_CONCURRENT;
-	if (partitioned)
+	if (partitioned && !stmt->global)
 		flags |= INDEX_CREATE_PARTITIONED;
 	if (stmt->primary)
 		flags |= INDEX_CREATE_IS_PRIMARY;
+
+	/* Skip creating storage if this is a child of a global index. */
+	if (global_child)
+	{
+		flags |= INDEX_CREATE_SKIP_BUILD;
+		flags |= INDEX_CREATE_GLOBAL_CHILD;
+	}
+	if (stmt->global)
+		flags |= INDEX_CREATE_GLOBAL;
 
 	/*
 	 * If the table is partitioned, and recursion was declined but partitions
@@ -1213,14 +1254,14 @@ DefineIndex(Oid tableId,
 
 	indexRelationId =
 		index_create(rel, indexRelationName, indexRelationId, parentIndexId,
-					 parentConstraintId,
+					 parentConstraintId, topRelationId,
 					 stmt->oldNumber, indexInfo, indexColNames,
 					 accessMethodId, tablespaceId,
 					 collationIds, opclassIds, opclassOptions,
 					 coloptions, NULL, reloptions,
 					 flags, constr_flags,
 					 allowSystemTableMods, !check_rights,
-					 &createdConstraintId);
+					 &createdConstraintId, inheritors);
 
 	ObjectAddressSet(address, RelationRelationId, indexRelationId);
 
@@ -1258,6 +1299,12 @@ DefineIndex(Oid tableId,
 		CreateComments(indexRelationId, RelationRelationId, 0,
 					   stmt->idxcomment);
 
+	/*
+	 * If table is partitioned then create index on each partition.  But if
+	 * we are building a global index we don't need to create it on each
+	 * partition, there will be just one global index which will hold data from
+	 * all the children.
+	 */
 	if (partitioned)
 	{
 		PartitionDesc partdesc;
@@ -1324,6 +1371,9 @@ DefineIndex(Oid tableId,
 
 			parentDesc = RelationGetDescr(rel);
 
+			if (stmt->global)
+				topRelationId = RelationGetRelid(rel);
+
 			/*
 			 * For each partition, scan all existing indexes; if one matches
 			 * our index definition and is not already attached to some other
@@ -1339,7 +1389,7 @@ DefineIndex(Oid tableId,
 				Oid			child_save_userid;
 				int			child_save_sec_context;
 				int			child_save_nestlevel;
-				List	   *childidxs;
+				List	   *childidxs = NIL;
 				ListCell   *cell;
 				AttrMap    *attmap;
 				bool		found = false;
@@ -1375,7 +1425,9 @@ DefineIndex(Oid tableId,
 					continue;
 				}
 
-				childidxs = RelationGetIndexList(childrel);
+				if (!stmt->global && !global_child)
+					childidxs = RelationGetIndexList(childrel);
+
 				attmap =
 					build_attrmap_by_name(RelationGetDescr(childrel),
 										  parentDesc,
@@ -1424,7 +1476,8 @@ DefineIndex(Oid tableId,
 						}
 
 						/* Attach index to parent and we're done. */
-						IndexSetParentIndex(cldidx, indexRelationId);
+						if (!RelationIsGlobalIndexOrChild(cldidx))
+							IndexSetParentIndex(cldidx, indexRelationId);
 						if (createdConstraintId != InvalidOid)
 							ConstraintSetParentConstraint(cldConstrOid,
 														  createdConstraintId,
@@ -1478,7 +1531,8 @@ DefineIndex(Oid tableId,
 					childStmt = generateClonedIndexStmt(NULL,
 														parentIndex,
 														attmap,
-														NULL);
+														NULL,
+														true);
 
 					/*
 					 * Recurse as the starting user ID.  Callee will use that
@@ -1490,8 +1544,11 @@ DefineIndex(Oid tableId,
 					childAddr =
 						DefineIndex(childRelid, childStmt,
 									InvalidOid, /* no predefined OID */
-									indexRelationId,	/* this is our child */
+									RelationIsPartitionGlobalIndex(parentIndex) ?
+									parentIndexId : indexRelationId,	/* this is our child */
 									createdConstraintId,
+									topRelationId,
+									NIL,
 									-1,
 									is_alter_table, check_rights,
 									check_not_in_use,
@@ -1904,9 +1961,21 @@ ComputeIndexAttrs(IndexInfo *indexInfo,
 		Oid			attcollation;
 
 		/*
-		 * Process the column-or-expression to be indexed.
+		 * Process the column-or-expression to be indexed.  For partition ID
+		 * attribute both name and expr is set as NULL.  And we can directly
+		 * point to the predefine FormData_pg_attribute for the partition id
+		 * attribute.
 		 */
-		if (attribute->name != NULL)
+		if ((attribute->name == NULL) && (attribute->expr == NULL))
+		{
+			const FormData_pg_attribute *attform;
+
+			attform = &partitionid_attr;
+			indexInfo->ii_IndexAttrNumbers[attn] = attform->attnum;
+			atttype = attform->atttypid;
+			attcollation = attform->attcollation;
+		}
+		else if (attribute->name != NULL)
 		{
 			/* Simple index attribute */
 			HeapTuple	atttuple;
@@ -2930,7 +2999,7 @@ ReindexIndex(const ReindexStmt *stmt, const ReindexParams *params, bool isTopLev
 		ReindexParams newparams = *params;
 
 		newparams.options |= REINDEXOPT_REPORT_PROGRESS;
-		reindex_index(stmt, indOid, false, persistence, &newparams);
+		reindex_index(stmt, indOid, false, persistence, &newparams, NULL);
 	}
 }
 
@@ -2980,7 +3049,8 @@ RangeVarCallbackForReindexIndex(const RangeVar *relation,
 	if (!relkind)
 		return;
 	if (relkind != RELKIND_INDEX &&
-		relkind != RELKIND_PARTITIONED_INDEX)
+		relkind != RELKIND_PARTITIONED_INDEX &&
+		relkind != RELKIND_GLOBAL_INDEX)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("\"%s\" is not an index", relation->relname)));
@@ -3323,6 +3393,7 @@ ReindexPartitions(const ReindexStmt *stmt, Oid relid, const ReindexParams *param
 	char	   *relnamespace = get_namespace_name(get_rel_namespace(relid));
 	MemoryContext reindex_context;
 	List	   *inhoids;
+	List	   *parentreloids = NIL;
 	ListCell   *lc;
 	ErrorContextCallback errcallback;
 	ReindexErrorInfo errinfo;
@@ -3373,10 +3444,16 @@ ReindexPartitions(const ReindexStmt *stmt, Oid relid, const ReindexParams *param
 
 		/*
 		 * This discards partitioned tables, partitioned indexes and foreign
-		 * tables.
+		 * tables.  However, we would rememeber the OIDs of the partittioned
+		 * tables and reindex them later as they can also have global indexes.
 		 */
 		if (!RELKIND_HAS_STORAGE(partkind))
+		{
+			if (partkind == RELKIND_PARTITIONED_TABLE)
+				parentreloids = lappend_oid(parentreloids, partoid);
+
 			continue;
+		}
 
 		Assert(partkind == RELKIND_INDEX ||
 			   partkind == RELKIND_RELATION);
@@ -3393,12 +3470,87 @@ ReindexPartitions(const ReindexStmt *stmt, Oid relid, const ReindexParams *param
 	 */
 	ReindexMultipleInternal(stmt, partitions, params);
 
+	/* Reindex the global indexes. Including the input partitioned table. */
+	if (relkind == RELKIND_PARTITIONED_TABLE)
+		parentreloids = lappend_oid(parentreloids, relid);
+	ReindexGlobalIndexes(parentreloids, params);
+
 	/*
 	 * Clean up working storage --- note we must do this after
 	 * StartTransactionCommand, else we might be trying to delete the active
 	 * context!
 	 */
 	MemoryContextDelete(reindex_context);
+}
+
+/*
+ * ReindexGlobalIndexes
+ *
+ * Reindex the list of partitioned relations.  Partitioned relations can have
+ * global index so this will reindex global indexes defined on the partitioned
+ * relations.
+ */
+static void
+ReindexGlobalIndexes(List *reloids, const ReindexParams *params)
+{
+	Relation	rel;
+
+	foreach_oid(relid, reloids)
+	{
+		List *indexoids;
+
+		/*
+		 * Open and lock the relation.  ShareLock is sufficient since we only
+		 * need to prevent schema and data changes in it.  The lock level used
+		 * here should match ReindexTable().
+		 */
+		if ((params->options & REINDEXOPT_MISSING_OK) != 0)
+			rel = try_table_open(relid, ShareLock);
+		else
+			rel = table_open(relid, ShareLock);
+
+		/* if relation is gone, leave */
+		if (!rel)
+			continue;
+
+		/* Only partitioned table must get here. */
+		Assert(rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
+
+		/* If relation doesn't have global index then skip it. */
+		if (!rel->rd_rel->relhasglobalindex)
+		{
+			/* Close rel, but continue to hold the lock. */
+			table_close(rel, NoLock);
+			continue;
+		}
+
+		/*
+		 * Get the list of indexes of the relation.  Loop through all the
+		 * indexes and reindex the indexes directly defined on the relation.
+		 */
+		indexoids = RelationGetIndexList(rel);
+		foreach_oid(indexoid, indexoids)
+		{
+			Oid	heapId = IndexGetRelation(indexoid,
+										  (params->options &
+										   REINDEXOPT_MISSING_OK) != 0);
+			ReindexParams newparams = *params;
+
+			/*
+			 * if relation is missing or this is not a global index then skip
+			 * it.
+			 */
+			if (!OidIsValid(heapId) ||
+				get_rel_relkind(indexoid) != RELKIND_GLOBAL_INDEX)
+				continue;
+
+			reindex_index(NULL, indexoid, false, rel->rd_rel->relpersistence,
+						  &newparams, rel);
+		}
+
+		 /* Close rel, but continue to hold the lock. */
+		 table_close(rel, NoLock);
+	}
 }
 
 /*
@@ -3479,7 +3631,7 @@ ReindexMultipleInternal(const ReindexStmt *stmt, const List *relids, const Reind
 
 			newparams.options |=
 				REINDEXOPT_REPORT_PROGRESS | REINDEXOPT_MISSING_OK;
-			reindex_index(stmt, relid, false, relpersistence, &newparams);
+			reindex_index(stmt, relid, false, relpersistence, &newparams, NULL);
 			PopActiveSnapshot();
 			/* reindex_index() does the verbose output */
 		}
@@ -3808,6 +3960,7 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 
 		case RELKIND_PARTITIONED_TABLE:
 		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_GLOBAL_INDEX:
 		default:
 			/* Return error if type of relation is not supported */
 			ereport(ERROR,

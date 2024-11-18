@@ -1412,7 +1412,10 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 			appendStringInfoString(&buf, sep);
 		sep = ", ";
 
-		if (attnum != 0)
+		/* Ignore internal PartitionIdAttributeNumber. */
+		if (attnum == PartitionIdAttributeNumber)
+			continue;
+		else if (attnum != 0)
 		{
 			/* Simple index column */
 			char	   *attname;

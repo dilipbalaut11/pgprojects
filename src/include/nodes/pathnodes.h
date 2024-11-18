@@ -137,6 +137,9 @@ typedef struct PlannerGlobal
 	/* type OIDs for PARAM_EXEC Params */
 	List	   *paramExecTypes;
 
+	/* additional relation OIDs to be locked for global index */
+	List	   *lockRelOids;
+
 	/* highest PlaceHolderVar ID assigned */
 	Index		lastPHId;
 
@@ -832,6 +835,13 @@ typedef enum RelOptKind
 	RELOPT_OTHER_UPPER_REL,
 } RelOptKind;
 
+typedef enum IndexKind
+{
+	INDEX_LOCAL,
+	INDEX_GLOBAL_DIRECT,
+	INDEX_GLOBAL_INDIRECT
+} IndexKind;
+
 /*
  * Is the given relation a simple relation i.e a base or "other" member
  * relation?
@@ -1120,6 +1130,14 @@ struct IndexOptInfo
 	Oid			indexoid;
 	/* tablespace of index (not table) */
 	Oid			reltablespace;
+
+	/*
+	 * OID of the relation on which the index is created, for normal index we
+	 * have RelOptInfo reference to identify that relation but for global index
+	 * we need to explicitely need it as global index might have defined on
+	 * some upper level parent relations.
+	 */
+	Oid			indtoprelid;
 	/* back-link to index's table; don't print, else infinite recursion */
 	RelOptInfo *rel pg_node_attr(read_write_ignore);
 
@@ -1182,6 +1200,9 @@ struct IndexOptInfo
 	 * check_index_predicates())
 	 */
 	List	   *indrestrictinfo;
+
+	/* whether the index is local or direct global or indirect global */
+	char		relkind;
 
 	/* true if index predicate matches query */
 	bool		predOK;

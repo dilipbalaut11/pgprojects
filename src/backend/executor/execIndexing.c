@@ -212,6 +212,23 @@ ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative)
 
 		indexDesc = index_open(indexOid, RowExclusiveLock);
 
+		/*
+		 * If this is a child global index, retrieve the OID of its parent
+		 * global index.  Child global indexes are purely catalog entries
+		 * designed to provide direct access to the top-level global index's
+		 * OID. Since child global indexes do not have storage, we must use the
+		 * 'indtopindexid' to access the actual global index.
+		 */
+		if (RelationIsPartitionGlobalIndex(indexDesc))
+		{
+			Oid indtopindexid = indexDesc->rd_index->indtopindexid;
+
+			index_close(indexDesc, RowExclusiveLock);
+
+			Assert(get_rel_relkind(indtopindexid) == RELKIND_GLOBAL_INDEX);
+			indexDesc = index_open(indtopindexid, RowExclusiveLock);
+		}
+
 		/* extract index key information from the index's pg_index info */
 		ii = BuildIndexInfo(indexDesc);
 

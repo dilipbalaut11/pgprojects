@@ -11946,7 +11946,7 @@ opt_name_list:
 vacuum_relation:
 			relation_expr opt_name_list
 				{
-					$$ = (Node *) makeVacuumRelation($1, InvalidOid, $2);
+					$$ = (Node *) makeVacuumRelation($1, InvalidOid, $2, InvalidOid); //fix me parent Oid
 				}
 		;
 

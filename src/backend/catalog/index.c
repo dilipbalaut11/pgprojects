@@ -124,7 +124,7 @@ static void UpdateIndexRelation(Oid indexoid, Oid heapoid,
 static void IndexCheckExclusion(Relation heapRelation,
 								Relation indexRelation,
 								IndexInfo *indexInfo);
-static bool validate_index_callback(ItemPointer itemptr, void *opaque);
+static bool validate_index_callback(ItemPointer itemptr, Oid reloid, void *opaque);
 static bool ReindexIsCurrentlyProcessingIndex(Oid indexOid);
 static void SetReindexProcessing(Oid heapOid, Oid indexOid);
 static void ResetReindexProcessing(void);
@@ -3594,7 +3594,7 @@ validate_index(Oid heapId, Oid indexId, Snapshot snapshot)
  * validate_index_callback - bulkdelete callback to collect the index TIDs
  */
 static bool
-validate_index_callback(ItemPointer itemptr, void *opaque)
+validate_index_callback(ItemPointer itemptr, Oid reloid, void *opaque)
 {
 	ValidateIndexState *state = (ValidateIndexState *) opaque;
 	int64		encoded = itemptr_encode(itemptr);

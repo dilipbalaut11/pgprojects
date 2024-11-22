@@ -831,13 +831,14 @@ makeGroupingSet(GroupingSetKind kind, List *content, int location)
  *	  create a VacuumRelation node
  */
 VacuumRelation *
-makeVacuumRelation(RangeVar *relation, Oid oid, List *va_cols)
+makeVacuumRelation(RangeVar *relation, Oid oid, List *va_cols, Oid top_parent)
 {
 	VacuumRelation *v = makeNode(VacuumRelation);
 
 	v->relation = relation;
 	v->oid = oid;
 	v->va_cols = va_cols;
+	v->parent_oid = top_parent;
 	return v;
 }
 

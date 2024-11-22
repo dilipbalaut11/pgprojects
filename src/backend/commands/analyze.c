@@ -433,7 +433,7 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 	}
 	else if (!inh)
 	{
-		vac_open_indexes(onerel, AccessShareLock, &nindexes, &Irel);
+		vac_open_indexes(onerel, AccessShareLock, &nindexes, &Irel, NULL);
 		hasindex = nindexes > 0;
 	}
 	else

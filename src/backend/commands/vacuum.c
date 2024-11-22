@@ -61,6 +61,14 @@
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
+/*
+ * Entry structures for the hash tables
+ */
+typedef struct
+{
+	Oid		reloid;
+	TidStore *dead_items;
+} TidStoreEntry;
 
 /*
  * GUC parameters
@@ -112,11 +120,16 @@ static void vac_truncate_clog(TransactionId frozenXID,
 							  MultiXactId minMulti,
 							  TransactionId lastSaneFrozenXid,
 							  MultiXactId lastSaneMinMulti);
-static bool vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
-					   BufferAccessStrategy bstrategy);
+static bool vacuum_rel(Oid relid, TidStore **dead_items, RangeVar *relation,
+					   VacuumParams *params, BufferAccessStrategy bstrategy);
 static double compute_parallel_delay(void);
 static VacOptValue get_vacoptval_from_boolean(DefElem *def);
-static bool vac_tid_reaped(ItemPointer itemptr, void *state);
+static bool vac_tid_reaped(ItemPointer itemptr, Oid relid, void *state);
+static void vacuum_global_index_and_heap(List *vrel_vacuum,
+										 HTAB *tidstore_hash,
+										 VacuumParams *params,
+										 Oid parentoid,
+										 BufferAccessStrategy bstrategy);
 
 /*
  * GUC check function to ensure GUC value specified is within the allowable
@@ -484,6 +497,7 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 	const char *stmttype;
 	volatile bool in_outer_xact,
 				use_own_xacts;
+	Oid		parentoid = InvalidOid;
 
 	Assert(params != NULL);
 
@@ -544,7 +558,13 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 		relations = newrels;
 	}
 	else
+	{
+		/*
+		 * TODO: Need to expand the relation with global index properly here,
+		 * when doing database level vacuum.
+		 */
 		relations = get_all_vacuum_rels(vac_context, params->options);
+	}
 
 	/*
 	 * Decide whether we need to start/commit our own transactions.
@@ -599,6 +619,14 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 	PG_TRY();
 	{
 		ListCell   *cur;
+		HTAB	   *tidstore_hash = NULL;
+		HASHCTL		hash_ctl;
+		List	   *vrel_vacuum = NIL;
+
+
+		hash_ctl.keysize = sizeof(Oid);
+		hash_ctl.entrysize = sizeof(TidStoreEntry);
+		hash_ctl.hcxt = CurrentMemoryContext;
 
 		in_vacuum = true;
 		VacuumFailsafeActive = false;
@@ -614,11 +642,79 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 		foreach(cur, relations)
 		{
 			VacuumRelation *vrel = lfirst_node(VacuumRelation, cur);
+			TidStore	*dead_items = NULL;
+
+			/*
+			 * Whenever we are are vacuuming tables with global indexes then
+			 * there would be parent_oid set and all the relations with the
+			 * same parent_oid will be continuous in the list, we will do
+			 * vacuum of all the table with same parent id and store their
+			 * deaditems into a hash and once we are done with all the child
+			 * with same parent oid we will vacuum the global indexes and
+			 * vacuum second pass of heap.
+			 */
+			if (OidIsValid(vrel->parent_oid) && tidstore_hash == NULL)
+			{
+				LockRelationOid(vrel->parent_oid, AccessShareLock);
+				tidstore_hash = hash_create("DeadTidStoreHash",
+											128,
+											&hash_ctl,
+											HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+			}
 
 			if (params->options & VACOPT_VACUUM)
 			{
-				if (!vacuum_rel(vrel->oid, vrel->relation, params, bstrategy))
+				/*
+				 * If parent oid changed first complete the global index and
+				 * heap vacuum.
+				 */
+				/*
+				 * FIXME: Keep a watch on maintenence work mem and based on
+				 * that we might have to trigger this early.
+				 */
+				if (OidIsValid(parentoid) && tidstore_hash != NULL &&
+					vrel->parent_oid != parentoid)
+				{
+					/*
+					 * Now we will do the global index vacuum as well as second
+					 * pass heap vacuum for all the rels.  Deadtid array could
+					 * be a independent for each leaf, so that there local
+					 * index vacuum doesn't need to look into whole array and
+					 * the global index vacuum can also lookup into the array
+					 * of the respective partition based on which partitionid
+					 * the index tuple belongs to.
+					 */
+					vacuum_global_index_and_heap(vrel_vacuum, tidstore_hash,
+												 params, parentoid, bstrategy);
+					hash_destroy(tidstore_hash);
+					tidstore_hash = NULL;
+					list_free(vrel_vacuum);
+					vrel_vacuum = NIL;
+					UnlockRelationOid(parentoid, AccessShareLock);
+				}
+
+				if (!vacuum_rel(vrel->oid, &dead_items, vrel->relation,
+								params, bstrategy))
 					continue;
+
+				if (tidstore_hash)
+				{
+					TidStoreEntry   *entry;
+					bool	found;
+
+					if (vrel->oid == vrel->parent_oid)
+						continue;
+
+					parentoid = vrel->parent_oid;
+					vrel_vacuum = lappend(vrel_vacuum, vrel);
+
+					if (dead_items != NULL)
+					{
+						entry = hash_search(tidstore_hash, &vrel->oid, HASH_ENTER, &found);
+						Assert(!found);
+						entry->dead_items = dead_items;
+					}
+				}
 			}
 
 			if (params->options & VACOPT_ANALYZE)
@@ -659,6 +755,22 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 			 */
 			VacuumFailsafeActive = false;
 		}
+
+		/*
+		 * Do global index vacuum and second heap pass for the last set of
+		 * relations.
+		 */
+		if (vrel_vacuum != NIL)
+		{
+			vacuum_global_index_and_heap(vrel_vacuum, tidstore_hash, params,
+										 parentoid, bstrategy);
+
+			hash_destroy(tidstore_hash);
+			tidstore_hash = NULL;
+			list_free(vrel_vacuum);
+			vrel_vacuum = NIL;
+			UnlockRelationOid(parentoid, AccessShareLock);
+		}
 	}
 	PG_FINALLY();
 	{
@@ -692,6 +804,75 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 		vac_update_datfrozenxid();
 	}
 
+}
+
+static void
+vacuum_global_index_and_heap(List *vrel_vacuum, HTAB *tidstore_hash,
+						 	 VacuumParams *params, Oid parentoid,
+							 BufferAccessStrategy bstrategy)
+{
+	ListCell   *cur;
+	List	   *globalindexes = NIL;
+	List	   *indexoidlist;
+	Relation	heaprel;
+
+	if (hash_get_num_entries(tidstore_hash) == 0)
+		return;
+
+	/* FIXME, how to handle transaction boundaries?*/
+	StartTransactionCommand();
+
+	/* Get list of global indexes. */
+	heaprel = table_open(parentoid, RowExclusiveLock);
+	indexoidlist = RelationGetIndexList(heaprel);
+	foreach_oid(indexoid, indexoidlist)
+	{
+		if (get_rel_relkind(indexoid) == RELKIND_GLOBAL_INDEX)
+			globalindexes = lappend_oid(globalindexes, indexoid);
+	}
+
+	/* vacuum global indexes */
+	foreach_oid(indexoid, globalindexes)
+	{
+		IndexVacuumInfo ivinfo;
+
+		ivinfo.index = index_open(indexoid, RowExclusiveLock);
+		ivinfo.heaprel = heaprel;
+		ivinfo.analyze_only = false;
+		ivinfo.report_progress = true;
+		ivinfo.estimated_count = true;
+		ivinfo.message_level = DEBUG2;
+		ivinfo.num_heap_tuples = 0;
+		ivinfo.strategy = NULL;
+
+		/*
+		 * FIXME: Don't know how to setup ivinfo.num_heap_tuples because while
+		 * vacuuming global indexes we would be accessing multiple heaps.
+		 * We can do it latter when actually identify which heap we are
+		 * accessing from btree based on the partition id.
+		 */
+
+		index_bulk_delete(&ivinfo, NULL, vac_tid_reaped,
+						  (void *) tidstore_hash);
+		index_close(ivinfo.index, RowExclusiveLock);
+	}
+	table_close(heaprel, RowExclusiveLock);
+
+	CommitTransactionCommand();
+
+	foreach(cur, vrel_vacuum)
+	{
+		VacuumRelation  *vrel = lfirst_node(VacuumRelation, cur);
+		TidStoreEntry   *entry;
+		bool	found;
+
+		entry = hash_search(tidstore_hash, &vrel->oid, HASH_ENTER, &found);
+		Assert(found);
+
+		params->options |= VACOPT_HEAP_VACUUM_ONLY;
+		vacuum_rel(vrel->oid, &entry->dead_items, vrel->relation, params,
+				   bstrategy);
+	}
 }
 
 /*
@@ -870,6 +1051,9 @@ expand_vacuum_rel(VacuumRelation *vrel, MemoryContext vac_context,
 {
 	List	   *vacrels = NIL;
 	MemoryContext oldcontext;
+	bool		include_children;
+	bool		has_globalindex = false;
+	Oid			relid = InvalidOid;
 
 	/* If caller supplied OID, there's nothing we need do here. */
 	if (OidIsValid(vrel->oid))
@@ -877,6 +1061,12 @@ expand_vacuum_rel(VacuumRelation *vrel, MemoryContext vac_context,
 		oldcontext = MemoryContextSwitchTo(vac_context);
 		vacrels = lappend(vacrels, vrel);
 		MemoryContextSwitchTo(oldcontext);
+
+		if (get_rel_has_globalindex(relid))
+		{
+			relid = get_top_ancestor_with_globalindex(vrel->oid);
+			has_globalindex = true;
+		}
 	}
 	else
 	{
@@ -884,7 +1074,6 @@ expand_vacuum_rel(VacuumRelation *vrel, MemoryContext vac_context,
 		 * Process a specific relation, and possibly partitions or child
 		 * tables thereof.
 		 */
-		Oid			relid;
 		HeapTuple	tuple;
 		Form_pg_class classForm;
 		bool		include_children;
@@ -945,7 +1134,8 @@ expand_vacuum_rel(VacuumRelation *vrel, MemoryContext vac_context,
 			oldcontext = MemoryContextSwitchTo(vac_context);
 			vacrels = lappend(vacrels, makeVacuumRelation(vrel->relation,
 														  relid,
-														  vrel->va_cols));
+														  vrel->va_cols,
+														  InvalidOid));
 			MemoryContextSwitchTo(oldcontext);
 		}
 
@@ -961,56 +1151,61 @@ expand_vacuum_rel(VacuumRelation *vrel, MemoryContext vac_context,
 					(errmsg("VACUUM ONLY of partitioned table \"%s\" has no effect",
 							vrel->relation->relname)));
 
+		if (get_rel_has_globalindex(relid))
+			has_globalindex = true;
 		ReleaseSysCache(tuple);
-
-		/*
-		 * Unless the user has specified ONLY, make relation list entries for
-		 * its partitions or inheritance child tables.  Note that the list
-		 * returned by find_all_inheritors() includes the passed-in OID, so we
-		 * have to skip that.  There's no point in taking locks on the
-		 * individual partitions or child tables yet, and doing so would just
-		 * add unnecessary deadlock risk.  For this last reason, we do not yet
-		 * check the ownership of the partitions/tables, which get added to
-		 * the list to process.  Ownership will be checked later on anyway.
-		 */
-		if (include_children)
-		{
-			List	   *part_oids = find_all_inheritors(relid, NoLock, NULL);
-			ListCell   *part_lc;
-
-			foreach(part_lc, part_oids)
-			{
-				Oid			part_oid = lfirst_oid(part_lc);
-
-				if (part_oid == relid)
-					continue;	/* ignore original table */
-
-				/*
-				 * We omit a RangeVar since it wouldn't be appropriate to
-				 * complain about failure to open one of these relations
-				 * later.
-				 */
-				oldcontext = MemoryContextSwitchTo(vac_context);
-				vacrels = lappend(vacrels, makeVacuumRelation(NULL,
-															  part_oid,
-															  vrel->va_cols));
-				MemoryContextSwitchTo(oldcontext);
-			}
-		}
-
-		/*
-		 * Release lock again.  This means that by the time we actually try to
-		 * process the table, it might be gone or renamed.  In the former case
-		 * we'll silently ignore it; in the latter case we'll process it
-		 * anyway, but we must beware that the RangeVar doesn't necessarily
-		 * identify it anymore.  This isn't ideal, perhaps, but there's little
-		 * practical alternative, since we're typically going to commit this
-		 * transaction and begin a new one between now and then.  Moreover,
-		 * holding locks on multiple relations would create significant risk
-		 * of deadlock.
-		 */
-		UnlockRelationOid(relid, AccessShareLock);
 	}
+
+	/*
+	 * Unless the user has specified ONLY, make relation list entries for
+	 * its partitions or inheritance child tables.  Note that the list
+	 * returned by find_all_inheritors() includes the passed-in OID, so we
+	 * have to skip that.  There's no point in taking locks on the
+	 * individual partitions or child tables yet, and doing so would just
+	 * add unnecessary deadlock risk.  For this last reason, we do not yet
+	 * check the ownership of the partitions/tables, which get added to
+	 * the list to process.  Ownership will be checked later on anyway.
+	 */
+	if (include_children || has_globalindex)
+	{
+		List	   *part_oids = find_all_inheritors(relid, NoLock, NULL);
+		ListCell   *part_lc;
+
+		foreach(part_lc, part_oids)
+		{
+			Oid			part_oid = lfirst_oid(part_lc);
+
+			if (part_oid == relid)
+				continue;	/* ignore original table */
+
+			/*
+			 * We omit a RangeVar since it wouldn't be appropriate to
+			 * complain about failure to open one of these relations
+			 * later.
+			 */
+			oldcontext = MemoryContextSwitchTo(vac_context);
+			vacrels = lappend(vacrels, makeVacuumRelation(NULL,
+															part_oid,
+															vrel->va_cols,
+															has_globalindex ?
+															relid :
+															InvalidOid));
+			MemoryContextSwitchTo(oldcontext);
+		}
+	}
+
+	/*
+	 * Release lock again.  This means that by the time we actually try to
+	 * process the table, it might be gone or renamed.  In the former case
+	 * we'll silently ignore it; in the latter case we'll process it
+	 * anyway, but we must beware that the RangeVar doesn't necessarily
+	 * identify it anymore.  This isn't ideal, perhaps, but there's little
+	 * practical alternative, since we're typically going to commit this
+	 * transaction and begin a new one between now and then.  Moreover,
+	 * holding locks on multiple relations would create significant risk
+	 * of deadlock.
+	 */
+	UnlockRelationOid(relid, AccessShareLock);
 
 	return vacrels;
 }
@@ -1059,7 +1254,8 @@ get_all_vacuum_rels(MemoryContext vac_context, int options)
 		oldcontext = MemoryContextSwitchTo(vac_context);
 		vacrels = lappend(vacrels, makeVacuumRelation(NULL,
 													  relid,
-													  NIL));
+													  NIL,
+													  InvalidOid)); //FIX pass proper top parent Oid
 		MemoryContextSwitchTo(oldcontext);
 	}
 
@@ -1972,8 +2168,8 @@ vac_truncate_clog(TransactionId frozenXID,
  *		At entry and exit, we are not inside a transaction.
  */
 static bool
-vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
-		   BufferAccessStrategy bstrategy)
+vacuum_rel(Oid relid, TidStore **dead_items, RangeVar *relation,
+		   VacuumParams *params, BufferAccessStrategy bstrategy)
 {
 	LOCKMODE	lmode;
 	Relation	rel;
@@ -2230,7 +2426,7 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 			cluster_rel(relid, InvalidOid, &cluster_params);
 		}
 		else
-			table_relation_vacuum(rel, params, bstrategy);
+			table_relation_vacuum(rel, params, bstrategy, dead_items);
 	}
 
 	/* Roll back any GUC changes executed by index functions */
@@ -2255,8 +2451,12 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 	 * "analyze" will not get done on the toast table.  This is good, because
 	 * the toaster always uses hardcoded index access and statistics are
 	 * totally unimportant for toast relations.
+	 *
+	 * FIXME: Can we vacuum the toast relation (second pass of the toast
+	 * without vacuuming the global index?)
 	 */
-	if (toast_relid != InvalidOid)
+	if (!(params->options & VACOPT_HEAP_VACUUM_ONLY) &&
+		toast_relid != InvalidOid)
 	{
 		VacuumParams toast_vacuum_params;
 
@@ -2270,7 +2470,7 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 		toast_vacuum_params.options |= VACOPT_PROCESS_MAIN;
 		toast_vacuum_params.toast_parent = relid;
 
-		vacuum_rel(toast_relid, NULL, &toast_vacuum_params, bstrategy);
+		vacuum_rel(toast_relid, NULL, NULL, &toast_vacuum_params, bstrategy);
 	}
 
 	/*
@@ -2286,7 +2486,8 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 /*
  * Open all the vacuumable indexes of the given relation, obtaining the
  * specified kind of lock on each.  Return an array of Relation pointers for
- * the indexes into *Irel, and the number of indexes into *nindexes.
+ * the indexes into *Irel, the number of indexes into *nindexes, and set
+ * *has_global_index to true if relation has a global index.
  *
  * We consider an index vacuumable if it is marked insertable (indisready).
  * If it isn't, probably a CREATE INDEX CONCURRENTLY command failed early in
@@ -2297,13 +2498,17 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
  */
 void
 vac_open_indexes(Relation relation, LOCKMODE lockmode,
-				 int *nindexes, Relation **Irel)
+				 int *nindexes, Relation **Irel, bool *has_global_index)
 {
 	List	   *indexoidlist;
 	ListCell   *indexoidscan;
 	int			i;
 
 	Assert(lockmode != NoLock);
+
+	/* First set has_global_index to false if a valid pointer is passed. */
+	if (has_global_index)
+		*has_global_index = false;
 
 	/*
 	 * Get list of all the indexes including the global indexes of all its
@@ -2328,7 +2533,16 @@ vac_open_indexes(Relation relation, LOCKMODE lockmode,
 
 		indrel = index_open(indexoid, lockmode);
 		if (indrel->rd_index->indisready)
+		{
 			(*Irel)[i++] = indrel;
+
+			/*
+			 * If a valid pointer is passed for has_global_index and the index
+			 * is global index then set this to true.
+			 */
+			if (has_global_index && RelationIsGlobalIndex(indrel))
+				*has_global_index = true;
+		}
 		else
 			index_close(indrel, lockmode);
 	}
@@ -2565,9 +2779,22 @@ vac_cleanup_one_index(IndexVacuumInfo *ivinfo, IndexBulkDeleteResult *istat)
  *		This has the right signature to be an IndexBulkDeleteCallback.
  */
 static bool
-vac_tid_reaped(ItemPointer itemptr, void *state)
+vac_tid_reaped(ItemPointer itemptr, Oid reloid, void *state)
 {
-	TidStore   *dead_items = (TidStore *) state;
+	TidStore   *dead_items;
+
+	if (OidIsValid(reloid))
+	{
+		HTAB	   *tidstore_hash = (HTAB *) state;
+		TidStoreEntry	*entry;
+		bool		found;
+
+		entry = hash_search(tidstore_hash, &reloid, HASH_FIND, &found);
+		Assert(found);
+		dead_items = entry->dead_items;
+	}
+	else
+		dead_items = (TidStore *) state;
 
 	return TidStoreIsMember(dead_items, itemptr);
 }

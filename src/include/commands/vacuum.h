@@ -188,6 +188,7 @@ typedef struct VacAttrStats
 #define VACOPT_DISABLE_PAGE_SKIPPING 0x100	/* don't skip any pages */
 #define VACOPT_SKIP_DATABASE_STATS 0x200	/* skip vac_update_datfrozenxid() */
 #define VACOPT_ONLY_DATABASE_STATS 0x400	/* only vac_update_datfrozenxid() */
+#define VACOPT_HEAP_VACUUM_ONLY 0x800	/* global index and heap vacuum only */
 
 /*
  * Values used by index_cleanup and truncate params.
@@ -319,7 +320,8 @@ extern void vacuum(List *relations, VacuumParams *params,
 				   BufferAccessStrategy bstrategy, MemoryContext vac_context,
 				   bool isTopLevel);
 extern void vac_open_indexes(Relation relation, LOCKMODE lockmode,
-							 int *nindexes, Relation **Irel);
+							 int *nindexes, Relation **Irel,
+							 bool *has_global_index);
 extern void vac_close_indexes(int nindexes, Relation *Irel, LOCKMODE lockmode);
 extern double vac_estimate_reltuples(Relation relation,
 									 BlockNumber total_pages,

@@ -86,7 +86,7 @@ typedef struct IndexBulkDeleteResult
 } IndexBulkDeleteResult;
 
 /* Typedef for callback function to determine if a tuple is bulk-deletable */
-typedef bool (*IndexBulkDeleteCallback) (ItemPointer itemptr, void *state);
+typedef bool (*IndexBulkDeleteCallback) (ItemPointer itemptr, Oid reloid, void *state);
 
 /* struct definitions appear in relscan.h */
 typedef struct IndexScanDescData *IndexScanDesc;

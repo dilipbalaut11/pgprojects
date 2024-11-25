@@ -447,13 +447,13 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 	OffsetNumber maxoff;
 	Page		page;
 	BTPageOpaque opaque;
-	Relation	partrel = NULL;
+	Relation	partrel = heapRel;
 	Buffer		nbuf = InvalidBuffer;
 	bool		found = false;
 	bool		inposting = false;
 	bool		prevalldead = true;
 	int			curposti = 0;
-	Oid			heapoid = InvalidOid;
+	Oid			heapoid = RelationGetRelid(heapRel);
 
 	/* Assume unique until we find a duplicate */
 	*is_unique = true;
@@ -582,7 +582,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 
 					if (heapoid != curheapoid)
 					{
-						if (OidIsValid(heapoid))
+						if (heapoid != RelationGetRelid(heapRel))
 						{
 							Assert(partrel != NULL);
 							relation_close(partrel, NoLock);
@@ -592,8 +592,6 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 						heapoid = curheapoid;
 					}
 				}
-				else
-					partrel = heapRel;
 
 				/*
 				 * If we are doing a recheck, we expect to find the tuple we

@@ -1866,8 +1866,7 @@ heap_drop_with_catalog(Oid relid)
 	 * pg_index_partition relation.  We don't have any mapping for non-leaf
 	 * relation so nothing to do for them.
 	 */
-	if (rel->rd_rel->relkind == RELKIND_RELATION &&
-		get_rel_relispartition(relid))
+	if (get_rel_relispartition(relid))
 	{
 		List	*indexids = RelationGetIndexList(rel);
 		List	*reloids = list_make1_oid(relid);

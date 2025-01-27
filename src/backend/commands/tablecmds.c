@@ -18706,13 +18706,6 @@ AttachParittionsToGlobalIndex(Relation irel, List *reloids)
 		Relation	childrel = table_open(childoid, NoLock);
 		PartitionId	partid;
 
-		/* We need to create mapping only for the leaf partitions. */
-		if (childrel->rd_rel->relkind != RELKIND_RELATION)
-		{
-			table_close(childrel, NoLock);
-			continue;
-		}
-
 		/*
 		 * Allocate the partition ID for this partition with respect to the
 		 * the global index and insert the mapping into the index partition

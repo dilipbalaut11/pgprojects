@@ -615,6 +615,8 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 		{
 			VacuumRelation *vrel = lfirst_node(VacuumRelation, cur);
 
+			elog(WARNING, "vacuum relation %d", vrel->oid);
+
 			if (params->options & VACOPT_VACUUM)
 			{
 				if (!vacuum_rel(vrel->oid, vrel->relation, params, bstrategy))

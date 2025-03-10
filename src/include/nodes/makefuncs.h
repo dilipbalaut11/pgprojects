@@ -16,6 +16,7 @@
 
 #include "nodes/execnodes.h"
 #include "nodes/parsenodes.h"
+#include "commands/vacuum.h"
 
 
 extern A_Expr *makeA_Expr(A_Expr_Kind kind, List *name,

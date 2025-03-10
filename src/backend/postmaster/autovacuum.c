@@ -2569,8 +2569,6 @@ do_autovacuum(void)
 		}
 		elog(WARNING, "vacuum table end %s", tab->at_relname);
 
-		//continue;
-
 		/*
 		 * We will abort vacuuming the current table if something errors out,
 		 * and continue with the next one in schedule; in particular, this
@@ -3292,6 +3290,7 @@ autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
 	RangeVar   *rangevar;
 	VacuumRelation *rel;
 	List	   *rel_list = NIL;
+	List	   *param_list = NIL;
 	MemoryContext vac_context;
 
 	/* Let pgstat know what we're doing */
@@ -3314,6 +3313,7 @@ autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
 									child_tab->at_relname, -1);
 			rel = makeVacuumRelation(rangevar, child_tab->at_relid, NIL);
 			rel_list = lappend(rel_list, rel);
+			param_list = lappend(param_list, &child_tab->at_params);
 		}
 	}
 	else
@@ -3321,6 +3321,7 @@ autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
 		rangevar = makeRangeVar(tab->at_nspname, tab->at_relname, -1);
 		rel = makeVacuumRelation(rangevar, tab->at_relid, NIL);
 		rel_list = list_make1(rel);
+		param_list = list_make1(&tab->at_params);
 	}
 
 	vac_context = AllocSetContextCreate(CurrentMemoryContext,
@@ -3329,7 +3330,7 @@ autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
 
 	/* hack, need to check this for each rel ?? */
 	tab->at_params.options |= VACOPT_VACUUM;
-	vacuum(rel_list, &tab->at_params, bstrategy, vac_context, true);
+	vacuum(rel_list, param_list, bstrategy, vac_context, true);
 
 	MemoryContextDelete(vac_context);
 }

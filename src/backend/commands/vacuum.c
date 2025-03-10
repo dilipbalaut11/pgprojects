@@ -160,6 +160,7 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 	int			ring_size;
 	bool		skip_database_stats = false;
 	bool		only_database_stats = false;
+	List	   *param_list;
 	MemoryContext vac_context;
 	ListCell   *lc;
 
@@ -446,8 +447,10 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 		MemoryContextSwitchTo(old_context);
 	}
 
+	param_list = list_make1(&params);
+
 	/* Now go through the common routine */
-	vacuum(vacstmt->rels, &params, bstrategy, vac_context, isTopLevel);
+	vacuum(vacstmt->rels, param_list, bstrategy, vac_context, isTopLevel);
 
 	/* Finally, clean up the vacuum memory context */
 	MemoryContextDelete(vac_context);
@@ -476,10 +479,12 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
  * memory context that will not disappear at transaction commit.
  */
 void
-vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
+vacuum(List *relations, List *param_list, BufferAccessStrategy bstrategy,
 	   MemoryContext vac_context, bool isTopLevel)
 {
 	static bool in_vacuum = false;
+	bool isAutovac = AmAutoVacuumWorkerProcess();
+	VacuumParams *params = linitial(param_list);
 
 	const char *stmttype;
 	volatile bool in_outer_xact,
@@ -487,7 +492,8 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 
 	Assert(params != NULL);
 
-	stmttype = (params->options & VACOPT_VACUUM) ? "VACUUM" : "ANALYZE";
+	if (!isAutovac)
+		stmttype = (params->options & VACOPT_VACUUM) ? "VACUUM" : "ANALYZE";
 
 	/*
 	 * We cannot run VACUUM inside a user transaction block; if we were inside
@@ -497,13 +503,15 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 	 *
 	 * ANALYZE (without VACUUM) can run either way.
 	 */
-	if (params->options & VACOPT_VACUUM)
+	if (params && params->options & VACOPT_VACUUM)
 	{
 		PreventInTransactionBlock(isTopLevel, stmttype);
 		in_outer_xact = false;
 	}
-	else
+	else if (!isAutovac)
 		in_outer_xact = IsInTransactionBlock(isTopLevel);
+	else
+		in_outer_xact = false;
 
 	/*
 	 * Check for and disallow recursive calls.  This could happen when VACUUM
@@ -520,7 +528,7 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 	 * Build list of relation(s) to process, putting any new data in
 	 * vac_context for safekeeping.
 	 */
-	if (params->options & VACOPT_ONLY_DATABASE_STATS)
+	if (isAutovac || params->options & VACOPT_ONLY_DATABASE_STATS)
 	{
 		/* We don't process any tables in this case */
 		Assert(relations == NIL);
@@ -560,14 +568,12 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 	 * transaction block, and also in an autovacuum worker, use own
 	 * transactions so we can release locks sooner.
 	 */
-	if (params->options & VACOPT_VACUUM)
+	if (isAutovac || params->options & VACOPT_VACUUM)
 		use_own_xacts = true;
 	else
 	{
 		Assert(params->options & VACOPT_ANALYZE);
-		if (AmAutoVacuumWorkerProcess())
-			use_own_xacts = true;
-		else if (in_outer_xact)
+		if (in_outer_xact)
 			use_own_xacts = false;
 		else if (list_length(relations) > 1)
 			use_own_xacts = true;
@@ -599,6 +605,7 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 	PG_TRY();
 	{
 		ListCell   *cur;
+		int			pos = 0;
 
 		in_vacuum = true;
 		VacuumFailsafeActive = false;
@@ -614,6 +621,19 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 		foreach(cur, relations)
 		{
 			VacuumRelation *vrel = lfirst_node(VacuumRelation, cur);
+			int	pos = 0;
+
+			/*
+			 * Autovacuum worker might have different parameter for different
+			 * relation so fetch the information from the param list.
+			 */
+			if (isAutovac)
+			{
+				ListCell   *cur_param = list_nth_cell(param_list, pos);
+
+				params = lfirst(cur_param);
+				pos++;
+			}
 
 			elog(WARNING, "vacuum relation %d", vrel->oid);
 

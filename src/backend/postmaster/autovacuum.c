@@ -3290,6 +3290,7 @@ autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
 	VacuumRelation *rel;
 	List	   *rel_list = NIL;
 	List	   *param_list = NIL;
+	Oid			parentid;
 	MemoryContext vac_context;
 
 	/* Let pgstat know what we're doing */
@@ -3314,6 +3315,7 @@ autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
 			rel_list = lappend(rel_list, rel);
 			param_list = lappend(param_list, &child_tab->at_params);
 		}
+		parentid = tab->at_relid;
 	}
 	else
 	{
@@ -3321,15 +3323,14 @@ autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
 		rel = makeVacuumRelation(rangevar, tab->at_relid, NIL);
 		rel_list = list_make1(rel);
 		param_list = list_make1(&tab->at_params);
+		parentid = InvalidOid;
 	}
 
 	vac_context = AllocSetContextCreate(CurrentMemoryContext,
 										"Vacuum",
 										ALLOCSET_DEFAULT_SIZES);
 
-	/* hack, need to check this for each rel ?? */
-	tab->at_params.options |= VACOPT_VACUUM;
-	vacuum(rel_list, param_list, bstrategy, vac_context, true);
+	vacuum(rel_list, param_list, bstrategy, vac_context, parentid, true);
 
 	MemoryContextDelete(vac_context);
 }

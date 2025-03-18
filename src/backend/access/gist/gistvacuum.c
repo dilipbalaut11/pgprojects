@@ -348,7 +348,7 @@ restart:
 				ItemId		iid = PageGetItemId(page, off);
 				IndexTuple	idxtuple = (IndexTuple) PageGetItem(page, iid);
 
-				if (callback(&(idxtuple->t_tid), callback_state))
+				if (callback(&(idxtuple->t_tid), InvalidOid, callback_state))
 					todelete[ntodelete++] = off;
 			}
 		}

@@ -88,6 +88,7 @@ static void btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 static void btvacuumpage(BTVacState *vstate, BlockNumber scanblkno);
 static BTVacuumPosting btreevacuumposting(BTVacState *vstate,
 										  IndexTuple posting,
+										  Oid relid,
 										  OffsetNumber updatedoffset,
 										  int *nremaining);
 
@@ -1256,39 +1257,32 @@ backtrack:
 		nhtidslive = 0;
 		if (callback)
 		{
-			PartitionId		partid = InvalidPartitionId;
-
-			/*
-			 * If this is a global index then get the partition id for the
-			 * heap relation being vacuum so that we only call the callback
-			 * functions for the index tuple which belong to this partition.
-			 */
-			if (RelationIsGlobalIndex(rel) && !PartIdIsValid(partid))
-				partid = IndexGetRelationPartitionId(rel, RelationGetRelid(heaprel));
-
 			/* btbulkdelete callback tells us what to delete (or update) */
 			for (offnum = minoff;
 				 offnum <= maxoff;
 				 offnum = OffsetNumberNext(offnum))
 			{
 				IndexTuple	itup;
+				Oid		relid = InvalidOid;
 
 				itup = (IndexTuple) PageGetItem(page,
 												PageGetItemId(page, offnum));
 
-				/*
-				 * For global index only call the callback for the heap
-				 * relation which is being vacuumed;
-				 */
-				if (RelationIsGlobalIndex(rel) &&
-					BTreeTupleGetPartitionId(rel, itup) != partid)
-					continue;
-
 				Assert(!BTreeTupleIsPivot(itup));
+
+				/*
+				 * If this is a global index then get the relation id for the
+				 * partition id stored in the index tuple and pass that in the
+				 * callback function, so that callback function can check an
+				 * appropriate deadtuple store.
+				 */
+				if (RelationIsGlobalIndex(rel))
+					relid = BTreeTupleGetPartitionRelid(rel, itup);
+
 				if (!BTreeTupleIsPosting(itup))
 				{
 					/* Regular tuple, standard table TID representation */
-					if (callback(&itup->t_tid, callback_state))
+					if (callback(&itup->t_tid, relid, callback_state))
 					{
 						deletable[ndeletable++] = offnum;
 						nhtidsdead++;
@@ -1302,8 +1296,8 @@ backtrack:
 					int			nremaining;
 
 					/* Posting list tuple */
-					vacposting = btreevacuumposting(vstate, itup, offnum,
-													&nremaining);
+					vacposting = btreevacuumposting(vstate, itup, relid,
+													offnum, &nremaining);
 					if (vacposting == NULL)
 					{
 						/*
@@ -1407,7 +1401,7 @@ backtrack:
 		Assert(!attempt_pagedel || nhtidslive == 0);
 	}
 
-	if (attempt_pagedel)
+	if (attempt_pagedel /* && info->heaprel != NULL*/)
 	{
 		MemoryContext oldcontext;
 
@@ -1448,7 +1442,7 @@ backtrack:
  * caller in *nremaining.
  */
 static BTVacuumPosting
-btreevacuumposting(BTVacState *vstate, IndexTuple posting,
+btreevacuumposting(BTVacState *vstate, IndexTuple posting, Oid relid,
 				   OffsetNumber updatedoffset, int *nremaining)
 {
 	int			live = 0;
@@ -1458,7 +1452,7 @@ btreevacuumposting(BTVacState *vstate, IndexTuple posting,
 
 	for (int i = 0; i < nitem; i++)
 	{
-		if (!vstate->callback(items + i, vstate->callback_state))
+		if (!vstate->callback(items + i, relid, vstate->callback_state))
 		{
 			/* Live table TID */
 			live++;

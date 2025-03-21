@@ -31,6 +31,7 @@
 #include "access/xlogrecord.h"
 #include "catalog/pg_control.h"
 #include "common/pg_lzcompress.h"
+#include "common/varint.h"
 #include "replication/origin.h"
 
 #ifndef FRONTEND
@@ -1876,7 +1877,21 @@ DecodeXLogRecord(XLogReaderState *state,
 			}
 			if (!(fork_flags & BKPBLOCK_SAME_REL))
 			{
-				COPY_HEADER_FIELD(&blk->rlocator, sizeof(RelFileLocator));
+				int	consumed;
+
+				/* FIXME: needs overflow checks from COPY_HEADER_FIELD() */
+				blk->rlocator.spcOid = pg_varint_decode_uint64((uint8*) ptr, &consumed);
+				ptr += consumed;
+				remaining -= consumed;
+
+				blk->rlocator.dbOid = pg_varint_decode_uint64((uint8*) ptr, &consumed);
+				ptr += consumed;
+				remaining -= consumed;
+
+				blk->rlocator.relNumber = pg_varint_decode_uint64((uint8*) ptr, &consumed);
+				ptr += consumed;
+				remaining -= consumed;
+
 				rlocator = &blk->rlocator;
 			}
 			else
@@ -1891,7 +1906,14 @@ DecodeXLogRecord(XLogReaderState *state,
 
 				blk->rlocator = *rlocator;
 			}
-			COPY_HEADER_FIELD(&blk->blkno, sizeof(BlockNumber));
+			{
+				int consumed;
+
+				/* FIXME: needs overflow checks from COPY_HEADER_FIELD() */
+				blk->blkno = pg_varint_decode_uint64((uint8*) ptr, &consumed);
+				ptr += consumed;
+				remaining -= consumed;
+			}
 		}
 		else
 		{

@@ -36,6 +36,7 @@ common_sources = files(
   'unicode_category.c',
   'unicode_norm.c',
   'username.c',
+  'varint.c',
   'wait_error.c',
   'wchar.c',
 )

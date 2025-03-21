@@ -82,6 +82,7 @@ OBJS_COMMON = \
 	unicode_category.o \
 	unicode_norm.o \
 	username.o \
+	varint.o \
 	wait_error.o \
 	wchar.o
 

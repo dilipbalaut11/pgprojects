@@ -25,7 +25,7 @@ out_gistxlogPageUpdate(StringInfo buf, gistxlogPageUpdate *xlrec)
 static void
 out_gistxlogPageReuse(StringInfo buf, gistxlogPageReuse *xlrec)
 {
-	appendStringInfo(buf, "rel %u/%u/%u; blk %u; snapshotConflictHorizon %u:%u, isCatalogRel %c",
+	appendStringInfo(buf, "rel %u/%u/" UINT64_FORMAT "; blk %u; snapshotConflictHorizon %u:%u, isCatalogRel %c",
 					 xlrec->locator.spcOid, xlrec->locator.dbOid,
 					 xlrec->locator.relNumber, xlrec->block,
 					 EpochFromFullTransactionId(xlrec->snapshotConflictHorizon),

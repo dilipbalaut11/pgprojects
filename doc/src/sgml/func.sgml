@@ -28035,6 +28035,11 @@ acl      | {postgres=arwdDxtm/postgres,foo=r/postgres}
        <entry><type>timestamp with time zone</type></entry>
       </row>
 
+      <row>
+       <entry><structfield>next_relfilenumber</structfield></entry>
+       <entry><type>timestamp with time zone</type></entry>
+      </row>
+
      </tbody>
     </tgroup>
    </table>

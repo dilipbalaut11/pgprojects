@@ -42,6 +42,7 @@ typedef struct CheckPoint
 	bool		fullPageWrites; /* current full_page_writes */
 	int			wal_level;		/* current wal_level */
 	FullTransactionId nextXid;	/* next free transaction ID */
+	RelFileNumber nextRelFileNumber;	/* next relfilenumber */
 	Oid			nextOid;		/* next free OID */
 	MultiXactId nextMulti;		/* next free MultiXactId */
 	MultiXactOffset nextMultiOffset;	/* next free MultiXact offset */
@@ -80,7 +81,7 @@ typedef struct CheckPoint
 /* 0xC0 is used in Postgres 9.5-11 */
 #define XLOG_OVERWRITE_CONTRECORD		0xD0
 #define XLOG_CHECKPOINT_REDO			0xE0
-
+#define XLOG_NEXT_RELFILENUMBER			0xF0
 
 /*
  * System status indicator.  Note this is stored in pg_control; if you change

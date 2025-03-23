@@ -61,12 +61,13 @@ typedef struct
  * relation node/tablespace/database/blocknum and dirty indicator.
  */
 PG_FUNCTION_INFO_V1(pg_buffercache_pages);
+PG_FUNCTION_INFO_V1(pg_buffercache_pages_v1_6);
 PG_FUNCTION_INFO_V1(pg_buffercache_summary);
 PG_FUNCTION_INFO_V1(pg_buffercache_usage_counts);
 PG_FUNCTION_INFO_V1(pg_buffercache_evict);
 
-Datum
-pg_buffercache_pages(PG_FUNCTION_ARGS)
+static Datum
+pg_buffercache_pages_internal(PG_FUNCTION_ARGS, Oid rfn_typid)
 {
 	FuncCallContext *funcctx;
 	Datum		result;
@@ -108,7 +109,7 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 		TupleDescInitEntry(tupledesc, (AttrNumber) 1, "bufferid",
 						   INT4OID, -1, 0);
 		TupleDescInitEntry(tupledesc, (AttrNumber) 2, "relfilenode",
-						   OIDOID, -1, 0);
+						   rfn_typid, -1, 0);
 		TupleDescInitEntry(tupledesc, (AttrNumber) 3, "reltablespace",
 						   OIDOID, -1, 0);
 		TupleDescInitEntry(tupledesc, (AttrNumber) 4, "reldatabase",
@@ -214,7 +215,24 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 		}
 		else
 		{
-			values[1] = ObjectIdGetDatum(fctx->record[i].relfilenumber);
+			if (rfn_typid == INT8OID)
+				values[1] =
+					Int64GetDatum((int64) fctx->record[i].relfilenumber);
+			else
+			{
+				Assert(rfn_typid == OIDOID);
+
+				if (fctx->record[i].relfilenumber > OID_MAX)
+					ereport(ERROR,
+							errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							errmsg("relfilenode %llu is too large to be represented as an OID",
+									(unsigned long long) fctx->record[i].relfilenumber),
+							errhint("Upgrade the extension using ALTER EXTENSION pg_buffercache UPDATE"));
+
+				values[1] =
+					ObjectIdGetDatum((Oid) fctx->record[i].relfilenumber);
+			}
+
 			nulls[1] = false;
 			values[2] = ObjectIdGetDatum(fctx->record[i].reltablespace);
 			nulls[2] = false;
@@ -241,6 +259,19 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 	}
 	else
 		SRF_RETURN_DONE(funcctx);
+}
+
+/* entry point for old extension version */
+Datum
+pg_buffercache_pages(PG_FUNCTION_ARGS)
+{
+	return pg_buffercache_pages_internal(fcinfo, OIDOID);
+}
+
+Datum
+pg_buffercache_pages_v1_6(PG_FUNCTION_ARGS)
+{
+	return pg_buffercache_pages_internal(fcinfo, INT8OID);
 }
 
 Datum

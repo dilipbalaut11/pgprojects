@@ -522,7 +522,7 @@ XLogRecordSaveFPWs(XLogReaderState *record, const char *savepath)
 		else
 			pg_fatal("invalid fork number: %u", fork);
 
-		snprintf(filename, MAXPGPATH, "%s/%08X-%08X-%08X.%u.%u.%u.%u%s", savepath,
+		snprintf(filename, MAXPGPATH, "%s/%08X-%08X-%08X.%u.%u." UINT64_FORMAT ".%u%s", savepath,
 				 record->seg.ws_tli,
 				 LSN_FORMAT_ARGS(record->ReadRecPtr),
 				 rnode.spcOid, rnode.dbOid, rnode.relNumber, blk, forkname);
@@ -987,7 +987,7 @@ main(int argc, char **argv)
 				}
 				break;
 			case 'R':
-				if (sscanf(optarg, "%u/%u/%u",
+				if (sscanf(optarg, "%u/%u/" UINT64_FORMAT,
 						   &config.filter_by_relation.spcOid,
 						   &config.filter_by_relation.dbOid,
 						   &config.filter_by_relation.relNumber) != 3 ||

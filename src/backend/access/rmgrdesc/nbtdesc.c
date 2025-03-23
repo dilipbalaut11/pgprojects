@@ -114,7 +114,7 @@ btree_desc(StringInfo buf, XLogReaderState *record)
 			{
 				xl_btree_reuse_page *xlrec = (xl_btree_reuse_page *) rec;
 
-				appendStringInfo(buf, "rel: %u/%u/%u, snapshotConflictHorizon: %u:%u, isCatalogRel: %c",
+				appendStringInfo(buf, "rel: %u/%u/" UINT64_FORMAT ", snapshotConflictHorizon: %u:%u, isCatalogRel: %c",
 								 xlrec->locator.spcOid, xlrec->locator.dbOid,
 								 xlrec->locator.relNumber,
 								 EpochFromFullTransactionId(xlrec->snapshotConflictHorizon),

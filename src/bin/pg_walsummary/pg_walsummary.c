@@ -136,7 +136,7 @@ dump_one_relation(ws_options *opt, RelFileLocator *rlocator,
 
 	/* Dump limit block, if any. */
 	if (limit_block != InvalidBlockNumber)
-		printf("TS %u, DB %u, REL %u, FORK %s: limit %u\n",
+		printf("TS %u, DB %u, REL " UINT64_FORMAT ", FORK %s: limit %u\n",
 			   rlocator->spcOid, rlocator->dbOid, rlocator->relNumber,
 			   forkNames[forknum], limit_block);
 
@@ -201,11 +201,11 @@ dump_one_relation(ws_options *opt, RelFileLocator *rlocator,
 
 		/* Format this range of block numbers as a string. */
 		if (startblock == endblock)
-			printf("TS %u, DB %u, REL %u, FORK %s: block %u\n",
+			printf("TS %u, DB %u, REL " UINT64_FORMAT ", FORK %s: block %u\n",
 				   rlocator->spcOid, rlocator->dbOid, rlocator->relNumber,
 				   forkNames[forknum], startblock);
 		else
-			printf("TS %u, DB %u, REL %u, FORK %s: blocks %u..%u\n",
+			printf("TS %u, DB %u, REL " UINT64_FORMAT ", FORK %s: blocks %u..%u\n",
 				   rlocator->spcOid, rlocator->dbOid, rlocator->relNumber,
 				   forkNames[forknum], startblock, endblock);
 	}

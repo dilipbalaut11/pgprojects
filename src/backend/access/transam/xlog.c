@@ -5128,6 +5128,7 @@ BootStrapXLOG(uint32 data_checksum_version)
 	checkPoint.nextXid =
 		FullTransactionIdFromEpochAndXid(0, FirstNormalTransactionId);
 	checkPoint.nextOid = FirstGenbkiObjectId;
+	checkPoint.nextRelFileNumber = FirstNormalRelFileNumber;
 	checkPoint.nextMulti = FirstMultiXactId;
 	checkPoint.nextMultiOffset = 0;
 	checkPoint.oldestXid = FirstNormalTransactionId;
@@ -5141,7 +5142,11 @@ BootStrapXLOG(uint32 data_checksum_version)
 
 	TransamVariables->nextXid = checkPoint.nextXid;
 	TransamVariables->nextOid = checkPoint.nextOid;
+	TransamVariables->nextRelFileNumber = checkPoint.nextRelFileNumber;
 	TransamVariables->oidCount = 0;
+	TransamVariables->loggedRelFileNumber = checkPoint.nextRelFileNumber;
+	TransamVariables->flushedRelFileNumber = checkPoint.nextRelFileNumber;
+	TransamVariables->loggedRelFileNumberRecPtr = InvalidXLogRecPtr;
 	MultiXactSetNextMXact(checkPoint.nextMulti, checkPoint.nextMultiOffset);
 	AdvanceOldestClogXid(checkPoint.oldestXid);
 	SetTransactionIdLimit(checkPoint.oldestXid, checkPoint.oldestXidDB);
@@ -5617,7 +5622,10 @@ StartupXLOG(void)
 	/* initialize shared memory variables from the checkpoint record */
 	TransamVariables->nextXid = checkPoint.nextXid;
 	TransamVariables->nextOid = checkPoint.nextOid;
+	TransamVariables->nextRelFileNumber = checkPoint.nextRelFileNumber;
 	TransamVariables->oidCount = 0;
+	TransamVariables->loggedRelFileNumber = checkPoint.nextRelFileNumber;
+	TransamVariables->flushedRelFileNumber = checkPoint.nextRelFileNumber;
 	MultiXactSetNextMXact(checkPoint.nextMulti, checkPoint.nextMultiOffset);
 	AdvanceOldestClogXid(checkPoint.oldestXid);
 	SetTransactionIdLimit(checkPoint.oldestXid, checkPoint.oldestXidDB);
@@ -7157,6 +7165,24 @@ CreateCheckPoint(int flags)
 		checkPoint.nextOid += TransamVariables->oidCount;
 	LWLockRelease(OidGenLock);
 
+	/*
+	 * If this is a shutdown checkpoint then we can safely start allocating
+	 * relfilenumber from the nextRelFileNumber value after the restart because
+	 * no one one else can use the relfilenumber beyond that number before the
+	 * shutdown.  OTOH, if it is a normal checkpoint then if there is a crash
+	 * after this point then we might end up reusing the same relfilenumbers
+	 * after the restart so we need to set the nextRelFileNumber to the already
+	 * logged relfilenumber as no one will use number beyond this limit without
+	 * logging again.
+	 */
+	LWLockAcquire(RelFileNumberGenLock, LW_SHARED);
+	if (shutdown)
+		checkPoint.nextRelFileNumber = TransamVariables->nextRelFileNumber;
+	else
+		checkPoint.nextRelFileNumber = TransamVariables->loggedRelFileNumber;
+
+	LWLockRelease(RelFileNumberGenLock);
+
 	MultiXactGetCheckptMulti(shutdown,
 							 &checkPoint.nextMulti,
 							 &checkPoint.nextMultiOffset,
@@ -8093,6 +8119,24 @@ XLogPutNextOid(Oid nextOid)
 }
 
 /*
+ * Similar to the XLogPutNextOid but instead of writing NEXTOID log record it
+ * writes a NEXT_RELFILENUMBER log record.  It also returns the XLogRecPtr of
+ * the currently logged relfilenumber record, so that the caller can flush it
+ * at the appropriate time.
+ */
+XLogRecPtr
+LogNextRelFileNumber(RelFileNumber nextrelnumber)
+{
+	XLogRecPtr	recptr;
+
+	XLogBeginInsert();
+	XLogRegisterData((char *) (&nextrelnumber), sizeof(RelFileNumber));
+	recptr = XLogInsert(RM_XLOG_ID, XLOG_NEXT_RELFILENUMBER);
+
+	return recptr;
+}
+
+/*
  * Write an XLOG SWITCH record.
  *
  * Here we just blindly issue an XLogInsert request for the record.
@@ -8307,6 +8351,17 @@ xlog_redo(XLogReaderState *record)
 		TransamVariables->oidCount = 0;
 		LWLockRelease(OidGenLock);
 	}
+	if (info == XLOG_NEXT_RELFILENUMBER)
+	{
+		RelFileNumber nextRelFileNumber;
+
+		memcpy(&nextRelFileNumber, XLogRecGetData(record), sizeof(RelFileNumber));
+		LWLockAcquire(RelFileNumberGenLock, LW_EXCLUSIVE);
+		TransamVariables->nextRelFileNumber = nextRelFileNumber;
+		TransamVariables->loggedRelFileNumber = nextRelFileNumber;
+		TransamVariables->flushedRelFileNumber = nextRelFileNumber;
+		LWLockRelease(RelFileNumberGenLock);
+	}
 	else if (info == XLOG_CHECKPOINT_SHUTDOWN)
 	{
 		CheckPoint	checkPoint;
@@ -8321,6 +8376,11 @@ xlog_redo(XLogReaderState *record)
 		TransamVariables->nextOid = checkPoint.nextOid;
 		TransamVariables->oidCount = 0;
 		LWLockRelease(OidGenLock);
+		LWLockAcquire(RelFileNumberGenLock, LW_EXCLUSIVE);
+		TransamVariables->nextRelFileNumber = checkPoint.nextRelFileNumber;
+		TransamVariables->loggedRelFileNumber = checkPoint.nextRelFileNumber;
+		TransamVariables->flushedRelFileNumber = checkPoint.nextRelFileNumber;
+		LWLockRelease(RelFileNumberGenLock);
 		MultiXactSetNextMXact(checkPoint.nextMulti,
 							  checkPoint.nextMultiOffset);
 

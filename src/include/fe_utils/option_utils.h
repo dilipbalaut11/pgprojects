@@ -24,6 +24,8 @@ extern void handle_help_version_opts(int argc, char *argv[],
 extern bool option_parse_int(const char *optarg, const char *optname,
 							 int min_range, int max_range,
 							 int *result);
+extern bool option_parse_relfilenumber(const char *optarg,
+									   const char *optname);
 extern bool parse_sync_method(const char *optarg,
 							  DataDirSyncMethod *sync_method);
 

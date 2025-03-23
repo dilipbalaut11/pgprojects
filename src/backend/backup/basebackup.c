@@ -1323,7 +1323,7 @@ sendDir(bbsink *sink, const char *path, int basepathlen, bool sizeonly,
 			 * If any other type of fork, check if there is an init fork with
 			 * the same RelFileNumber. If so, the file can be excluded.
 			 */
-			snprintf(initForkFile, sizeof(initForkFile), "%s/%u_init",
+			snprintf(initForkFile, sizeof(initForkFile), "%s/" UINT64_FORMAT "_init",
 					 path, relfilenumber);
 
 			if (lstat(initForkFile, &statbuf) == 0)

@@ -608,7 +608,8 @@ process_rel_infos(DbInfo *dbinfo, PGresult *res, void *arg)
 		relname = PQgetvalue(res, relnum, i_relname);
 		curr->relname = pg_strdup(relname);
 
-		curr->relfilenumber = atooid(PQgetvalue(res, relnum, i_relfilenumber));
+		curr->relfilenumber =
+			atorelnumber(PQgetvalue(res, relnum, i_relfilenumber));
 		curr->tblsp_alloc = false;
 
 		/* Is the tablespace oid non-default? */

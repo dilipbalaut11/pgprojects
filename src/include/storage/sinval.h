@@ -91,7 +91,10 @@ typedef struct
 	int8		id;				/* type field --- must be first */
 	int8		backend_hi;		/* high bits of backend procno, if temprel */
 	uint16		backend_lo;		/* low bits of backend procno, if temprel */
-	RelFileLocator rlocator;	/* spcOid, dbOid, relNumber */
+	Oid			dbOid;
+	Oid			spcOid;
+	uint32		relNumber_hi;   /* avoid 8 byte alignment requirement */
+	uint32		relNumber_lo;
 } SharedInvalSmgrMsg;
 
 #define SHAREDINVALRELMAP_ID	(-4)

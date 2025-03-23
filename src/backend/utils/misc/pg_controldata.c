@@ -69,8 +69,8 @@ pg_control_system(PG_FUNCTION_ARGS)
 Datum
 pg_control_checkpoint(PG_FUNCTION_ARGS)
 {
-	Datum		values[18];
-	bool		nulls[18];
+	Datum		values[19];
+	bool		nulls[19];
 	TupleDesc	tupdesc;
 	HeapTuple	htup;
 	ControlFileData *ControlFile;
@@ -153,6 +153,9 @@ pg_control_checkpoint(PG_FUNCTION_ARGS)
 
 	values[17] = TimestampTzGetDatum(time_t_to_timestamptz(ControlFile->checkPointCopy.time));
 	nulls[17] = false;
+
+	values[18] = Int64GetDatum((int64) ControlFile->checkPointCopy.nextRelFileNumber);
+	nulls[18] = false;
 
 	htup = heap_form_tuple(tupdesc, values, nulls);
 

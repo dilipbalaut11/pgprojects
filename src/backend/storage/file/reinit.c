@@ -184,10 +184,10 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
 		 * need to be reset.  Otherwise, this cleanup operation would be
 		 * O(n^2).
 		 */
-		ctl.keysize = sizeof(Oid);
+		ctl.keysize = sizeof(RelFileNumber);
 		ctl.entrysize = sizeof(unlogged_relation_entry);
 		ctl.hcxt = CurrentMemoryContext;
-		hash = hash_create("unlogged relation OIDs", 32, &ctl,
+		hash = hash_create("unlogged relation RelFileNumbers", 32, &ctl,
 						   HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 
 		/* Scan the directory. */
@@ -304,10 +304,10 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
 
 			/* Construct destination pathname. */
 			if (segno == 0)
-				snprintf(dstpath, sizeof(dstpath), "%s/%u",
+				snprintf(dstpath, sizeof(dstpath), "%s/" UINT64_FORMAT,
 						 dbspacedirname, relNumber);
 			else
-				snprintf(dstpath, sizeof(dstpath), "%s/%u.%u",
+				snprintf(dstpath, sizeof(dstpath), "%s/" UINT64_FORMAT ".%u",
 						 dbspacedirname, relNumber, segno);
 
 			/* OK, we're ready to perform the actual copy. */
@@ -343,10 +343,10 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
 
 			/* Construct main fork pathname. */
 			if (segno == 0)
-				snprintf(mainpath, sizeof(mainpath), "%s/%u",
+				snprintf(mainpath, sizeof(mainpath), "%s/" UINT64_FORMAT,
 						 dbspacedirname, relNumber);
 			else
-				snprintf(mainpath, sizeof(mainpath), "%s/%u.%u",
+				snprintf(mainpath, sizeof(mainpath), "%s/" UINT64_FORMAT ".%u",
 						 dbspacedirname, relNumber, segno);
 
 			fsync_fname(mainpath, false);
@@ -402,6 +402,7 @@ parse_filename_for_nontemp_relation(const char *name, RelFileNumber *relnumber,
 	if (name[0] < '1' || name[0] > '9')
 		return false;
 
+	/* RFN Fixme: convert to atorelnumber and check error handling */
 	/*
 	 * Parse the leading digit string. If the value is out of range, we
 	 * conclude that this isn't a relation file at all.

@@ -13,6 +13,7 @@
 #include "postgres_fe.h"
 
 #include "common/logging.h"
+#include "common/relpath.h"
 #include "common/string.h"
 #include "fe_utils/option_utils.h"
 
@@ -104,6 +105,45 @@ parse_sync_method(const char *optarg, DataDirSyncMethod *sync_method)
 	else
 	{
 		pg_log_error("unrecognized sync method: %s", optarg);
+		return false;
+	}
+
+	return true;
+}
+
+/*
+ * option_parse_relfilenumber
+ *
+ * Parse relfilenumber value for an option.  If the parsing is successful,
+ * returns true; if parsing fails, returns false.
+ */
+bool
+option_parse_relfilenumber(const char *optarg, const char *optname)
+{
+	char	   *endptr;
+	uint64		val;
+
+	errno = 0;
+	val = strtou64(optarg, &endptr, 10);
+
+	/*
+	 * Skip any trailing whitespace; if anything but whitespace remains before
+	 * the terminating character, fail.
+	 */
+	while (*endptr != '\0' && isspace((unsigned char) *endptr))
+		endptr++;
+
+	if (*endptr != '\0')
+	{
+		pg_log_error("invalid value \"%s\" for option %s",
+					 optarg, optname);
+		return false;
+	}
+
+	if (val > MAX_RELFILENUMBER)
+	{
+		pg_log_error("%s must be in range " UINT64_FORMAT ".." UINT64_FORMAT,
+					 optname, UINT64CONST(0), MAX_RELFILENUMBER);
 		return false;
 	}
 

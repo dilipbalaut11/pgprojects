@@ -151,10 +151,10 @@ GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 		Assert(dbOid == 0);
 		Assert(procNumber == INVALID_PROC_NUMBER);
 		if (forkNumber != MAIN_FORKNUM)
-			sprintf(rp.str, "global/%u_%s",
+			sprintf(rp.str, "global/" UINT64_FORMAT "_%s",
 					relNumber, forkNames[forkNumber]);
 		else
-			sprintf(rp.str, "global/%u",
+			sprintf(rp.str, "global/" UINT64_FORMAT,
 					relNumber);
 	}
 	else if (spcOid == DEFAULTTABLESPACE_OID)
@@ -164,22 +164,22 @@ GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 		{
 			if (forkNumber != MAIN_FORKNUM)
 			{
-				sprintf(rp.str, "base/%u/%u_%s",
+				sprintf(rp.str, "base/%u/" UINT64_FORMAT "_%s",
 						dbOid, relNumber,
 						forkNames[forkNumber]);
 			}
 			else
-				sprintf(rp.str, "base/%u/%u",
+				sprintf(rp.str, "base/%u/" UINT64_FORMAT,
 						dbOid, relNumber);
 		}
 		else
 		{
 			if (forkNumber != MAIN_FORKNUM)
-				sprintf(rp.str, "base/%u/t%d_%u_%s",
+				sprintf(rp.str, "base/%u/t%d_" UINT64_FORMAT "_%s",
 						dbOid, procNumber, relNumber,
 						forkNames[forkNumber]);
 			else
-				sprintf(rp.str, "base/%u/t%d_%u",
+				sprintf(rp.str, "base/%u/t%d_" UINT64_FORMAT,
 						dbOid, procNumber, relNumber);
 		}
 	}
@@ -189,13 +189,13 @@ GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 		if (procNumber == INVALID_PROC_NUMBER)
 		{
 			if (forkNumber != MAIN_FORKNUM)
-				sprintf(rp.str, "%s/%u/%s/%u/%u_%s",
+				sprintf(rp.str, "%s/%u/%s/%u/" UINT64_FORMAT "_%s",
 						PG_TBLSPC_DIR, spcOid,
 						TABLESPACE_VERSION_DIRECTORY,
 						dbOid, relNumber,
 						forkNames[forkNumber]);
 			else
-				sprintf(rp.str, "%s/%u/%s/%u/%u",
+				sprintf(rp.str, "%s/%u/%s/%u/" UINT64_FORMAT,
 						PG_TBLSPC_DIR, spcOid,
 						TABLESPACE_VERSION_DIRECTORY,
 						dbOid, relNumber);
@@ -203,13 +203,13 @@ GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 		else
 		{
 			if (forkNumber != MAIN_FORKNUM)
-				sprintf(rp.str, "%s/%u/%s/%u/t%d_%u_%s",
+				sprintf(rp.str, "%s/%u/%s/%u/t%d_" UINT64_FORMAT "_%s",
 						PG_TBLSPC_DIR, spcOid,
 						TABLESPACE_VERSION_DIRECTORY,
 						dbOid, procNumber, relNumber,
 						forkNames[forkNumber]);
 			else
-				sprintf(rp.str, "%s/%u/%s/%u/t%d_%u",
+				sprintf(rp.str, "%s/%u/%s/%u/t%d_" UINT64_FORMAT,
 						PG_TBLSPC_DIR, spcOid,
 						TABLESPACE_VERSION_DIRECTORY,
 						dbOid, procNumber, relNumber);

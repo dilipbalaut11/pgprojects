@@ -75,7 +75,9 @@
 #include "access/xact.h"
 #include "catalog/dependency.h"
 #include "catalog/namespace.h"
+#include "catalog/partition.h"
 #include "catalog/pg_database.h"
+#include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
 #include "commands/dbcommands.h"
 #include "commands/vacuum.h"
@@ -205,7 +207,15 @@ typedef struct autovac_table
 	char	   *at_relname;
 	char	   *at_nspname;
 	char	   *at_datname;
+	List	   *at_leafrels;	/* leaf autovac_table list */
 } autovac_table;
+
+/* hash entry for reloid to autovac_table list entry */
+typedef struct avtable_entry
+{
+	Oid				av_relid;	/* hash key - must be first */
+	autovac_table  *av_table;	/* av table entry for relid */
+} avtable_entry;
 
 /*-------------
  * This struct holds information about a single worker's whereabouts.  We keep
@@ -320,6 +330,7 @@ static void launcher_determine_sleep(bool canlaunch, bool recursing,
 									 struct timeval *nap);
 static void launch_worker(TimestampTz now);
 static List *get_database_list(void);
+static autovac_table *av_prepare_parent(HTAB *avtable_map, Oid parent_id);
 static void rebuild_database_list(Oid newdb);
 static int	db_comparator(const void *a, const void *b);
 static void autovac_recalculate_workers_for_balance(void);
@@ -327,9 +338,12 @@ static void autovac_recalculate_workers_for_balance(void);
 static void do_autovacuum(void);
 static void FreeWorkerInfo(int code, Datum arg);
 
-static autovac_table *table_recheck_autovac(Oid relid, HTAB *table_toast_map,
+static autovac_table *table_recheck_autovac(autovac_table *tab, HTAB *table_toast_map,
 											TupleDesc pg_class_desc,
 											int effective_multixact_freeze_max_age);
+static autovac_table *partrel_recheck_autovac(autovac_table *tab, HTAB *table_toast_map,
+											  TupleDesc pg_class_desc,
+											  int effective_multixact_freeze_max_age);
 static void recheck_relation_needs_vacanalyze(Oid relid, AutoVacOpts *avopts,
 											  Form_pg_class classForm,
 											  int effective_multixact_freeze_max_age,
@@ -1866,6 +1880,51 @@ get_database_list(void)
 }
 
 /*
+ * av_prepare_parent - prepare autovac_table for the parent_id
+ *
+ * This will allocate autovac_table sturcture for the parent and also for all
+ * the leaf inheritors under this parent.  This will also insert the oid for
+ * each leaf relation into the hash so that we don't need to do same processing
+ * when we get the next leaf relation under same parent.
+ */
+static autovac_table *
+av_prepare_parent(HTAB *avtable_map, Oid parent_id)
+{
+	List   *inheritors;
+	autovac_table  *av_table;
+	avtable_entry  *hentry;
+
+	inheritors = find_all_inheritors(parent_id, NoLock, NULL);
+	av_table = palloc0(sizeof(autovac_table));
+	av_table->at_relid = parent_id;
+
+	/*
+	 * Loop through all the inheritors and add the leaf ingheritor's oid to the
+	 * hash and also create autovac_table for every leaf relation and add it
+	 * to the parent at_leafrels list.
+	 */
+	foreach_oid(relid, inheritors)
+	{
+		autovac_table  *child;
+		bool			found;
+
+		if (get_rel_relkind(relid) != RELKIND_RELATION)
+			continue;
+
+		hentry = hash_search(avtable_map,
+							 &relid,
+							 HASH_ENTER, &found);
+		hentry->av_table = av_table;
+
+		child = palloc0(sizeof(autovac_table));
+		child->at_relid = relid;
+		av_table->at_leafrels = lappend(av_table->at_leafrels, child);
+	}
+
+	return av_table;
+}
+
+/*
  * Process a database table-by-table
  *
  * Note that CHECK_FOR_INTERRUPTS is supposed to be used in certain spots in
@@ -1878,10 +1937,11 @@ do_autovacuum(void)
 	HeapTuple	tuple;
 	TableScanDesc relScan;
 	Form_pg_database dbForm;
-	List	   *table_oids = NIL;
+	List	   *table_list = NIL;
 	List	   *orphan_oids = NIL;
 	HASHCTL		ctl;
 	HTAB	   *table_toast_map;
+	HTAB	   *avtable_map;
 	ListCell   *volatile cell;
 	BufferAccessStrategy bstrategy;
 	ScanKeyData key;
@@ -1961,6 +2021,15 @@ do_autovacuum(void)
 								  &ctl,
 								  HASH_ELEM | HASH_BLOBS);
 
+	/* create hash table for reloid <-> reference in autovac_table list */
+	ctl.keysize = sizeof(Oid);
+	ctl.entrysize = sizeof(autovac_table *);
+
+	avtable_map = hash_create("Reloid to autovac_table reference",
+							  100,
+							  &ctl,
+							  HASH_ELEM | HASH_BLOBS);
+
 	/*
 	 * Scan pg_class to determine which tables to vacuum.
 	 *
@@ -2034,7 +2103,75 @@ do_autovacuum(void)
 
 		/* Relations that need work are added to table_oids */
 		if (dovacuum || doanalyze)
-			table_oids = lappend_oid(table_oids, relid);
+		{
+			autovac_table  *avtable = NULL;
+			bool			found = false;
+
+			/*
+			 * If this relation has global index, we add its top-level parent
+			 * relation (which holds the global index) to the main list while
+			 * adding all child partitions to a sublist.
+			 *
+			 * In this case, we do not check whether all partitions currently
+			 * requires vacuuming or analyzing. Instead, we trigger vacuuming
+			 * if any relation in the partition hierarchy needs it. This
+			 * approach prevents the global index from being vacuumed multiple
+			 * times.
+			 *
+			 * If we only vacuum partitions that are immediately due, different
+			 * partitions covered by the global index might become ready at
+			 * different times, leading to multiple vacuum cycles where the global
+			 * index is vacuumed multiple times.
+			 *
+			 * To avoid this inefficiency, we choose to vacuum all partitions
+			 * together, even if some are not yet ready. Additionally, we
+			 * ensure that all partitions under the same global index are
+			 * vacuumed by a single worker, which may impact vacuum concurrency
+			 * but is necessary to ensure the global index is vacuumed only
+			 * once.
+			 */
+			if (get_rel_relispartition(relid)) //get_rel_has_globalindex(relid)
+			{
+				/*
+				 * If relation has global index flag set then lookup into the
+				 * hash and if this is already added then we can nothing to do
+				 * for this relation.
+				 */
+				hash_search(avtable_map,
+							&relid,
+							HASH_FIND, &found);
+				if (!found)
+				{
+					//Oid top_parent_oid = get_top_parent_has_globalindex(relid);
+					List   *ancestors = get_partition_ancestors(relid);
+					Oid		top_parent_id = llast_oid(ancestors);
+
+					/*
+					 * If top parent with global index is valid means this
+					 * partition is still covered by a global index, so insert
+					 * all the inheritors to the has so that we can avoid the
+					 * step of finding the top parent for each partition.
+					 */
+					if (OidIsValid(top_parent_id))
+						avtable = av_prepare_parent(avtable_map, top_parent_id);
+				}
+			}
+
+			/*
+			 * If entry is not found and also avtable is not allocated yet this
+			 * means this leaf is not covered by any global index so we need to
+			 * allocate an independent entry for this table.
+			 */
+			if (!found && !avtable)
+			{
+				avtable = palloc0(sizeof(autovac_table));
+				avtable->at_relid = relid;
+				avtable->at_leafrels = NIL;
+			}
+
+			if (avtable)
+				table_list = lappend(table_list, avtable);
+		}
 
 		/*
 		 * Remember TOAST associations for the second pass.  Note: we must do
@@ -2067,6 +2204,12 @@ do_autovacuum(void)
 
 	table_endscan(relScan);
 
+	/*
+	 * global index change - No change: This pass will remain as it is, toast
+	 * will still point to
+	 * hash entry that will hold reloption.
+	 */
+
 	/* second pass: check TOAST tables */
 	ScanKeyInit(&key,
 				Anum_pg_class_relkind,
@@ -2083,6 +2226,7 @@ do_autovacuum(void)
 		bool		dovacuum;
 		bool		doanalyze;
 		bool		wraparound;
+		autovac_table *avtable;
 
 		/*
 		 * We cannot safely process other backends' temp tables, so skip 'em.
@@ -2091,6 +2235,9 @@ do_autovacuum(void)
 			continue;
 
 		relid = classForm->oid;
+		avtable = palloc0(sizeof(autovac_table));
+		avtable->at_relid = relid;
+		avtable->at_leafrels = NIL;
 
 		/*
 		 * fetch reloptions -- if this toast table does not have them, try the
@@ -2117,7 +2264,7 @@ do_autovacuum(void)
 
 		/* ignore analyze for toast tables */
 		if (dovacuum)
-			table_oids = lappend_oid(table_oids, relid);
+			table_list = lappend(table_list, avtable);
 	}
 
 	table_endscan(relScan);
@@ -2256,11 +2403,10 @@ do_autovacuum(void)
 	/*
 	 * Perform operations on collected tables.
 	 */
-	foreach(cell, table_oids)
+	foreach(cell, table_list)
 	{
-		Oid			relid = lfirst_oid(cell);
+		autovac_table *tab = lfirst(cell);
 		HeapTuple	classTup;
-		autovac_table *tab;
 		bool		isshared;
 		bool		skipit;
 		dlist_iter	iter;
@@ -2291,7 +2437,7 @@ do_autovacuum(void)
 		 * tuple here and passing it to table_recheck_autovac, but that
 		 * increases the odds of that function working with stale data.)
 		 */
-		classTup = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+		classTup = SearchSysCache1(RELOID, ObjectIdGetDatum(tab->at_relid));
 		if (!HeapTupleIsValid(classTup))
 			continue;			/* somebody deleted the rel, forget it */
 		isshared = ((Form_pg_class) GETSTRUCT(classTup))->relisshared;
@@ -2322,7 +2468,7 @@ do_autovacuum(void)
 			if (!worker->wi_sharedrel && worker->wi_dboid != MyDatabaseId)
 				continue;
 
-			if (worker->wi_tableoid == relid)
+			if (worker->wi_tableoid == tab->at_relid)
 			{
 				skipit = true;
 				found_concurrent_worker = true;
@@ -2342,7 +2488,7 @@ do_autovacuum(void)
 		 * concurrently.  (We claim it here so as not to hold
 		 * AutovacuumScheduleLock while rechecking the stats.)
 		 */
-		MyWorkerInfo->wi_tableoid = relid;
+		MyWorkerInfo->wi_tableoid = tab->at_relid;
 		MyWorkerInfo->wi_sharedrel = isshared;
 		LWLockRelease(AutovacuumScheduleLock);
 
@@ -2353,8 +2499,18 @@ do_autovacuum(void)
 		 * but it is very small.
 		 */
 		MemoryContextSwitchTo(AutovacMemCxt);
-		tab = table_recheck_autovac(relid, table_toast_map, pg_class_desc,
-									effective_multixact_freeze_max_age);
+
+		/*
+		 * Populate autovac_tab entry of the parent table and also recursively
+		 * do it for all its child tables.
+		 */
+
+		if (tab->at_leafrels != NIL)
+			tab = partrel_recheck_autovac(tab, table_toast_map, pg_class_desc,
+										  effective_multixact_freeze_max_age);
+		else
+			tab = table_recheck_autovac(tab, table_toast_map, pg_class_desc,
+										effective_multixact_freeze_max_age);
 		if (tab == NULL)
 		{
 			/* someone else vacuumed the table, or it went away */
@@ -2382,6 +2538,9 @@ do_autovacuum(void)
 		else
 			pg_atomic_clear_flag(&MyWorkerInfo->wi_dobalance);
 
+		/*
+		 * global index change: check this
+		 */
 		LWLockAcquire(AutovacuumLock, LW_SHARED);
 		autovac_recalculate_workers_for_balance();
 		LWLockRelease(AutovacuumLock);
@@ -2390,6 +2549,12 @@ do_autovacuum(void)
 		 * We wait until this point to update cost delay and cost limit
 		 * values, even though we reloaded the configuration file above, so
 		 * that we can take into account the cost-related storage parameters.
+		 */
+
+		/*
+		 * global index change: this needs to be done for each partition
+		 based on their tab->at_storage_param_vac_cost_delay/cost_limit value
+		 so this should be called inside when we do individual table vacuum.
 		 */
 		VacuumUpdateCosts();
 
@@ -2404,12 +2569,26 @@ do_autovacuum(void)
 		 * Note: they must live in a long-lived memory context because we call
 		 * vacuum and analyze in different transactions.
 		 */
-
 		tab->at_relname = get_rel_name(tab->at_relid);
 		tab->at_nspname = get_namespace_name(get_rel_namespace(tab->at_relid));
 		tab->at_datname = get_database_name(MyDatabaseId);
 		if (!tab->at_relname || !tab->at_nspname || !tab->at_datname)
 			goto deleted;
+
+		/* debug print log : remove this code */
+		elog(WARNING, "vacuum table start %s list length %d", tab->at_relname, list_length(tab->at_leafrels));
+		if (tab->at_leafrels != NIL)
+		{
+			ListCell	*cell;
+
+			foreach(cell, tab->at_leafrels)
+			{
+				autovac_table *child_tab = lfirst(cell);
+
+				elog(WARNING, "vacuum table %s", child_tab->at_relname);
+			}
+		}
+		elog(WARNING, "vacuum table end %s", tab->at_relname);
 
 		/*
 		 * We will abort vacuuming the current table if something errors out,
@@ -2709,7 +2888,7 @@ extract_autovac_opts(HeapTuple tup, TupleDesc pg_class_desc)
  * Note that the returned autovac_table does not have the name fields set.
  */
 static autovac_table *
-table_recheck_autovac(Oid relid, HTAB *table_toast_map,
+table_recheck_autovac(autovac_table *tab, HTAB *table_toast_map,
 					  TupleDesc pg_class_desc,
 					  int effective_multixact_freeze_max_age)
 {
@@ -2717,8 +2896,8 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	HeapTuple	classTup;
 	bool		dovacuum;
 	bool		doanalyze;
-	autovac_table *tab = NULL;
 	bool		wraparound;
+	Oid			relid = tab->at_relid;
 	AutoVacOpts *avopts;
 
 	/* fetch the relation's relcache entry */
@@ -2787,8 +2966,6 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 			? avopts->multixact_freeze_table_age
 			: default_multixact_freeze_table_age;
 
-		tab = palloc(sizeof(autovac_table));
-		tab->at_relid = relid;
 		tab->at_sharedrel = classForm->relisshared;
 
 		/*
@@ -2837,6 +3014,51 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	}
 
 	heap_freetuple(classTup);
+
+	if (!doanalyze && !dovacuum)
+		return NULL;
+	return tab;
+}
+
+/*
+ * partrel_recheck_autovac
+ *
+ * Recheck whether a table still needs vacuum or analyze for the leaf relation
+ * of the 'tab'
+ */
+static autovac_table *
+partrel_recheck_autovac(autovac_table *tab, HTAB *table_toast_map,
+						TupleDesc pg_class_desc,
+						int effective_multixact_freeze_max_age)
+{
+	ListCell	*cell;
+
+	foreach(cell, tab->at_leafrels)
+	{
+		autovac_table *child = lfirst(cell);
+
+		if (table_recheck_autovac(child, table_toast_map,
+								  pg_class_desc,
+								  effective_multixact_freeze_max_age) == NULL)
+		{
+			tab->at_leafrels = list_delete(tab->at_leafrels, child);
+			continue;
+		}
+
+		/*
+		 * Save the relation name for a possible error message, to avoid a
+		 * catalog lookup in case of an error.  If any of these return
+		 * NULL, then the relation has been dropped since last we checked;
+		 * skip it.  Note: they must live in a long-lived memory context
+		 * because we call vacuum and analyze in different transactions.
+		 */
+		child->at_relname = get_rel_name(child->at_relid);
+		child->at_nspname = get_namespace_name(get_rel_namespace(child->at_relid));
+		child->at_datname = get_database_name(MyDatabaseId);
+		if (!child->at_relname || !child->at_nspname || !child->at_datname)
+			return NULL;
+	}
+
 	return tab;
 }
 
@@ -3092,20 +3314,46 @@ autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
 	VacuumRelation *rel;
 	List	   *rel_list;
 	MemoryContext vac_context;
+	MemoryContext cur_context;
+	ListCell	*cell;
 
 	/* Let pgstat know what we're doing */
 	autovac_report_activity(tab);
-
-	/* Set up one VacuumRelation target, identified by OID, for vacuum() */
-	rangevar = makeRangeVar(tab->at_nspname, tab->at_relname, -1);
-	rel = makeVacuumRelation(rangevar, tab->at_relid, NIL);
-	rel_list = list_make1(rel);
 
 	vac_context = AllocSetContextCreate(CurrentMemoryContext,
 										"Vacuum",
 										ALLOCSET_DEFAULT_SIZES);
 
-	vacuum(rel_list, &tab->at_params, bstrategy, vac_context, true);
+	/* Set up one VacuumRelation target, identified by OID, for vacuum() */
+	if (tab->at_leafrels == NULL)
+	{
+		rangevar = makeRangeVar(tab->at_nspname, tab->at_relname, -1);
+		rel = makeVacuumRelation(rangevar, tab->at_relid, NIL);
+		rel_list = list_make1(rel);
+		vacuum(rel_list, &tab->at_params, bstrategy, vac_context, true);
+		MemoryContextDelete(vac_context);
+		return;
+	}
+
+	/*
+	 * If this has valid at_leafrels that means this is a partitioned relation
+	 * so set up VacuumRelation target for all child relations, otherwise just
+	 * setup a one VacuumRelation target.
+	 */
+	Assert(tab->at_leafrels != NULL);
+
+	cur_context = CurrentMemoryContext;
+	foreach(cell, tab->at_leafrels)
+	{
+		autovac_table *leaf = lfirst(cell);
+
+		rangevar = makeRangeVar(leaf->at_nspname, leaf->at_relname, -1);
+		rel = makeVacuumRelation(rangevar, leaf->at_relid, NIL);
+		rel_list = list_make1(rel);
+
+		vacuum(rel_list, &leaf->at_params, bstrategy, vac_context, true);
+		MemoryContextSwitchTo(cur_context);
+	}
 
 	MemoryContextDelete(vac_context);
 }

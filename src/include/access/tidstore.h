@@ -30,6 +30,12 @@ typedef struct TidStoreIterResult
 	void	   *internal_page;
 } TidStoreIterResult;
 
+typedef struct VacuumDeadTidInfo
+{
+	MemoryContext	context;
+	TidStore	   *dead_items;
+} VacuumDeadTidInfo;
+
 extern TidStore *TidStoreCreateLocal(size_t max_bytes, bool insert_only);
 extern TidStore *TidStoreCreateShared(size_t max_bytes, int tranche_id);
 extern TidStore *TidStoreAttach(dsa_handle area_handle, dsa_pointer handle);

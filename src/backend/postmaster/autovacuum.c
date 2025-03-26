@@ -3315,7 +3315,9 @@ autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
 	List	   *rel_list;
 	MemoryContext vac_context;
 	MemoryContext cur_context;
-	ListCell	*cell;
+	ListCell   *cell;
+	HTAB	   *tidstore_hash;
+	HASHCTL		hash_ctl;
 
 	/* Let pgstat know what we're doing */
 	autovac_report_activity(tab);
@@ -3330,7 +3332,7 @@ autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
 		rangevar = makeRangeVar(tab->at_nspname, tab->at_relname, -1);
 		rel = makeVacuumRelation(rangevar, tab->at_relid, NIL);
 		rel_list = list_make1(rel);
-		vacuum(rel_list, &tab->at_params, bstrategy, vac_context, true);
+		vacuum(rel_list, &tab->at_params, bstrategy, vac_context, NULL, true);
 		MemoryContextDelete(vac_context);
 		return;
 	}
@@ -3343,16 +3345,74 @@ autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
 	Assert(tab->at_leafrels != NULL);
 
 	cur_context = CurrentMemoryContext;
+
+	hash_ctl.keysize = sizeof(Oid);
+	hash_ctl.entrysize = sizeof(TidStoreEntry);
+	hash_ctl.hcxt = cur_context;
+
+	/*
+	 * Whenever we are are vacuuming tables with global indexes then
+	 * we will do prune pass and local index vacuum of all the table and
+	 * store their deaditems into a hash and once we are done with all the
+	 * child we will vacuum the global indexes and vacuum second pass of
+	 * heap.
+	 *
+	 * TODO: For manual vacuum this optimization is yet to be implemented.
+	 */
+	tidstore_hash = hash_create("DeadTidStoreHash",
+								128,
+								&hash_ctl,
+								HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+
 	foreach(cell, tab->at_leafrels)
 	{
-		autovac_table *leaf = lfirst(cell);
+		autovac_table		*leaf = lfirst(cell);
 
 		rangevar = makeRangeVar(leaf->at_nspname, leaf->at_relname, -1);
 		rel = makeVacuumRelation(rangevar, leaf->at_relid, NIL);
 		rel_list = list_make1(rel);
+		
+		if (leaf->at_params.options & VACOPT_VACUUM)
+		{
+			VacuumDeadTidInfo	*deadtidinfo;
 
-		vacuum(rel_list, &leaf->at_params, bstrategy, vac_context, true);
+			deadtidinfo = palloc(sizeof(VacuumDeadTidInfo));
+			deadtidinfo->context = CurrentMemoryContext;
+			deadtidinfo->dead_items = NULL;
+
+			vacuum(rel_list, &leaf->at_params, bstrategy, vac_context,
+				   deadtidinfo, true);
+
+			/* Insert the dead items for this relation into the hash. */
+			if (deadtidinfo->dead_items != NULL)
+			{
+				TidStoreEntry  *entry;
+				bool			found;
+
+				entry = hash_search(tidstore_hash, &leaf->at_relid, HASH_ENTER,
+									&found);
+				Assert(!found);
+
+				entry->rel = rel;
+				entry->params = &leaf->at_params;
+				entry->deadtidinfo = deadtidinfo;
+			}
+			/*
+			 * FIXME: Keep a watch on maintenence work mem and based on
+			 * that we might need to trigger global index vacuum early.
+			 */
+		}
+		else
+			vacuum(rel_list, &leaf->at_params, bstrategy, vac_context, NULL,
+				   true);
 		MemoryContextSwitchTo(cur_context);
+	}
+
+	/* Do global index vacuum and second pass of the heap. */
+	if (tidstore_hash)
+	{
+		vacuum_global_index_and_heap(tidstore_hash, tab->at_relid, bstrategy);
+		hash_destroy(tidstore_hash);
 	}
 
 	MemoryContextDelete(vac_context);

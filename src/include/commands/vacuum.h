@@ -188,6 +188,7 @@ typedef struct VacAttrStats
 #define VACOPT_DISABLE_PAGE_SKIPPING 0x100	/* don't skip any pages */
 #define VACOPT_SKIP_DATABASE_STATS 0x200	/* skip vac_update_datfrozenxid() */
 #define VACOPT_ONLY_DATABASE_STATS 0x400	/* only vac_update_datfrozenxid() */
+#define VACOPT_HEAP_VACUUM_ONLY 0x800		/* heap vacuum only */
 
 /*
  * Values used by index_cleanup and truncate params.
@@ -288,6 +289,17 @@ typedef struct VacDeadItemsInfo
 	int64		num_items;		/* current # of entries */
 } VacDeadItemsInfo;
 
+/*
+ * Entry structures for the hash tables
+ */
+typedef struct TidStoreEntry
+{
+	Oid		reloid;
+	VacuumRelation	  *rel;
+	VacuumParams	  *params;
+	VacuumDeadTidInfo *deadtidinfo;
+} TidStoreEntry;
+
 /* GUC parameters */
 extern PGDLLIMPORT int default_statistics_target;	/* PGDLLIMPORT for PostGIS */
 extern PGDLLIMPORT int vacuum_freeze_min_age;
@@ -317,7 +329,9 @@ extern PGDLLIMPORT int vacuum_cost_limit;
 extern void ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel);
 extern void vacuum(List *relations, VacuumParams *params,
 				   BufferAccessStrategy bstrategy, MemoryContext vac_context,
-				   bool isTopLevel);
+				   VacuumDeadTidInfo *deadtidinfo, bool isTopLevel);
+extern void vacuum_global_index_and_heap(HTAB *tidstore_hash, Oid parentoid,
+										 BufferAccessStrategy bstrategy);
 extern void vac_open_indexes(Relation relation, LOCKMODE lockmode,
 							 int *nindexes, Relation **Irel);
 extern void vac_close_indexes(int nindexes, Relation *Irel, LOCKMODE lockmode);

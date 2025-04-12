@@ -831,12 +831,12 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 		}
 		if (!samerel)
 		{
-			scratch += pg_varint_encode_uint64(regbuf->rlocator.spcOid, (uint8 *) scratch);
-			scratch += pg_varint_encode_uint64(regbuf->rlocator.dbOid, (uint8*) scratch);
-			scratch += pg_varint_encode_uint64(regbuf->rlocator.relNumber, (uint8*) scratch);
+			scratch += varint_encode(regbuf->rlocator.spcOid, (uint8 *) scratch);
+			scratch += varint_encode(regbuf->rlocator.dbOid, (uint8*) scratch);
+			scratch += varint_encode(regbuf->rlocator.relNumber, (uint8*) scratch);
 		}
 		memcpy(scratch, &regbuf->block, sizeof(BlockNumber));
-		scratch += pg_varint_encode_uint64(regbuf->block, (uint8 *) scratch);
+		scratch += varint_encode(regbuf->block, (uint8 *) scratch);
 	}
 
 	/* followed by the record's origin, if any */

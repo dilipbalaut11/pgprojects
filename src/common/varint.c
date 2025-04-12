@@ -226,3 +226,43 @@ pg_varint_decode_int64(const uint8 *buf, int *consumed)
 	else
 		return uval;
 }
+
+
+
+int
+varint_encode(uint64_t value, uint8_t *buf)
+{
+    size_t i = 0;
+    while (value >= 0x80) {
+        buf[i++] = (uint8_t)(value | 0x80); // set continuation bit
+        value >>= 7;
+    }
+    buf[i++] = (uint8_t) value; // last byte, MSB=0
+    return i;
+}
+
+// Decode a Varint-encoded value from a buffer.
+// Returns the number of bytes read, or 0 if invalid.
+uint64
+varint_decode(const uint8 *buf, int *consumed)
+{
+    uint64_t result = 0;
+    size_t shift = 0;
+    size_t i = 0;
+
+    while (1) {
+        uint8_t byte = buf[i];
+        result |= ((uint64_t)(byte & 0x7F)) << shift;
+
+        if ((byte & 0x80) == 0) 
+		{ // MSB = 0 means end of Varint
+            *consumed = i+1;
+            return result;
+        }
+
+        shift += 7;
+        if (shift > 63) return 0; // overflow
+        
+		i++;
+    }
+}

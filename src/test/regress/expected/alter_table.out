@@ -2224,10 +2224,10 @@ select relname,
            relname            | orig_oid | storage |     desc     
 ------------------------------+----------+---------+--------------
  at_partitioned               | t        | none    | 
- at_partitioned_0             | t        | own     | 
- at_partitioned_0_id_name_key | f        | own     | 
- at_partitioned_1             | t        | own     | 
- at_partitioned_1_id_name_key | f        | own     | 
+ at_partitioned_0             | t        | orig    | 
+ at_partitioned_0_id_name_key | f        | new     | 
+ at_partitioned_1             | t        | orig    | 
+ at_partitioned_1_id_name_key | f        | new     | 
  at_partitioned_id_name_key   | f        | none    | parent index
 (6 rows)
 

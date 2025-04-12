@@ -1880,15 +1880,15 @@ DecodeXLogRecord(XLogReaderState *state,
 				int	consumed;
 
 				/* FIXME: needs overflow checks from COPY_HEADER_FIELD() */
-				blk->rlocator.spcOid = pg_varint_decode_uint64((uint8*) ptr, &consumed);
+				blk->rlocator.spcOid = varint_decode((uint8*) ptr, &consumed);
 				ptr += consumed;
 				remaining -= consumed;
 
-				blk->rlocator.dbOid = pg_varint_decode_uint64((uint8*) ptr, &consumed);
+				blk->rlocator.dbOid = varint_decode((uint8*) ptr, &consumed);
 				ptr += consumed;
 				remaining -= consumed;
 
-				blk->rlocator.relNumber = pg_varint_decode_uint64((uint8*) ptr, &consumed);
+				blk->rlocator.relNumber = varint_decode((uint8*) ptr, &consumed);
 				ptr += consumed;
 				remaining -= consumed;
 
@@ -1910,7 +1910,7 @@ DecodeXLogRecord(XLogReaderState *state,
 				int consumed;
 
 				/* FIXME: needs overflow checks from COPY_HEADER_FIELD() */
-				blk->blkno = pg_varint_decode_uint64((uint8*) ptr, &consumed);
+				blk->blkno = varint_decode((uint8*) ptr, &consumed);
 				ptr += consumed;
 				remaining -= consumed;
 			}

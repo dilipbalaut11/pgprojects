@@ -85,6 +85,9 @@
 extern int pg_varint_encode_uint64(uint64 uval, uint8 *buf);
 extern int pg_varint_encode_int64(int64 val, uint8 *buf);
 
+extern int varint_encode(uint64 uval, uint8 *buf);
+extern uint64 varint_decode(const uint8 *buf, int *consumed);
+
 extern uint64 pg_varint_decode_uint64(const uint8 *buf, int *consumed);
 extern int64 pg_varint_decode_int64(const uint8 *buf, int *consumed);
 

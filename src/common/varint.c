@@ -3,6 +3,7 @@
 #include "common/varint.h"
 #include "port/pg_bswap.h"
 
+#if 0
 /*
  * Encode unsigned 64bit integer as a variable length integer in buf, return
  * encoded length.
@@ -79,6 +80,7 @@ pg_varint_encode_uint64(uint64 uval, uint8 *buf)
 		return 9;
 	}
 }
+#endif
 
 /*
  * Encode signed 64bit integer as a variable length integer in buf, return
@@ -116,6 +118,7 @@ pg_varint_encode_int64(int64 val, uint8 *buf)
 	return pg_varint_encode_uint64(uval, buf);
 }
 
+#if 0
 /*
  * Decode buf into unsigned 64bit integer.
  *
@@ -195,6 +198,7 @@ pg_varint_decode_uint64(const uint8 *buf, int *consumed)
 	*consumed = 0;
 	return 0;
 }
+#endif
 
 /*
  * Decode buf into signed 64bit integer.
@@ -225,4 +229,46 @@ pg_varint_decode_int64(const uint8 *buf, int *consumed)
 	}
 	else
 		return uval;
+}
+
+
+
+int
+pg_varint_encode_uint64(uint64_t value, uint8_t *buf)
+{
+	size_t i = 0;
+
+	while (value >= 0x80)
+	{
+		buf[i++] = (uint8_t)(value | 0x80); // set continuation bit
+		value >>= 7;
+	}
+
+	buf[i++] = (uint8_t) value; // last byte, MSB=0
+	return i;
+}
+
+uint64
+pg_varint_decode_uint64(const uint8 *buf, int *consumed)
+{
+	uint64_t result = 0;
+	size_t shift = 0;
+	size_t i = 0;
+
+	while (1)
+	{
+		uint8_t byte = buf[i];
+		result |= ((uint64_t)(byte & 0x7F)) << shift;
+
+		if ((byte & 0x80) == 0)
+		{ // MSB = 0 means end of Varint
+		*consumed = i+1;
+		return result;
+		}
+
+		shift += 7;
+		if (shift > 63) return 0; // overflow
+
+		i++;
+	}
 }

@@ -35,6 +35,7 @@
 #include "access/transam.h"
 #include "access/xact.h"
 #include "catalog/namespace.h"
+#include "catalog/partition.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_inherits.h"
 #include "commands/cluster.h"
@@ -58,6 +59,7 @@
 #include "utils/guc_hooks.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
+#include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
 /*
@@ -2346,6 +2348,10 @@ vac_open_indexes(Relation relation, LOCKMODE lockmode,
 
 	Assert(lockmode != NoLock);
 
+	/*
+	 * Get list of all the indexes including the global indexes of all its
+	 * ancestors.
+	 */
 	indexoidlist = RelationGetIndexList(relation);
 
 	/* allocate enough memory for all indexes */
@@ -2364,7 +2370,8 @@ vac_open_indexes(Relation relation, LOCKMODE lockmode,
 		Relation	indrel;
 
 		indrel = index_open(indexoid, lockmode);
-		if (indrel->rd_index->indisready)
+		if (indrel->rd_index->indisready &&
+			indrel->rd_index->indrelid == RelationGetRelid(relation))
 			(*Irel)[i++] = indrel;
 		else
 			index_close(indrel, lockmode);

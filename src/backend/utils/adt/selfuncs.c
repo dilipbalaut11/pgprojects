@@ -6499,6 +6499,8 @@ get_actual_variable_range(PlannerInfo *root, VariableStatData *vardata,
 		/* Ignore non-ordering indexes */
 		if (index->sortopfamily == NULL)
 			continue;
+		if (index->idxkind != INDEX_LOCAL)
+			continue;
 
 		/*
 		 * Ignore partial indexes --- we only want stats that cover the entire
@@ -6718,6 +6720,8 @@ get_actual_variable_endpoint(Relation heapRel,
 	 */
 	InitNonVacuumableSnapshot(SnapshotNonVacuumable,
 							  GlobalVisTestFor(heapRel));
+
+	Assert(!RelationIsGlobalIndex(indexRel));
 
 	index_scan = index_beginscan(heapRel, indexRel,
 								 &SnapshotNonVacuumable, NULL,

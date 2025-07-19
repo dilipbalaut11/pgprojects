@@ -3,7 +3,7 @@
 --
 
 CREATE PROCEDURE test_proc1()
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     NULL;
@@ -15,7 +15,7 @@ CALL test_proc1();
 
 -- error: can't return non-NULL
 CREATE PROCEDURE test_proc2()
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     RETURN 5;
@@ -26,7 +26,7 @@ $$;
 CREATE TABLE test1 (a int);
 
 CREATE PROCEDURE test_proc3(x int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     INSERT INTO test1 VALUES (x);
@@ -42,7 +42,7 @@ SELECT * FROM test1;
 -- (bug #18059).  This test must include the first temp-object creation in
 -- this script, or it won't exercise the bug scenario.  Hence we put it early.
 CREATE PROCEDURE test_proc3a()
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
    COMMIT;
@@ -60,7 +60,7 @@ CALL test_proc3a();
 TRUNCATE TABLE test1;
 
 CREATE PROCEDURE test_proc4(y int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     CALL test_proc3(y);
@@ -80,7 +80,7 @@ SELECT * FROM test1;
 -- output arguments
 
 CREATE PROCEDURE test_proc5(INOUT a text)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     a := a || '+' || a;
@@ -91,7 +91,7 @@ CALL test_proc5('abc');
 
 
 CREATE PROCEDURE test_proc6(a int, INOUT b int, INOUT c int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     b := b * a;
@@ -103,7 +103,7 @@ CALL test_proc6(2, 3, 4);
 
 
 DO
-LANGUAGE plpgsql
+LANGUAGE plsql
 $$
 DECLARE
     x int := 3;
@@ -118,7 +118,7 @@ $$;
 
 
 DO
-LANGUAGE plpgsql
+LANGUAGE plsql
 $$
 DECLARE
     x int := 3;
@@ -131,7 +131,7 @@ $$;
 
 
 DO
-LANGUAGE plpgsql
+LANGUAGE plsql
 $$
 DECLARE
     x constant int := 3;
@@ -143,7 +143,7 @@ $$;
 
 
 DO
-LANGUAGE plpgsql
+LANGUAGE plsql
 $$
 DECLARE
     x int := 3;
@@ -160,7 +160,7 @@ $$;
 -- recursive with output arguments
 
 CREATE PROCEDURE test_proc7(x int, INOUT a int, INOUT b numeric)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
 IF x > 1 THEN
@@ -176,7 +176,7 @@ CALL test_proc7(100, -1, -1);
 -- inner COMMIT with output arguments
 
 CREATE PROCEDURE test_proc7c(x int, INOUT a int, INOUT b numeric)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   a := x / 10;
@@ -186,7 +186,7 @@ END;
 $$;
 
 CREATE PROCEDURE test_proc7cc(_x int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 DECLARE _a int; _b numeric;
 BEGIN
@@ -201,7 +201,7 @@ CALL test_proc7cc(10);
 -- named parameters and defaults
 
 CREATE PROCEDURE test_proc8a(INOUT a int, INOUT b int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   RAISE NOTICE 'a: %, b: %', a, b;
@@ -226,7 +226,7 @@ $$;
 
 
 CREATE PROCEDURE test_proc8b(INOUT a int, INOUT b int, INOUT c int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   RAISE NOTICE 'a: %, b: %, c: %', a, b, c;
@@ -249,7 +249,7 @@ $$;
 
 
 CREATE PROCEDURE test_proc8c(INOUT a int, INOUT b int, INOUT c int DEFAULT 11)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   RAISE NOTICE 'a: %, b: %, c: %', a, b, c;
@@ -296,7 +296,7 @@ $$;
 -- OUT parameters
 
 CREATE PROCEDURE test_proc9(IN a int, OUT b int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   RAISE NOTICE 'a: %, b: %', a, b;
@@ -314,7 +314,7 @@ END
 $$;
 
 CREATE PROCEDURE test_proc10(IN a int, OUT b int, IN c int DEFAULT 11)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   RAISE NOTICE 'a: %, b: %, c: %', a, b, c;
@@ -358,7 +358,7 @@ $$;
 -- OUT + VARIADIC
 
 CREATE PROCEDURE test_proc11(a OUT int, VARIADIC b int[])
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   RAISE NOTICE 'a: %, b: %', a, b;
@@ -378,7 +378,7 @@ $$;
 -- polymorphic OUT arguments
 
 CREATE PROCEDURE test_proc12(a anyelement, OUT b anyelement, OUT c anyarray)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   RAISE NOTICE 'a: %', a;
@@ -411,7 +411,7 @@ $$;
 TRUNCATE test1;
 
 CREATE FUNCTION triggerfunc1() RETURNS trigger
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 DECLARE
     z int := 0;
@@ -444,7 +444,7 @@ AS $$
 BEGIN
   v_Text := 'v_cnt = ' || v_cnt;
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 DO $$
 DECLARE
@@ -494,7 +494,7 @@ AS $$
 BEGIN
   RAISE NOTICE 'inner_p(%)', f1;
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 CREATE FUNCTION f(int) RETURNS int AS $$ SELECT $1 + 1 $$ LANGUAGE sql;
 
@@ -504,7 +504,7 @@ BEGIN
   RAISE NOTICE 'outer_p(%)', f1;
   CALL inner_p(f(f1));
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 CREATE FUNCTION outer_f (f1 int) RETURNS void
 AS $$
@@ -512,7 +512,7 @@ BEGIN
   RAISE NOTICE 'outer_f(%)', f1;
   CALL inner_p(f(f1));
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 CALL outer_p(42);
 SELECT outer_f(42);
@@ -535,14 +535,14 @@ BEGIN
   SELECT x INTO l_result FROM t_test;
   RETURN l_result;
 END
-$$ LANGUAGE plpgsql STABLE;
+$$ LANGUAGE plsql STABLE;
 
 CREATE PROCEDURE f_print_x (x int)
 AS $$
 BEGIN
   RAISE NOTICE 'f_print_x(%)', x;
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 -- test in non-atomic context
 DO $$

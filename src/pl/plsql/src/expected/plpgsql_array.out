@@ -2,7 +2,7 @@
 -- Tests for PL/pgSQL handling of array variables
 --
 -- We also check arrays of composites here, so this has some overlap
--- with the plpgsql_record tests.
+-- with the plsql_record tests.
 --
 create type complex as (r float8, i float8);
 create type quadarray as (c1 complex[], c2 complex);

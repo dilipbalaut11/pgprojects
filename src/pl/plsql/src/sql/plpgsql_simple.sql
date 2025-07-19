@@ -1,12 +1,12 @@
 --
--- Tests for plpgsql's handling of "simple" expressions
+-- Tests for plsql's handling of "simple" expressions
 --
 
 -- Check that changes to an inline-able function are handled correctly
 create function simplesql(int) returns int language sql
 as 'select $1';
 
-create function simplecaller() returns int language plpgsql
+create function simplecaller() returns int language plsql
 as $$
 declare
   sum int := 0;
@@ -27,13 +27,13 @@ select simplecaller();
 -- Check that changes in search path are dealt with correctly
 create schema simple1;
 
-create function simple1.simpletarget(int) returns int language plpgsql
+create function simple1.simpletarget(int) returns int language plsql
 as $$begin return $1; end$$;
 
-create function simpletarget(int) returns int language plpgsql
+create function simpletarget(int) returns int language plsql
 as $$begin return $1 + 100; end$$;
 
-create or replace function simplecaller() returns int language plpgsql
+create or replace function simplecaller() returns int language plsql
 as $$
 declare
   sum int := 0;
@@ -66,7 +66,7 @@ select simplecaller();
 create function simplesql() returns int language sql
 as $$select 1 / 0$$;
 
-create or replace function simplecaller() returns int language plpgsql
+create or replace function simplecaller() returns int language plsql
 as $$
 declare x int;
 begin
@@ -84,7 +84,7 @@ select simplecaller();
 
 -- Check case where called function changes from non-SRF to SRF (bug #18497)
 
-create or replace function simplecaller() returns int language plpgsql
+create or replace function simplecaller() returns int language plsql
 as $$
 declare x int;
 begin

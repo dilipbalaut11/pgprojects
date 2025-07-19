@@ -173,7 +173,7 @@ begin
       raise notice 'inner %', _j;
     end loop;
   end loop;
-end; $$ language plpgsql;
+end; $$ language plsql;
 select continue_test1();
 NOTICE:  ---1---
 NOTICE:  1
@@ -244,7 +244,7 @@ begin
         continue;
     end;
 end;
-$$ language plpgsql;
+$$ language plsql;
 ERROR:  CONTINUE cannot be used outside a loop
 LINE 4:         continue;
                 ^
@@ -255,7 +255,7 @@ begin
         exit;
     end;
 end;
-$$ language plpgsql;
+$$ language plsql;
 ERROR:  EXIT cannot be used outside a loop, unless it has a label
 LINE 4:         exit;
                 ^
@@ -268,7 +268,7 @@ begin
         end loop;
     end;
 end;
-$$ language plpgsql;
+$$ language plsql;
 ERROR:  there is no label "no_such_label" attached to any block or loop enclosing this statement
 LINE 5:             continue no_such_label;
                              ^
@@ -281,7 +281,7 @@ begin
         end loop;
     end;
 end;
-$$ language plpgsql;
+$$ language plsql;
 ERROR:  there is no label "no_such_label" attached to any block or loop enclosing this statement
 LINE 5:             exit no_such_label;
                          ^
@@ -295,7 +295,7 @@ begin
         end loop;
     end;
 end;
-$$ language plpgsql;
+$$ language plsql;
 ERROR:  block label "begin_block1" cannot be used in CONTINUE
 LINE 6:             continue begin_block1;
                              ^
@@ -310,7 +310,7 @@ begin
         end loop;
     end;
 end;
-$$ language plpgsql;
+$$ language plsql;
 select exit_block1();
  exit_block1 
 -------------
@@ -332,7 +332,7 @@ begin
     exit flbl2;
   end loop;
 end blbl;
-$$ language plpgsql;
+$$ language plsql;
 select end_label1();
 NOTICE:  i = 1
 NOTICE:  j = 1
@@ -348,7 +348,7 @@ begin
     exit;
   end loop flbl1;
 end;
-$$ language plpgsql;
+$$ language plsql;
 ERROR:  end label "flbl1" specified for unlabeled block
 LINE 5:   end loop flbl1;
                    ^
@@ -361,7 +361,7 @@ begin
     exit;
   end loop outer_label;
 end;
-$$ language plpgsql;
+$$ language plsql;
 ERROR:  end label "outer_label" differs from block's label "inner_label"
 LINE 7:   end loop outer_label;
                    ^
@@ -373,7 +373,7 @@ begin
     exit;
   end loop outer_label;
 end;
-$$ language plpgsql;
+$$ language plsql;
 ERROR:  end label "outer_label" specified for unlabeled block
 LINE 6:   end loop outer_label;
                    ^
@@ -485,7 +485,7 @@ NOTICE:  outermostwhile, i = 0
 NOTICE:  outermostwhile, i = 1
 NOTICE:  out of outermostwhile, i = 2
 -- return out of a while
-create function return_from_while() returns int language plpgsql as $$
+create function return_from_while() returns int language plsql as $$
 declare i int := 0;
 begin
   while i < 10 loop
@@ -527,7 +527,7 @@ begin
     raise notice '% % %', a, b, c;
   end loop;
 end;
-$proc$ language plpgsql;
+$proc$ language plsql;
 select for_vect();
 NOTICE:  1
 NOTICE:  2
@@ -571,7 +571,7 @@ begin
       return 'eleven, twelve';
   end case;
 end;
-$$ language plpgsql immutable;
+$$ language plsql immutable;
 select case_test(1);
  case_test 
 -----------
@@ -635,7 +635,7 @@ exception
   when case_not_found then
     raise notice 'caught case_not_found % %', SQLSTATE, SQLERRM;
 end
-$$ language plpgsql;
+$$ language plsql;
 select catch();
 NOTICE:  caught case_not_found 20000 case not found
  catch 
@@ -656,7 +656,7 @@ begin
       return 'other';
   end case;
 end;
-$$ language plpgsql immutable;
+$$ language plsql immutable;
 select case_test(1);
  case_test 
 -----------
@@ -691,7 +691,7 @@ begin
       return 'other';
   end case;
 end;
-$$ language plpgsql immutable;
+$$ language plsql immutable;
 select case_comment(1);
  case_comment 
 --------------

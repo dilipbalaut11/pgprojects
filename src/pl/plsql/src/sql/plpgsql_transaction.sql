@@ -2,7 +2,7 @@ CREATE TABLE test1 (a int, b text);
 
 
 CREATE PROCEDURE transaction_test1(x int, y text)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     FOR i IN 0..x LOOP
@@ -24,7 +24,7 @@ SELECT * FROM test1;
 TRUNCATE test1;
 
 DO
-LANGUAGE plpgsql
+LANGUAGE plsql
 $$
 BEGIN
     FOR i IN 0..9 LOOP
@@ -47,7 +47,7 @@ CALL transaction_test1(9, 'error');
 COMMIT;
 
 START TRANSACTION;
-DO LANGUAGE plpgsql $$ BEGIN COMMIT; END $$;
+DO LANGUAGE plsql $$ BEGIN COMMIT; END $$;
 COMMIT;
 
 
@@ -55,7 +55,7 @@ TRUNCATE test1;
 
 -- not allowed in a function
 CREATE FUNCTION transaction_test2() RETURNS int
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     FOR i IN 0..9 LOOP
@@ -77,7 +77,7 @@ SELECT * FROM test1;
 
 -- also not allowed if procedure is called from a function
 CREATE FUNCTION transaction_test3() RETURNS int
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     CALL transaction_test1(9, 'error');
@@ -92,10 +92,10 @@ SELECT * FROM test1;
 
 -- DO block inside function
 CREATE FUNCTION transaction_test4() RETURNS int
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
-    EXECUTE 'DO LANGUAGE plpgsql $x$ BEGIN COMMIT; END $x$';
+    EXECUTE 'DO LANGUAGE plsql $x$ BEGIN COMMIT; END $x$';
     RETURN 1;
 END;
 $$;
@@ -105,7 +105,7 @@ SELECT transaction_test4();
 
 -- proconfig settings currently disallow transaction statements
 CREATE PROCEDURE transaction_test5()
-LANGUAGE plpgsql
+LANGUAGE plsql
 SET work_mem = 555
 AS $$
 BEGIN
@@ -118,7 +118,7 @@ CALL transaction_test5();
 
 -- SECURITY DEFINER currently disallow transaction statements
 CREATE PROCEDURE transaction_test5b()
-LANGUAGE plpgsql
+LANGUAGE plsql
 SECURITY DEFINER
 AS $$
 BEGIN
@@ -133,7 +133,7 @@ TRUNCATE test1;
 
 -- nested procedure calls
 CREATE PROCEDURE transaction_test6(c text)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     CALL transaction_test1(9, c);
@@ -147,7 +147,7 @@ SELECT * FROM test1;
 TRUNCATE test1;
 
 CREATE PROCEDURE transaction_test7()
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     DO 'BEGIN CALL transaction_test1(9, $x$baz$x$); END;';
@@ -159,7 +159,7 @@ CALL transaction_test7();
 SELECT * FROM test1;
 
 CREATE PROCEDURE transaction_test8()
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     EXECUTE 'CALL transaction_test1(10, $x$baz$x$)';
@@ -175,7 +175,7 @@ INSERT INTO test2 VALUES (0), (1), (2), (3), (4);
 
 TRUNCATE test1;
 
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 DECLARE
     r RECORD;
 BEGIN
@@ -195,7 +195,7 @@ SELECT * FROM pg_cursors;
 -- error in cursor loop with commit
 TRUNCATE test1;
 
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 DECLARE
     r RECORD;
 BEGIN
@@ -214,7 +214,7 @@ SELECT * FROM pg_cursors;
 -- rollback inside cursor loop
 TRUNCATE test1;
 
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 DECLARE
     r RECORD;
 BEGIN
@@ -233,7 +233,7 @@ SELECT * FROM pg_cursors;
 -- first commit then rollback inside cursor loop
 TRUNCATE test1;
 
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 DECLARE
     r RECORD;
 BEGIN
@@ -256,7 +256,7 @@ SELECT * FROM pg_cursors;
 -- rollback inside cursor loop
 TRUNCATE test1;
 
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 DECLARE
     r RECORD;
 BEGIN
@@ -278,7 +278,7 @@ TRUNCATE test1;
 
 INSERT INTO test1 VALUES (1,'one'), (2,'two'), (3,'three');
 
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 DECLARE
     l_cur CURSOR FOR SELECT a FROM test1 ORDER BY 1 FOR UPDATE;
 BEGIN
@@ -299,7 +299,7 @@ TRUNCATE test1;
 
 INSERT INTO test1 VALUES (1,'one'), (2,'two'), (3,'three');
 
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 DECLARE r RECORD;
 BEGIN
     FOR r IN SELECT a FROM test1 FOR UPDATE LOOP
@@ -317,7 +317,7 @@ SELECT * FROM pg_cursors;
 -- commit inside block with exception handler
 TRUNCATE test1;
 
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 BEGIN
     BEGIN
         INSERT INTO test1 (a) VALUES (1);
@@ -337,7 +337,7 @@ SELECT * FROM test1;
 -- rollback inside block with exception handler
 TRUNCATE test1;
 
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 BEGIN
     BEGIN
         INSERT INTO test1 (a) VALUES (1);
@@ -357,7 +357,7 @@ SELECT * FROM test1;
 -- test commit/rollback inside exception handler, too
 TRUNCATE test1;
 
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 BEGIN
     FOR i IN 1..10 LOOP
       BEGIN
@@ -397,7 +397,7 @@ end $$;
 
 
 -- operations on composite types vs. internal transactions
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 declare
   c test1 := row(42, 'hello');
   r bool;
@@ -417,7 +417,7 @@ $$;
 
 
 -- COMMIT failures
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 BEGIN
     CREATE TABLE test3 (y int UNIQUE DEFERRABLE INITIALLY DEFERRED);
     COMMIT;
@@ -434,7 +434,7 @@ SELECT * FROM test3;
 
 -- failure while trying to persist a cursor across a transaction (bug #15703)
 CREATE PROCEDURE cursor_fail_during_commit()
- LANGUAGE plpgsql
+ LANGUAGE plsql
 AS $$
   DECLARE id int;
   BEGIN
@@ -453,7 +453,7 @@ CALL cursor_fail_during_commit();
 SELECT count(*) FROM test1;
 
 CREATE PROCEDURE cursor_fail_during_rollback()
- LANGUAGE plpgsql
+ LANGUAGE plsql
 AS $$
   DECLARE id int;
   BEGIN
@@ -472,7 +472,7 @@ SELECT count(*) FROM test1;
 
 
 -- SET TRANSACTION
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 BEGIN
     PERFORM 1;
     RAISE INFO '%', current_setting('transaction_isolation');
@@ -489,19 +489,19 @@ END;
 $$;
 
 -- error cases
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 BEGIN
     SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
 END;
 $$;
 
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 BEGIN
     SAVEPOINT foo;
 END;
 $$;
 
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 BEGIN
     EXECUTE 'COMMIT';
 END;
@@ -517,7 +517,7 @@ AS $$
 INSERT INTO test2 VALUES (42);
 $$;
 
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 BEGIN
   ROLLBACK;
   CALL transaction_test9();
@@ -534,7 +534,7 @@ STABLE LANGUAGE sql
 AS $$ SELECT COUNT(*) FROM test2 $$;
 
 CREATE PROCEDURE transaction_test9b(cnt int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   RAISE NOTICE 'count = %', cnt;
@@ -553,7 +553,7 @@ $$;
 -- Test transaction in procedure with output parameters.  This uses a
 -- different portal strategy and different code paths in pquery.c.
 CREATE PROCEDURE transaction_test10a(INOUT x int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   x := x + 1;
@@ -564,7 +564,7 @@ $$;
 CALL transaction_test10a(10);
 
 CREATE PROCEDURE transaction_test10b(INOUT x int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   x := x - 1;
@@ -577,7 +577,7 @@ CALL transaction_test10b(10);
 
 -- transaction timestamp vs. statement timestamp
 CREATE PROCEDURE transaction_test11()
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 DECLARE
   s1 timestamp with time zone;
@@ -612,7 +612,7 @@ CALL transaction_test11();
 
 TRUNCATE test1;
 
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 BEGIN
     ROLLBACK;
     SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;

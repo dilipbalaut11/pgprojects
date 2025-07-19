@@ -14,7 +14,7 @@ msgstr ""
 "X-Crowdin-Project: postgresql\n"
 "X-Crowdin-Project-ID: 324573\n"
 "X-Crowdin-Language: uk\n"
-"X-Crowdin-File: /REL_17_STABLE/plpgsql.pot\n"
+"X-Crowdin-File: /REL_17_STABLE/plsql.pot\n"
 "X-Crowdin-File-ID: 998\n"
 
 #: pl_comp.c:434 pl_handler.c:496
@@ -197,7 +197,7 @@ msgstr "Функція PL/pgSQL %s рядок %d %s"
 msgid "PL/pgSQL function %s %s"
 msgstr "Функція PL/pgSQL %s %s"
 
-#. translator: last %s is a plpgsql statement type name
+#. translator: last %s is a plsql statement type name
 #: pl_exec.c:1282
 #, c-format
 msgid "PL/pgSQL function %s line %d at %s"

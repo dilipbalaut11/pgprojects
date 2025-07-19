@@ -8,7 +8,7 @@
  *
  *
  * IDENTIFICATION
- *	  src/pl/plpgsql/src/pl_handler.c
+ *	  src/pl/plsql/src/pl_handler.c
  *
  *-------------------------------------------------------------------------
  */
@@ -20,47 +20,47 @@
 #include "catalog/pg_type.h"
 #include "funcapi.h"
 #include "miscadmin.h"
-#include "plpgsql.h"
+#include "plsql.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
 
-static bool plpgsql_extra_checks_check_hook(char **newvalue, void **extra, GucSource source);
-static void plpgsql_extra_warnings_assign_hook(const char *newvalue, void *extra);
-static void plpgsql_extra_errors_assign_hook(const char *newvalue, void *extra);
+static bool plsql_extra_checks_check_hook(char **newvalue, void **extra, GucSource source);
+static void plsql_extra_warnings_assign_hook(const char *newvalue, void *extra);
+static void plsql_extra_errors_assign_hook(const char *newvalue, void *extra);
 
 PG_MODULE_MAGIC_EXT(
-					.name = "plpgsql",
+					.name = "plsql",
 					.version = PG_VERSION
 );
 
 /* Custom GUC variable */
 static const struct config_enum_entry variable_conflict_options[] = {
-	{"error", PLPGSQL_RESOLVE_ERROR, false},
-	{"use_variable", PLPGSQL_RESOLVE_VARIABLE, false},
-	{"use_column", PLPGSQL_RESOLVE_COLUMN, false},
+	{"error", PLSQL_RESOLVE_ERROR, false},
+	{"use_variable", PLSQL_RESOLVE_VARIABLE, false},
+	{"use_column", PLSQL_RESOLVE_COLUMN, false},
 	{NULL, 0, false}
 };
 
-int			plpgsql_variable_conflict = PLPGSQL_RESOLVE_ERROR;
+int			plsql_variable_conflict = PLSQL_RESOLVE_ERROR;
 
-bool		plpgsql_print_strict_params = false;
+bool		plsql_print_strict_params = false;
 
-bool		plpgsql_check_asserts = true;
+bool		plsql_check_asserts = true;
 
-static char *plpgsql_extra_warnings_string = NULL;
-static char *plpgsql_extra_errors_string = NULL;
-int			plpgsql_extra_warnings;
-int			plpgsql_extra_errors;
+static char *plsql_extra_warnings_string = NULL;
+static char *plsql_extra_errors_string = NULL;
+int			plsql_extra_warnings;
+int			plsql_extra_errors;
 
 /* Hook for plugins */
-PLpgSQL_plugin **plpgsql_plugin_ptr = NULL;
+PLSQL_plugin **plsql_plugin_ptr = NULL;
 
 
 static bool
-plpgsql_extra_checks_check_hook(char **newvalue, void **extra, GucSource source)
+plsql_extra_checks_check_hook(char **newvalue, void **extra, GucSource source)
 {
 	char	   *rawstring;
 	List	   *elemlist;
@@ -69,9 +69,9 @@ plpgsql_extra_checks_check_hook(char **newvalue, void **extra, GucSource source)
 	int		   *myextra;
 
 	if (pg_strcasecmp(*newvalue, "all") == 0)
-		extrachecks = PLPGSQL_XCHECK_ALL;
+		extrachecks = PLSQL_XCHECK_ALL;
 	else if (pg_strcasecmp(*newvalue, "none") == 0)
-		extrachecks = PLPGSQL_XCHECK_NONE;
+		extrachecks = PLSQL_XCHECK_NONE;
 	else
 	{
 		/* Need a modifiable copy of string */
@@ -92,11 +92,11 @@ plpgsql_extra_checks_check_hook(char **newvalue, void **extra, GucSource source)
 			char	   *tok = (char *) lfirst(l);
 
 			if (pg_strcasecmp(tok, "shadowed_variables") == 0)
-				extrachecks |= PLPGSQL_XCHECK_SHADOWVAR;
+				extrachecks |= PLSQL_XCHECK_SHADOWVAR;
 			else if (pg_strcasecmp(tok, "too_many_rows") == 0)
-				extrachecks |= PLPGSQL_XCHECK_TOOMANYROWS;
+				extrachecks |= PLSQL_XCHECK_TOOMANYROWS;
 			else if (pg_strcasecmp(tok, "strict_multi_assignment") == 0)
-				extrachecks |= PLPGSQL_XCHECK_STRICTMULTIASSIGNMENT;
+				extrachecks |= PLSQL_XCHECK_STRICTMULTIASSIGNMENT;
 			else if (pg_strcasecmp(tok, "all") == 0 || pg_strcasecmp(tok, "none") == 0)
 			{
 				GUC_check_errdetail("Key word \"%s\" cannot be combined with other key words.", tok);
@@ -127,15 +127,15 @@ plpgsql_extra_checks_check_hook(char **newvalue, void **extra, GucSource source)
 }
 
 static void
-plpgsql_extra_warnings_assign_hook(const char *newvalue, void *extra)
+plsql_extra_warnings_assign_hook(const char *newvalue, void *extra)
 {
-	plpgsql_extra_warnings = *((int *) extra);
+	plsql_extra_warnings = *((int *) extra);
 }
 
 static void
-plpgsql_extra_errors_assign_hook(const char *newvalue, void *extra)
+plsql_extra_errors_assign_hook(const char *newvalue, void *extra)
 {
-	plpgsql_extra_errors = *((int *) extra);
+	plsql_extra_errors = *((int *) extra);
 }
 
 
@@ -224,8 +224,8 @@ Datum
 plsql_call_handler(PG_FUNCTION_ARGS)
 {
 	bool		nonatomic;
-	PLpgSQL_function *func;
-	PLpgSQL_execstate *save_cur_estate;
+	PLSQL_function *func;
+	PLSQL_execstate *save_cur_estate;
 	ResourceOwner procedure_resowner;
 	volatile Datum retval = (Datum) 0;
 	int			rc;
@@ -317,7 +317,7 @@ plsql_inline_handler(PG_FUNCTION_ARGS)
 {
 	LOCAL_FCINFO(fake_fcinfo, 0);
 	InlineCodeBlock *codeblock = castNode(InlineCodeBlock, DatumGetPointer(PG_GETARG_DATUM(0)));
-	PLpgSQL_function *func;
+	PLSQL_function *func;
 	FmgrInfo	flinfo;
 	EState	   *simple_eval_estate;
 	ResourceOwner simple_eval_resowner;
@@ -330,14 +330,14 @@ plsql_inline_handler(PG_FUNCTION_ARGS)
 	SPI_connect_ext(codeblock->atomic ? 0 : SPI_OPT_NONATOMIC);
 
 	/* Compile the anonymous code block */
-	func = plpgsql_compile_inline(codeblock->source_text);
+	func = plsql_compile_inline(codeblock->source_text);
 
 	/* Mark the function as busy, just pro forma */
 	func->cfunc.use_count++;
 
 	/*
 	 * Set up a fake fcinfo with just enough info to satisfy
-	 * plpgsql_exec_function().  In particular note that this sets things up
+	 * plsql_exec_function().  In particular note that this sets things up
 	 * with no arguments passed.
 	 */
 	MemSet(fake_fcinfo, 0, SizeForFunctionCallInfo(0));
@@ -365,7 +365,7 @@ plsql_inline_handler(PG_FUNCTION_ARGS)
 	/* And run the function */
 	PG_TRY();
 	{
-		retval = plpgsql_exec_function(func, fake_fcinfo,
+		retval = plsql_exec_function(func, fake_fcinfo,
 									   simple_eval_estate,
 									   simple_eval_resowner,
 									   simple_eval_resowner,	/* see above */
@@ -376,7 +376,7 @@ plsql_inline_handler(PG_FUNCTION_ARGS)
 		/*
 		 * We need to clean up what would otherwise be long-lived resources
 		 * accumulated by the failed DO block, principally cached plans for
-		 * statements (which can be flushed by plpgsql_free_function_memory),
+		 * statements (which can be flushed by plsql_free_function_memory),
 		 * execution trees for simple expressions, which are in the private
 		 * EState, and cached-plan refcounts held by the private resowner.
 		 *
@@ -384,10 +384,10 @@ plsql_inline_handler(PG_FUNCTION_ARGS)
 		 * simple_econtext_stack entries pointing into it, which we can do by
 		 * invoking the subxact callback.  (It will be called again later if
 		 * some outer control level does a subtransaction abort, but no harm
-		 * is done.)  We cheat a bit knowing that plpgsql_subxact_cb does not
+		 * is done.)  We cheat a bit knowing that plsql_subxact_cb does not
 		 * pay attention to its parentSubid argument.
 		 */
-		plpgsql_subxact_cb(SUBXACT_EVENT_ABORT_SUB,
+		plsql_subxact_cb(SUBXACT_EVENT_ABORT_SUB,
 						   GetCurrentSubTransactionId(),
 						   0, NULL);
 
@@ -401,7 +401,7 @@ plsql_inline_handler(PG_FUNCTION_ARGS)
 		Assert(func->cfunc.use_count == 0);
 
 		/* ... so we can free subsidiary storage */
-		plpgsql_free_function_memory(func);
+		plsql_free_function_memory(func);
 
 		/* And propagate the error */
 		PG_RE_THROW();
@@ -418,7 +418,7 @@ plsql_inline_handler(PG_FUNCTION_ARGS)
 	Assert(func->cfunc.use_count == 0);
 
 	/* ... so we can free subsidiary storage */
-	plpgsql_free_function_memory(func);
+	plsql_free_function_memory(func);
 
 	/*
 	 * Disconnect from SPI manager
@@ -514,7 +514,7 @@ plsql_validator(PG_FUNCTION_ARGS)
 
 		/*
 		 * Set up a fake fcinfo with just enough info to satisfy
-		 * plpgsql_compile().
+		 * plsql_compile().
 		 */
 		MemSet(fake_fcinfo, 0, SizeForFunctionCallInfo(0));
 		MemSet(&flinfo, 0, sizeof(flinfo));
@@ -535,7 +535,7 @@ plsql_validator(PG_FUNCTION_ARGS)
 		}
 
 		/* Test-compile the function */
-		plpgsql_compile(fake_fcinfo, true);
+		plsql_compile(fake_fcinfo, true);
 
 		/*
 		 * Disconnect from SPI manager

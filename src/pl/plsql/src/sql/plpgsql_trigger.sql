@@ -2,7 +2,7 @@
 
 create table testtr (a int, b text);
 
-create function testtr_trigger() returns trigger language plpgsql as
+create function testtr_trigger() returns trigger language plsql as
 $$begin
   raise notice 'tg_op = %', tg_op;
   raise notice 'old(%) = %', old.a, row(old.*);

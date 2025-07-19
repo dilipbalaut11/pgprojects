@@ -2,7 +2,7 @@
 -- Tests for procedures / CALL syntax
 --
 CREATE PROCEDURE test_proc1()
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     NULL;
@@ -11,7 +11,7 @@ $$;
 CALL test_proc1();
 -- error: can't return non-NULL
 CREATE PROCEDURE test_proc2()
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     RETURN 5;
@@ -22,7 +22,7 @@ LINE 5:     RETURN 5;
                    ^
 CREATE TABLE test1 (a int);
 CREATE PROCEDURE test_proc3(x int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     INSERT INTO test1 VALUES (x);
@@ -39,7 +39,7 @@ SELECT * FROM test1;
 -- (bug #18059).  This test must include the first temp-object creation in
 -- this script, or it won't exercise the bug scenario.  Hence we put it early.
 CREATE PROCEDURE test_proc3a()
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
    COMMIT;
@@ -55,7 +55,7 @@ NOTICE:  done
 -- nested CALL
 TRUNCATE TABLE test1;
 CREATE PROCEDURE test_proc4(y int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     CALL test_proc3(y);
@@ -82,7 +82,7 @@ SELECT * FROM test1;
 
 -- output arguments
 CREATE PROCEDURE test_proc5(INOUT a text)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     a := a || '+' || a;
@@ -95,7 +95,7 @@ CALL test_proc5('abc');
 (1 row)
 
 CREATE PROCEDURE test_proc6(a int, INOUT b int, INOUT c int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
     b := b * a;
@@ -109,7 +109,7 @@ CALL test_proc6(2, 3, 4);
 (1 row)
 
 DO
-LANGUAGE plpgsql
+LANGUAGE plsql
 $$
 DECLARE
     x int := 3;
@@ -124,7 +124,7 @@ $$;
 INFO:  x = 6, y = 8
 INFO:  x = 12, y = 16
 DO
-LANGUAGE plpgsql
+LANGUAGE plsql
 $$
 DECLARE
     x int := 3;
@@ -137,7 +137,7 @@ $$;
 ERROR:  procedure parameter "b" is an output parameter but corresponding argument is not writable
 CONTEXT:  PL/pgSQL function inline_code_block line 6 at CALL
 DO
-LANGUAGE plpgsql
+LANGUAGE plsql
 $$
 DECLARE
     x constant int := 3;
@@ -149,7 +149,7 @@ $$;
 ERROR:  variable "x" is declared CONSTANT
 CONTEXT:  PL/pgSQL function inline_code_block line 6 at CALL
 DO
-LANGUAGE plpgsql
+LANGUAGE plsql
 $$
 DECLARE
     x int := 3;
@@ -168,7 +168,7 @@ INFO:  x = 72, y = 96
 INFO:  x = 360, y = 480
 -- recursive with output arguments
 CREATE PROCEDURE test_proc7(x int, INOUT a int, INOUT b numeric)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
 IF x > 1 THEN
@@ -186,7 +186,7 @@ CALL test_proc7(100, -1, -1);
 
 -- inner COMMIT with output arguments
 CREATE PROCEDURE test_proc7c(x int, INOUT a int, INOUT b numeric)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   a := x / 10;
@@ -195,7 +195,7 @@ BEGIN
 END;
 $$;
 CREATE PROCEDURE test_proc7cc(_x int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 DECLARE _a int; _b numeric;
 BEGIN
@@ -207,7 +207,7 @@ CALL test_proc7cc(10);
 NOTICE:  _x: 10,_a: 1, _b: 5
 -- named parameters and defaults
 CREATE PROCEDURE test_proc8a(INOUT a int, INOUT b int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   RAISE NOTICE 'a: %, b: %', a, b;
@@ -244,7 +244,7 @@ NOTICE:  _a: 100, _b: 40
 NOTICE:  a: 100, b: 40
 NOTICE:  _a: 1000, _b: 50
 CREATE PROCEDURE test_proc8b(INOUT a int, INOUT b int, INOUT c int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   RAISE NOTICE 'a: %, b: %, c: %', a, b, c;
@@ -268,7 +268,7 @@ NOTICE:  _a: 100, _b: 40, _c: -500
 NOTICE:  a: 100, b: 40, c: -500
 NOTICE:  _a: 1000, _b: 50, _c: 5000
 CREATE PROCEDURE test_proc8c(INOUT a int, INOUT b int, INOUT c int DEFAULT 11)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   RAISE NOTICE 'a: %, b: %, c: %', a, b, c;
@@ -319,7 +319,7 @@ ERROR:  procedure parameter "c" is an output parameter but corresponding argumen
 CONTEXT:  PL/pgSQL function inline_code_block line 5 at CALL
 -- OUT parameters
 CREATE PROCEDURE test_proc9(IN a int, OUT b int)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   RAISE NOTICE 'a: %, b: %', a, b;
@@ -337,7 +337,7 @@ $$;
 NOTICE:  a: 10, b: <NULL>
 NOTICE:  _a: 10, _b: 20
 CREATE PROCEDURE test_proc10(IN a int, OUT b int, IN c int DEFAULT 11)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   RAISE NOTICE 'a: %, b: %, c: %', a, b, c;
@@ -392,7 +392,7 @@ NOTICE:  a: 10, b: <NULL>, c: 11
 NOTICE:  _a: 10, _b: -1, _c: 7
 -- OUT + VARIADIC
 CREATE PROCEDURE test_proc11(a OUT int, VARIADIC b int[])
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   RAISE NOTICE 'a: %, b: %', a, b;
@@ -411,7 +411,7 @@ NOTICE:  a: <NULL>, b: {30,7}
 NOTICE:  _a: 37, _b: 30, _c: 7
 -- polymorphic OUT arguments
 CREATE PROCEDURE test_proc12(a anyelement, OUT b anyelement, OUT c anyarray)
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 BEGIN
   RAISE NOTICE 'a: %', a;
@@ -446,7 +446,7 @@ CONTEXT:  PL/pgSQL function inline_code_block line 5 at CALL
 -- transition variable assignment
 TRUNCATE test1;
 CREATE FUNCTION triggerfunc1() RETURNS trigger
-LANGUAGE plpgsql
+LANGUAGE plsql
 AS $$
 DECLARE
     z int := 0;
@@ -476,7 +476,7 @@ AS $$
 BEGIN
   v_Text := 'v_cnt = ' || v_cnt;
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 DO $$
 DECLARE
   v_Text text;
@@ -524,7 +524,7 @@ AS $$
 BEGIN
   RAISE NOTICE 'inner_p(%)', f1;
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 CREATE FUNCTION f(int) RETURNS int AS $$ SELECT $1 + 1 $$ LANGUAGE sql;
 CREATE PROCEDURE outer_p (f1 int)
 AS $$
@@ -532,14 +532,14 @@ BEGIN
   RAISE NOTICE 'outer_p(%)', f1;
   CALL inner_p(f(f1));
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 CREATE FUNCTION outer_f (f1 int) RETURNS void
 AS $$
 BEGIN
   RAISE NOTICE 'outer_f(%)', f1;
   CALL inner_p(f(f1));
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 CALL outer_p(42);
 NOTICE:  outer_p(42)
 NOTICE:  inner_p(43)
@@ -574,13 +574,13 @@ BEGIN
   SELECT x INTO l_result FROM t_test;
   RETURN l_result;
 END
-$$ LANGUAGE plpgsql STABLE;
+$$ LANGUAGE plsql STABLE;
 CREATE PROCEDURE f_print_x (x int)
 AS $$
 BEGIN
   RAISE NOTICE 'f_print_x(%)', x;
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 -- test in non-atomic context
 DO $$
 BEGIN

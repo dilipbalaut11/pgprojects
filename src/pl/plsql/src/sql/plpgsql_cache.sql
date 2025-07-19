@@ -1,7 +1,7 @@
 --
 -- Cache-behavior-dependent test cases
 --
--- These tests logically belong in plpgsql_record.sql, and perhaps someday
+-- These tests logically belong in plsql_record.sql, and perhaps someday
 -- can be merged back into it.  For now, however, their results are different
 -- depending on debug_discard_caches, so we must have two expected-output
 -- files to cover both cases.  To minimize the maintenance effort resulting
@@ -12,7 +12,7 @@
 -- check behavior with changes of a named rowtype
 create table c_mutable(f1 int, f2 text);
 
-create function c_sillyaddone(int) returns int language plpgsql as
+create function c_sillyaddone(int) returns int language plsql as
 $$ declare r c_mutable; begin r.f1 := $1; return r.f1 + 1; end $$;
 select c_sillyaddone(42);
 
@@ -28,7 +28,7 @@ discard plans;
 select c_sillyaddone(42);
 
 -- check behavior with changes in a record rowtype
-create function show_result_type(text) returns text language plpgsql as
+create function show_result_type(text) returns text language plsql as
 $$
     declare
         r record;

@@ -1,4 +1,4 @@
-# plpgsql extension
+# plsql extension
 comment = 'PL/SQL procedural language'
 default_version = '1.0'
 module_pathname = '$libdir/plsql'

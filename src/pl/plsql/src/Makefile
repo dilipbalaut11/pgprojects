@@ -2,7 +2,7 @@
 #
 # Makefile for the PL/pgSQL procedural language
 #
-# src/pl/plpgsql/src/Makefile
+# src/pl/plsql/src/Makefile
 #
 #-------------------------------------------------------------------------
 
@@ -32,10 +32,10 @@ DATA = plsql.control plsql--1.0.sql
 
 REGRESS_OPTS = --dbname=$(PL_TESTDB)
 
-REGRESS = plpgsql_array plpgsql_cache plpgsql_call plpgsql_control \
-	plpgsql_copy plpgsql_domain plpgsql_misc \
-	plpgsql_record plpgsql_simple plpgsql_transaction \
-	plpgsql_trap plpgsql_trigger plpgsql_varprops
+REGRESS = plsql_array plsql_cache plsql_call plsql_control \
+	plsql_copy plsql_domain plsql_misc \
+	plsql_record plsql_simple plsql_transaction \
+	plsql_trap plsql_trigger plsql_varprops
 
 # where to find gen_keywordlist.pl and subsidiary files
 TOOLSDIR = $(top_srcdir)/src/tools
@@ -59,21 +59,21 @@ uninstall: uninstall-lib uninstall-data uninstall-headers
 install-data: installdirs
 	$(INSTALL_DATA) $(addprefix $(srcdir)/, $(DATA)) '$(DESTDIR)$(datadir)/extension/'
 
-# The plpgsql.h header file is needed by instrumentation plugins
+# The plsql.h header file is needed by instrumentation plugins
 install-headers: installdirs
-	$(INSTALL_DATA) '$(srcdir)/plpgsql.h' '$(DESTDIR)$(includedir_server)'
+	$(INSTALL_DATA) '$(srcdir)/plsql.h' '$(DESTDIR)$(includedir_server)'
 
 uninstall-data:
 	rm -f $(addprefix '$(DESTDIR)$(datadir)/extension'/, $(notdir $(DATA)))
 
 uninstall-headers:
-	rm -f '$(DESTDIR)$(includedir_server)/plpgsql.h'
+	rm -f '$(DESTDIR)$(includedir_server)/plsql.h'
 
 .PHONY: install-data install-headers uninstall-data uninstall-headers
 
 
 # Force these dependencies to be known even without dependency info built:
-pl_gram.o pl_handler.o pl_comp.o pl_exec.o pl_funcs.o pl_scanner.o: plpgsql.h pl_gram.h plerrcodes.h
+pl_gram.o pl_handler.o pl_comp.o pl_exec.o pl_funcs.o pl_scanner.o: plsql.h pl_gram.h plerrcodes.h
 pl_scanner.o: pl_reserved_kwlist_d.h pl_unreserved_kwlist_d.h
 
 # See notes in src/backend/parser/Makefile about the following two rules

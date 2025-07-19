@@ -8,41 +8,41 @@ create type two_int8s as (q1 int8, q2 int8);
 create type nested_int8s as (c1 two_int8s, c2 two_int8s);
 
 -- base-case return of a composite type
-create function retc(int) returns two_int8s language plpgsql as
+create function retc(int) returns two_int8s language plsql as
 $$ begin return row($1,1)::two_int8s; end $$;
 select retc(42);
 
 -- ok to return a matching record type
-create or replace function retc(int) returns two_int8s language plpgsql as
+create or replace function retc(int) returns two_int8s language plsql as
 $$ begin return row($1::int8, 1::int8); end $$;
 select retc(42);
 
 -- we don't currently support implicit casting
-create or replace function retc(int) returns two_int8s language plpgsql as
+create or replace function retc(int) returns two_int8s language plsql as
 $$ begin return row($1,1); end $$;
 select retc(42);
 
 -- nor extra columns
-create or replace function retc(int) returns two_int8s language plpgsql as
+create or replace function retc(int) returns two_int8s language plsql as
 $$ begin return row($1::int8, 1::int8, 42); end $$;
 select retc(42);
 
 -- same cases with an intermediate "record" variable
-create or replace function retc(int) returns two_int8s language plpgsql as
+create or replace function retc(int) returns two_int8s language plsql as
 $$ declare r record; begin r := row($1::int8, 1::int8); return r; end $$;
 select retc(42);
 
-create or replace function retc(int) returns two_int8s language plpgsql as
+create or replace function retc(int) returns two_int8s language plsql as
 $$ declare r record; begin r := row($1,1); return r; end $$;
 select retc(42);
 
-create or replace function retc(int) returns two_int8s language plpgsql as
+create or replace function retc(int) returns two_int8s language plsql as
 $$ declare r record; begin r := row($1::int8, 1::int8, 42); return r; end $$;
 select retc(42);
 
 -- but, for mostly historical reasons, we do convert when assigning
 -- to a named-composite-type variable
-create or replace function retc(int) returns two_int8s language plpgsql as
+create or replace function retc(int) returns two_int8s language plsql as
 $$ declare r two_int8s; begin r := row($1::int8, 1::int8, 42); return r; end $$;
 select retc(42);
 
@@ -103,7 +103,7 @@ do $$ <<b>> declare c nested_int8s; begin b.c.c2.x = 1; end $$;
 do $$ <<b>> declare c nested_int8s; begin b.d.c2.x = 1; end $$;
 
 -- check passing composite result to another function
-create function getq1(two_int8s) returns int8 language plpgsql as $$
+create function getq1(two_int8s) returns int8 language plsql as $$
 declare r two_int8s; begin r := $1; return r.q1; end $$;
 
 select getq1(retc(344));
@@ -255,7 +255,7 @@ end$$;
 
 -- check behavior of function declared to return "record"
 
-create function returnsrecord(int) returns record language plpgsql as
+create function returnsrecord(int) returns record language plsql as
 $$ begin return row($1,$1+1); end $$;
 
 select returnsrecord(42);
@@ -264,7 +264,7 @@ select * from returnsrecord(42) as r(x int, y int, z int);  -- fail
 select * from returnsrecord(42) as r(x int, y bigint);  -- fail
 
 -- same with an intermediate record variable
-create or replace function returnsrecord(int) returns record language plpgsql as
+create or replace function returnsrecord(int) returns record language plsql as
 $$ declare r record; begin r := row($1,$1+1); return r; end $$;
 
 select returnsrecord(42);
@@ -276,7 +276,7 @@ select * from returnsrecord(42) as r(x int, y bigint);  -- fail
 create table has_hole(f1 int, f2 int, f3 int);
 alter table has_hole drop column f2;
 
-create or replace function returnsrecord(int) returns record language plpgsql as
+create or replace function returnsrecord(int) returns record language plsql as
 $$ begin return row($1,$1+1)::has_hole; end $$;
 
 select returnsrecord(42);
@@ -285,7 +285,7 @@ select * from returnsrecord(42) as r(x int, y int, z int);  -- fail
 select * from returnsrecord(42) as r(x int, y bigint);  -- fail
 
 -- same with an intermediate record variable
-create or replace function returnsrecord(int) returns record language plpgsql as
+create or replace function returnsrecord(int) returns record language plsql as
 $$ declare r record; begin r := row($1,$1+1)::has_hole; return r; end $$;
 
 select returnsrecord(42);
@@ -294,7 +294,7 @@ select * from returnsrecord(42) as r(x int, y int, z int);  -- fail
 select * from returnsrecord(42) as r(x int, y bigint);  -- fail
 
 -- check access to a field of an argument declared "record"
-create function getf1(x record) returns int language plpgsql as
+create function getf1(x record) returns int language plsql as
 $$ begin return x.f1; end $$;
 select getf1(1);
 select getf1(row(1,2));
@@ -309,7 +309,7 @@ select getf1(row(1,2));
 
 -- this seemingly-equivalent case behaves a bit differently,
 -- because the core parser's handling of $N symbols is simplistic
-create function getf2(record) returns int language plpgsql as
+create function getf2(record) returns int language plsql as
 $$ begin return $1.f2; end $$;
 select getf2(row(1,2));  -- ideally would work, but does not
 select getf2(row(1,2)::two_int4s);
@@ -326,7 +326,7 @@ begin
 end$$;
 
 -- check behavior when returning setof composite
-create function returnssetofholes() returns setof has_hole language plpgsql as
+create function returnssetofholes() returns setof has_hole language plsql as
 $$
 declare r record;
   h has_hole;
@@ -342,7 +342,7 @@ begin
 end$$;
 select returnssetofholes();
 
-create or replace function returnssetofholes() returns setof has_hole language plpgsql as
+create or replace function returnssetofholes() returns setof has_hole language plsql as
 $$
 declare r record;
 begin
@@ -350,14 +350,14 @@ begin
 end$$;
 select returnssetofholes();
 
-create or replace function returnssetofholes() returns setof has_hole language plpgsql as
+create or replace function returnssetofholes() returns setof has_hole language plsql as
 $$
 begin
   return next row(1,2,3);  -- fails
 end$$;
 select returnssetofholes();
 
-create or replace function returnssetofholes() returns setof has_hole language plpgsql as
+create or replace function returnssetofholes() returns setof has_hole language plsql as
 $$
 begin
   return query select 1, 2.0;  -- fails
@@ -367,12 +367,12 @@ select returnssetofholes();
 -- check behavior with changes of a named rowtype
 create table mutable(f1 int, f2 text);
 
-create function sillyaddone(int) returns int language plpgsql as
+create function sillyaddone(int) returns int language plsql as
 $$ declare r mutable; begin r.f1 := $1; return r.f1 + 1; end $$;
 select sillyaddone(42);
 
 -- test for change of type of column f1 should be here someday;
--- for now see plpgsql_cache test
+-- for now see plsql_cache test
 
 alter table mutable drop column f1;
 -- the context stack is different when debug_discard_caches
@@ -381,7 +381,7 @@ alter table mutable drop column f1;
 select sillyaddone(42);  -- fail
 \set SHOW_CONTEXT errors
 
-create function getf3(x mutable) returns int language plpgsql as
+create function getf3(x mutable) returns int language plsql as
 $$ begin return x.f3; end $$;
 select getf3(null::mutable);  -- doesn't work yet
 alter table mutable add column f3 int;
@@ -396,7 +396,7 @@ select getf3(null::mutable);  -- fails again
 -- check behavior with creating/dropping a named rowtype
 set check_function_bodies = off;  -- else reference to nonexistent type fails
 
-create function sillyaddtwo(int) returns int language plpgsql as
+create function sillyaddtwo(int) returns int language plsql as
 $$ declare r mutable2; begin r.f1 := $1; return r.f1 + 2; end $$;
 
 reset check_function_bodies;
@@ -416,7 +416,7 @@ select sillyaddtwo(43);
 
 -- check access to system columns in a record variable
 
-create function sillytrig() returns trigger language plpgsql as
+create function sillytrig() returns trigger language plsql as
 $$begin
   raise notice 'old.ctid = %', old.ctid;
   raise notice 'old.tableoid = %', old.tableoid::regclass;
@@ -432,7 +432,7 @@ table mutable;
 
 -- check returning a composite datum from a trigger
 
-create or replace function sillytrig() returns trigger language plpgsql as
+create or replace function sillytrig() returns trigger language plsql as
 $$begin
   return row(new.*);
 end$$;
@@ -440,7 +440,7 @@ end$$;
 update mutable set f2 = f2 || ' baz';
 table mutable;
 
-create or replace function sillytrig() returns trigger language plpgsql as
+create or replace function sillytrig() returns trigger language plsql as
 $$declare r record;
 begin
   r := row(new.*);
@@ -458,42 +458,42 @@ create domain ordered_int8s as two_int8s check((value).q1 <= (value).q2);
 
 create function read_ordered_int8s(p ordered_int8s) returns int8 as $$
 begin return p.q1 + p.q2; end
-$$ language plpgsql;
+$$ language plsql;
 
 select read_ordered_int8s(row(1, 2));
 select read_ordered_int8s(row(2, 1));  -- fail
 
 create function build_ordered_int8s(i int8, j int8) returns ordered_int8s as $$
 begin return row(i,j); end
-$$ language plpgsql;
+$$ language plsql;
 
 select build_ordered_int8s(1,2);
 select build_ordered_int8s(2,1);  -- fail
 
 create function build_ordered_int8s_2(i int8, j int8) returns ordered_int8s as $$
 declare r record; begin r := row(i,j); return r; end
-$$ language plpgsql;
+$$ language plsql;
 
 select build_ordered_int8s_2(1,2);
 select build_ordered_int8s_2(2,1);  -- fail
 
 create function build_ordered_int8s_3(i int8, j int8) returns ordered_int8s as $$
 declare r two_int8s; begin r := row(i,j); return r; end
-$$ language plpgsql;
+$$ language plsql;
 
 select build_ordered_int8s_3(1,2);
 select build_ordered_int8s_3(2,1);  -- fail
 
 create function build_ordered_int8s_4(i int8, j int8) returns ordered_int8s as $$
 declare r ordered_int8s; begin r := row(i,j); return r; end
-$$ language plpgsql;
+$$ language plsql;
 
 select build_ordered_int8s_4(1,2);
 select build_ordered_int8s_4(2,1);  -- fail
 
 create function build_ordered_int8s_a(i int8, j int8) returns ordered_int8s[] as $$
 begin return array[row(i,j), row(i,j+1)]; end
-$$ language plpgsql;
+$$ language plsql;
 
 select build_ordered_int8s_a(1,2);
 select build_ordered_int8s_a(2,1);  -- fail
@@ -569,7 +569,7 @@ begin
 end$$;
 
 -- check coercion of a record result to named-composite function output type
-create function compresult(int8) returns two_int8s language plpgsql as
+create function compresult(int8) returns two_int8s language plsql as
 $$ declare r record; begin r := row($1,$1); return r; end $$;
 
 create table two_int8s_tab (f1 two_int8s);

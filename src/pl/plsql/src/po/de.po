@@ -1,4 +1,4 @@
-# German message translation file for plpgsql
+# German message translation file for plsql
 # Copyright (C) 2009 - 2024 PostgreSQL Global Development Group
 # This file is distributed under the same license as the PostgreSQL package.
 #
@@ -198,7 +198,7 @@ msgstr "PL/pgSQL-Funktion %s Zeile %d %s"
 msgid "PL/pgSQL function %s %s"
 msgstr "PL/pgSQL-Funktion %s %s"
 
-#. translator: last %s is a plpgsql statement type name
+#. translator: last %s is a plsql statement type name
 #: pl_exec.c:1281
 #, c-format
 msgid "PL/pgSQL function %s line %d at %s"

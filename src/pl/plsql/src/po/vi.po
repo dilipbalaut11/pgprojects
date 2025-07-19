@@ -1,11 +1,11 @@
-# LANGUAGE message translation file for plpgsql
+# LANGUAGE message translation file for plsql
 # Copyright (C) 2018 PostgreSQL Global Development Group
-# This file is distributed under the same license as the plpgsql (PostgreSQL) package.
+# This file is distributed under the same license as the plsql (PostgreSQL) package.
 # FIRST AUTHOR <EMAIL@ADDRESS>, 2018.
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: plpgsql (PostgreSQL) 11\n"
+"Project-Id-Version: plsql (PostgreSQL) 11\n"
 "Report-Msgid-Bugs-To: pgsql-bugs@postgresql.org\n"
 "POT-Creation-Date: 2018-04-22 12:08+0000\n"
 "PO-Revision-Date: 2018-05-13 15:28+0900\n"
@@ -175,7 +175,7 @@ msgstr "Hàm PL/pgSQL %s dòng %d %s"
 msgid "PL/pgSQL function %s %s"
 msgstr "Hàm PL/pgSQL %s %s"
 
-#. translator: last %s is a plpgsql statement type name
+#. translator: last %s is a plsql statement type name
 #: pl_exec.c:1190
 #, c-format
 msgid "PL/pgSQL function %s line %d at %s"

@@ -9,22 +9,22 @@
 CREATE TABLE copy1 (a int, b float);
 
 -- COPY TO/FROM not authorized from client.
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 BEGIN
   COPY copy1 TO stdout;
 END;
 $$;
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 BEGIN
   COPY copy1 FROM stdin;
 END;
 $$;
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 BEGIN
   EXECUTE 'COPY copy1 TO stdout';
 END;
 $$;
-DO LANGUAGE plpgsql $$
+DO LANGUAGE plsql $$
 BEGIN
   EXECUTE 'COPY copy1 FROM stdin';
 END;
@@ -33,25 +33,25 @@ $$;
 -- Valid cases
 -- COPY FROM
 \set dobody 'BEGIN COPY copy1 FROM ' :'srcfilename' '; END'
-DO LANGUAGE plpgsql :'dobody';
+DO LANGUAGE plsql :'dobody';
 SELECT * FROM copy1 ORDER BY 1;
 TRUNCATE copy1;
 \set cmd 'COPY copy1 FROM ' :'srcfilename'
 \set dobody 'BEGIN EXECUTE ' :'cmd' '; END'
-DO LANGUAGE plpgsql :'dobody';
+DO LANGUAGE plsql :'dobody';
 SELECT * FROM copy1 ORDER BY 1;
 
 -- COPY TO
 -- Copy the data externally once, then process it back to the table.
 \set dobody 'BEGIN COPY copy1 TO ' :'destfilename' '; END'
-DO LANGUAGE plpgsql :'dobody';
+DO LANGUAGE plsql :'dobody';
 TRUNCATE copy1;
 \set dobody 'BEGIN COPY copy1 FROM ' :'destfilename' '; END'
-DO LANGUAGE plpgsql :'dobody';
+DO LANGUAGE plsql :'dobody';
 
 \set cmd 'COPY copy1 FROM ' :'destfilename'
 \set dobody 'BEGIN EXECUTE ' :'cmd' '; END'
-DO LANGUAGE plpgsql :'dobody';
+DO LANGUAGE plsql :'dobody';
 
 SELECT * FROM copy1 ORDER BY 1;
 

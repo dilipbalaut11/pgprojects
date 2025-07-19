@@ -8,7 +8,7 @@ CREATE FUNCTION test_argresult_booltrue(x booltrue, y bool) RETURNS booltrue AS 
 begin
 return y;
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT * FROM test_argresult_booltrue(true, true);
 SELECT * FROM test_argresult_booltrue(false, true);
@@ -20,7 +20,7 @@ begin
 v := y;
 return v;
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT * FROM test_assign_booltrue(true, true);
 SELECT * FROM test_assign_booltrue(false, true);
@@ -33,7 +33,7 @@ CREATE FUNCTION test_argresult_uint2(x uint2, y int) RETURNS uint2 AS $$
 begin
 return y;
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT * FROM test_argresult_uint2(100::uint2, 50);
 SELECT * FROM test_argresult_uint2(100::uint2, -50);
@@ -45,7 +45,7 @@ begin
 v := y;
 return v;
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT * FROM test_assign_uint2(100, 50);
 SELECT * FROM test_assign_uint2(100, -50);
@@ -59,7 +59,7 @@ CREATE FUNCTION test_argresult_nnint(x nnint, y int) RETURNS nnint AS $$
 begin
 return y;
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT * FROM test_argresult_nnint(10, 20);
 SELECT * FROM test_argresult_nnint(null, 20);
@@ -71,7 +71,7 @@ begin
 v := y;
 return v;
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT * FROM test_assign_nnint(10, 20);
 SELECT * FROM test_assign_nnint(null, 20);
@@ -89,7 +89,7 @@ CREATE FUNCTION test_argresult_array_domain(x ordered_pair_domain)
 begin
 return x;
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT * FROM test_argresult_array_domain(ARRAY[0, 100]::ordered_pair_domain);
 SELECT * FROM test_argresult_array_domain(NULL::ordered_pair_domain);
@@ -99,7 +99,7 @@ CREATE FUNCTION test_argresult_array_domain_check_violation()
 begin
 return array[2,1];
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT * FROM test_argresult_array_domain_check_violation();
 
@@ -109,7 +109,7 @@ begin
 v[2] := z;
 return v;
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT * FROM test_assign_ordered_pair_domain(1,2,3);
 SELECT * FROM test_assign_ordered_pair_domain(1,2,0);
@@ -124,7 +124,7 @@ CREATE FUNCTION test_read_uint2_array(x uint2[]) RETURNS uint2 AS $$
 begin
 return x[1];
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 select test_read_uint2_array(array[1::uint2]);
 
@@ -132,7 +132,7 @@ CREATE FUNCTION test_build_uint2_array(x int2) RETURNS uint2[] AS $$
 begin
 return array[x, x];
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 select test_build_uint2_array(1::int2);
 select test_build_uint2_array(-1::int2);  -- fail
@@ -142,7 +142,7 @@ CREATE FUNCTION test_argresult_domain_array(x integer[])
 begin
 return array[x::ordered_pair_domain, x::ordered_pair_domain];
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 select test_argresult_domain_array(array[2,4]);
 select test_argresult_domain_array(array[4,2]);  -- fail
@@ -152,7 +152,7 @@ CREATE FUNCTION test_argresult_domain_array2(x ordered_pair_domain)
 begin
 return x[1];
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 select test_argresult_domain_array2(array[2,4]);
 select test_argresult_domain_array2(array[4,2]);  -- fail
@@ -162,7 +162,7 @@ CREATE FUNCTION test_argresult_array_domain_array(x ordered_pair_domain[])
 begin
 return x[1];
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 select test_argresult_array_domain_array(array[array[2,4]::ordered_pair_domain]);
 
@@ -178,7 +178,7 @@ CREATE FUNCTION test_result_nnint_container(x int, y int)
 begin
 return row(x, y)::nnint_container;
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT test_result_nnint_container(null, 3);
 SELECT test_result_nnint_container(3, null);  -- fail
@@ -190,7 +190,7 @@ begin
 v.f2 := z;
 return v;
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT * FROM test_assign_nnint_container(1,2,3);
 SELECT * FROM test_assign_nnint_container(1,2,null);
@@ -207,7 +207,7 @@ begin
 v.f2 := z;
 return v;
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT * FROM test_assign_nnint_container2(1,2,3);
 SELECT * FROM test_assign_nnint_container2(1,2,null);
@@ -228,7 +228,7 @@ CREATE FUNCTION read_ordered_named_pair(p ordered_named_pair) RETURNS integer AS
 begin
 return p.i + p.j;
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT read_ordered_named_pair(row(1, 2));
 SELECT read_ordered_named_pair(row(2, 1));  -- fail
@@ -237,7 +237,7 @@ CREATE FUNCTION build_ordered_named_pair(i int, j int) RETURNS ordered_named_pai
 begin
 return row(i, j);
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT build_ordered_named_pair(1,2);
 SELECT build_ordered_named_pair(2,1);  -- fail
@@ -249,7 +249,7 @@ begin
 v.j := z;
 return v;
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT * FROM test_assign_ordered_named_pair(1,2,3);
 SELECT * FROM test_assign_ordered_named_pair(1,2,0);
@@ -259,7 +259,7 @@ CREATE FUNCTION build_ordered_named_pairs(i int, j int) RETURNS ordered_named_pa
 begin
 return array[row(i, j), row(i, j+1)];
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT build_ordered_named_pairs(1,2);
 SELECT build_ordered_named_pairs(2,1);  -- fail
@@ -272,7 +272,7 @@ begin
 -- v[1].j := z;
 return v;
 end
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plsql;
 
 SELECT * FROM test_assign_ordered_named_pairs(1,2,3);
 SELECT * FROM test_assign_ordered_named_pairs(2,1,3);

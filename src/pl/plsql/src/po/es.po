@@ -1,4 +1,4 @@
-# Spanish message translation file for plpgsql
+# Spanish message translation file for plsql
 #
 # Copyright (c) 2008-2021, PostgreSQL Global Development Group
 # This file is distributed under the same license as the PostgreSQL package.
@@ -10,7 +10,7 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: plpgsql (PostgreSQL) 17\n"
+"Project-Id-Version: plsql (PostgreSQL) 17\n"
 "Report-Msgid-Bugs-To: pgsql-bugs@lists.postgresql.org\n"
 "POT-Creation-Date: 2025-02-16 19:39+0000\n"
 "PO-Revision-Date: 2024-11-16 14:24+0100\n"
@@ -203,7 +203,7 @@ msgstr "función PL/pgSQL %s en la línea %d %s"
 msgid "PL/pgSQL function %s %s"
 msgstr "función PL/pgSQL %s %s"
 
-#. translator: last %s is a plpgsql statement type name
+#. translator: last %s is a plsql statement type name
 #: pl_exec.c:1282
 #, c-format
 msgid "PL/pgSQL function %s line %d at %s"

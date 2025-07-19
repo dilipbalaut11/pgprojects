@@ -1,13 +1,13 @@
-# Greek message translation file for plpgsql
+# Greek message translation file for plsql
 # Copyright (C) 2021 PostgreSQL Global Development Group
-# This file is distributed under the same license as the plpgsql (PostgreSQL) package.
+# This file is distributed under the same license as the plsql (PostgreSQL) package.
 # Georgios Kokolatos <gkokolatos@pm.me>, 2021.
 #
 #
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: plpgsql (PostgreSQL) 15\n"
+"Project-Id-Version: plsql (PostgreSQL) 15\n"
 "Report-Msgid-Bugs-To: pgsql-bugs@lists.postgresql.org\n"
 "POT-Creation-Date: 2023-04-14 09:09+0000\n"
 "PO-Revision-Date: 2023-04-14 15:03+0200\n"
@@ -185,7 +185,7 @@ msgstr "συνάρτηση PL/pgSQL %s γραμμή %d %s"
 msgid "PL/pgSQL function %s %s"
 msgstr "συνάρτηση PL/pgSQL %s %s"
 
-#. translator: last %s is a plpgsql statement type name
+#. translator: last %s is a plsql statement type name
 #: pl_exec.c:1271
 #, c-format
 msgid "PL/pgSQL function %s line %d at %s"

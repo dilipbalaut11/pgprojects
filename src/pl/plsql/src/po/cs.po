@@ -1,11 +1,11 @@
-# Czech message translation file for plpgsql
+# Czech message translation file for plsql
 # Copyright (C) 2012 PostgreSQL Global Development Group
 # This file is distributed under the same license as the PostgreSQL package.
 #
 # Tomáš Vondra <tv@fuzzy.cz>, 2012, 2013.
 msgid ""
 msgstr ""
-"Project-Id-Version: plpgsql-cs (PostgreSQL 9.3)\n"
+"Project-Id-Version: plsql-cs (PostgreSQL 9.3)\n"
 "Report-Msgid-Bugs-To: pgsql-bugs@lists.postgresql.org\n"
 "POT-Creation-Date: 2020-10-31 16:09+0000\n"
 "PO-Revision-Date: 2020-10-31 20:56+0100\n"
@@ -180,7 +180,7 @@ msgstr "PL/pgSQL funkce %s řádek %d %s"
 msgid "PL/pgSQL function %s %s"
 msgstr "PL/pgSQL funkce %s %s"
 
-#. translator: last %s is a plpgsql statement type name
+#. translator: last %s is a plsql statement type name
 #: pl_exec.c:1263
 #, c-format
 msgid "PL/pgSQL function %s line %d at %s"

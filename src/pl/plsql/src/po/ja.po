@@ -1,11 +1,11 @@
-# Japanese message translation file for plpgsql
+# Japanese message translation file for plsql
 # Copyright (C) 2022-2024 PostgreSQL Global Development Group
 # This file is distributed under the same license as the pg_archivecleanup (PostgreSQL) package.
 # HOTTA Michihde <hotta@net-newbie.com>, 2013
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: plpgsql (PostgreSQL 17)\n"
+"Project-Id-Version: plsql (PostgreSQL 17)\n"
 "Report-Msgid-Bugs-To: pgsql-bugs@lists.postgresql.org\n"
 "POT-Creation-Date: 2024-01-09 10:23+0900\n"
 "PO-Revision-Date: 2024-01-09 13:27+0900\n"
@@ -188,7 +188,7 @@ msgstr "PL/pgSQL関数%sの%d行目 %s"
 msgid "PL/pgSQL function %s %s"
 msgstr "PL/pgSQL関数%s - %s"
 
-#. translator: last %s is a plpgsql statement type name
+#. translator: last %s is a plsql statement type name
 #: pl_exec.c:1281
 #, c-format
 msgid "PL/pgSQL function %s line %d at %s"

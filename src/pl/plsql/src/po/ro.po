@@ -174,7 +174,7 @@ msgstr "PL/pgSQL funcție  \"%s\" linie %d %s"
 msgid "PL/pgSQL function \"%s\" %s"
 msgstr "PL/pgSQL funcție \"%s\" %s"
 
-#. translator: last %s is a plpgsql statement type name
+#. translator: last %s is a plsql statement type name
 #: pl_exec.c:815
 #, c-format
 msgid "PL/pgSQL function \"%s\" line %d at %s"

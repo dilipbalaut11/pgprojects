@@ -155,7 +155,7 @@ begin
       raise notice 'inner %', _j;
     end loop;
   end loop;
-end; $$ language plpgsql;
+end; $$ language plsql;
 
 select continue_test1();
 
@@ -166,7 +166,7 @@ begin
         continue;
     end;
 end;
-$$ language plpgsql;
+$$ language plsql;
 
 -- should fail: unlabeled EXIT is only legal inside a loop
 create function exit_error1() returns void as $$
@@ -175,7 +175,7 @@ begin
         exit;
     end;
 end;
-$$ language plpgsql;
+$$ language plsql;
 
 -- should fail: no such label
 create function continue_error2() returns void as $$
@@ -186,7 +186,7 @@ begin
         end loop;
     end;
 end;
-$$ language plpgsql;
+$$ language plsql;
 
 -- should fail: no such label
 create function exit_error2() returns void as $$
@@ -197,7 +197,7 @@ begin
         end loop;
     end;
 end;
-$$ language plpgsql;
+$$ language plsql;
 
 -- should fail: CONTINUE can't reference the label of a named block
 create function continue_error3() returns void as $$
@@ -209,7 +209,7 @@ begin
         end loop;
     end;
 end;
-$$ language plpgsql;
+$$ language plsql;
 
 -- On the other hand, EXIT *can* reference the label of a named block
 create function exit_block1() returns void as $$
@@ -222,7 +222,7 @@ begin
         end loop;
     end;
 end;
-$$ language plpgsql;
+$$ language plsql;
 
 select exit_block1();
 
@@ -241,7 +241,7 @@ begin
     exit flbl2;
   end loop;
 end blbl;
-$$ language plpgsql;
+$$ language plsql;
 
 select end_label1();
 
@@ -252,7 +252,7 @@ begin
     exit;
   end loop flbl1;
 end;
-$$ language plpgsql;
+$$ language plsql;
 
 -- should fail: end label does not match start label
 create function end_label3() returns void as $$
@@ -263,7 +263,7 @@ begin
     exit;
   end loop outer_label;
 end;
-$$ language plpgsql;
+$$ language plsql;
 
 -- should fail: end label on a block without a start label
 create function end_label4() returns void as $$
@@ -273,7 +273,7 @@ begin
     exit;
   end loop outer_label;
 end;
-$$ language plpgsql;
+$$ language plsql;
 
 -- unlabeled exit matches no blocks
 do $$
@@ -381,7 +381,7 @@ begin
 end$$;
 
 -- return out of a while
-create function return_from_while() returns int language plpgsql as $$
+create function return_from_while() returns int language plsql as $$
 declare i int := 0;
 begin
   while i < 10 loop
@@ -420,7 +420,7 @@ begin
     raise notice '% % %', a, b, c;
   end loop;
 end;
-$proc$ language plpgsql;
+$proc$ language plsql;
 
 select for_vect();
 
@@ -443,7 +443,7 @@ begin
       return 'eleven, twelve';
   end case;
 end;
-$$ language plpgsql immutable;
+$$ language plsql immutable;
 
 select case_test(1);
 select case_test(2);
@@ -463,7 +463,7 @@ exception
   when case_not_found then
     raise notice 'caught case_not_found % %', SQLSTATE, SQLERRM;
 end
-$$ language plpgsql;
+$$ language plsql;
 
 select catch();
 
@@ -480,7 +480,7 @@ begin
       return 'other';
   end case;
 end;
-$$ language plpgsql immutable;
+$$ language plsql immutable;
 
 select case_test(1);
 select case_test(2);
@@ -497,6 +497,6 @@ begin
       return 'other';
   end case;
 end;
-$$ language plpgsql immutable;
+$$ language plsql immutable;
 
 select case_comment(1);

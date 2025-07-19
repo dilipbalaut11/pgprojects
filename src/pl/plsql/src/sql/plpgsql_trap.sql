@@ -24,7 +24,7 @@ begin
 			x := -2;
 	end;
 	return x;
-end$$ language plpgsql;
+end$$ language plsql;
 
 select trap_zero_divide(50);
 select trap_zero_divide(0);
@@ -53,7 +53,7 @@ begin
 			x := -2;
 	end;
 	return x;
-end$$ language plpgsql;
+end$$ language plsql;
 
 select trap_matching_test(50);
 select trap_matching_test(0);
@@ -77,7 +77,7 @@ begin
   end;
   insert into foo values(x);
   return x;
-end$$ language plpgsql;
+end$$ language plsql;
 
 select subxact_rollback_semantics();
 select * from foo;
@@ -98,7 +98,7 @@ begin
   -- Abort transaction to abandon the statement_timeout setting.  Otherwise,
   -- the next top-level statement would be vulnerable to the timeout.
   raise exception 'end of function';
-end$$ language plpgsql;
+end$$ language plsql;
 
 begin;
 set statement_timeout to 1000;
@@ -119,7 +119,7 @@ begin
       x := x || '9012';
   end;
   return x;
-end$$ language plpgsql;
+end$$ language plsql;
 
 select test_variable_storage();
 
@@ -145,7 +145,7 @@ begin
 			return 0;
 	end;
 	return 1;
-end$$ language plpgsql;
+end$$ language plsql;
 
 create function trap_foreign_key_2() returns int as $$
 begin
@@ -157,7 +157,7 @@ begin
 			return 0;
 	end;
 	return 1;
-end$$ language plpgsql;
+end$$ language plsql;
 
 select trap_foreign_key(1);
 select trap_foreign_key(2);	-- detects FK violation

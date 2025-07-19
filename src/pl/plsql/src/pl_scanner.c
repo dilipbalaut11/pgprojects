@@ -9,7 +9,7 @@
  *
  *
  * IDENTIFICATION
- *	  src/pl/plpgsql/src/pl_scanner.c
+ *	  src/pl/plsql/src/pl_scanner.c
  *
  *-------------------------------------------------------------------------
  */
@@ -18,12 +18,12 @@
 #include "mb/pg_wchar.h"
 #include "parser/scanner.h"
 
-#include "plpgsql.h"
+#include "plsql.h"
 #include "pl_gram.h"			/* must be after parser/scanner.h */
 
 
 /* Klugy flag to tell scanner how to look up identifiers */
-IdentifierLookup plpgsql_IdentifierLookup = IDENTIFIER_LOOKUP_NORMAL;
+IdentifierLookup plsql_IdentifierLookup = IDENTIFIER_LOOKUP_NORMAL;
 
 /*
  * A word about keywords:
@@ -34,7 +34,7 @@ IdentifierLookup plpgsql_IdentifierLookup = IDENTIFIER_LOOKUP_NORMAL;
  * reserved keywords are passed to the core scanner, so they will be
  * recognized before (and instead of) any variable name.  Unreserved words
  * are checked for separately, usually after determining that the identifier
- * isn't a known variable name.  If plpgsql_IdentifierLookup is DECLARE then
+ * isn't a known variable name.  If plsql_IdentifierLookup is DECLARE then
  * no variable names will be recognized, so the unreserved words always work.
  * (Note in particular that this helps us avoid reserving keywords that are
  * only needed in DECLARE sections.)
@@ -100,7 +100,7 @@ typedef struct
 /*
  * Scanner working state.
  */
-struct plpgsql_yy_extra_type
+struct plsql_yy_extra_type
 {
 	/* The stuff the core lexer needs */
 	core_yy_extra_type core_yy_extra;
@@ -109,20 +109,20 @@ struct plpgsql_yy_extra_type
 	const char *scanorig;
 
 	/*
-	 * Current token's length (corresponds to plpgsql_yylval and
-	 * plpgsql_yylloc)
+	 * Current token's length (corresponds to plsql_yylval and
+	 * plsql_yylloc)
 	 */
-	int			plpgsql_yyleng;
+	int			plsql_yyleng;
 
-	/* Current token's code (corresponds to plpgsql_yylval and plpgsql_yylloc) */
-	int			plpgsql_yytoken;
+	/* Current token's code (corresponds to plsql_yylval and plsql_yylloc) */
+	int			plsql_yytoken;
 
 	/* Token pushback stack */
 	int			num_pushbacks;
 	int			pushback_token[MAX_PUSHBACKS];
 	TokenAuxData pushback_auxdata[MAX_PUSHBACKS];
 
-	/* State for plpgsql_location_to_lineno() */
+	/* State for plsql_location_to_lineno() */
 	const char *cur_line_start;
 	const char *cur_line_end;
 	int			cur_line_num;
@@ -139,7 +139,7 @@ static void location_lineno_init(yyscan_t yyscanner);
  */
 struct yyguts_t
 {
-	struct plpgsql_yy_extra_type *yyextra_r;
+	struct plsql_yy_extra_type *yyextra_r;
 };
 
 /* see scan.l */
@@ -152,12 +152,12 @@ struct yyguts_t
  * It is a wrapper around the core lexer, with the ability to recognize
  * PL/pgSQL variables and return them as special T_DATUM tokens.  If a
  * word or compound word does not match any variable name, or if matching
- * is turned off by plpgsql_IdentifierLookup, it is returned as
+ * is turned off by plsql_IdentifierLookup, it is returned as
  * T_WORD or T_CWORD respectively, or as an unreserved keyword if it
  * matches one of those.
  */
 int
-plpgsql_yylex(YYSTYPE *yylvalp, YYLTYPE *yyllocp, yyscan_t yyscanner)
+plsql_yylex(YYSTYPE *yylvalp, YYLTYPE *yyllocp, yyscan_t yyscanner)
 {
 	int			tok1;
 	TokenAuxData aux1;
@@ -190,7 +190,7 @@ plpgsql_yylex(YYSTYPE *yylvalp, YYLTYPE *yyllocp, yyscan_t yyscanner)
 					tok5 = internal_yylex(&aux5, yyscanner);
 					if (tok5 == IDENT)
 					{
-						if (plpgsql_parse_tripword(aux1.lval.str,
+						if (plsql_parse_tripword(aux1.lval.str,
 												   aux3.lval.str,
 												   aux5.lval.str,
 												   &aux1.lval.wdatum,
@@ -206,7 +206,7 @@ plpgsql_yylex(YYSTYPE *yylvalp, YYLTYPE *yyllocp, yyscan_t yyscanner)
 						/* not A.B.C, so just process A.B */
 						push_back_token(tok5, &aux5, yyscanner);
 						push_back_token(tok4, &aux4, yyscanner);
-						if (plpgsql_parse_dblword(aux1.lval.str,
+						if (plsql_parse_dblword(aux1.lval.str,
 												  aux3.lval.str,
 												  &aux1.lval.wdatum,
 												  &aux1.lval.cword))
@@ -221,7 +221,7 @@ plpgsql_yylex(YYSTYPE *yylvalp, YYLTYPE *yyllocp, yyscan_t yyscanner)
 				{
 					/* not A.B.C, so just process A.B */
 					push_back_token(tok4, &aux4, yyscanner);
-					if (plpgsql_parse_dblword(aux1.lval.str,
+					if (plsql_parse_dblword(aux1.lval.str,
 											  aux3.lval.str,
 											  &aux1.lval.wdatum,
 											  &aux1.lval.cword))
@@ -237,7 +237,7 @@ plpgsql_yylex(YYSTYPE *yylvalp, YYLTYPE *yyllocp, yyscan_t yyscanner)
 				/* not A.B, so just process A */
 				push_back_token(tok3, &aux3, yyscanner);
 				push_back_token(tok2, &aux2, yyscanner);
-				if (plpgsql_parse_word(aux1.lval.str,
+				if (plsql_parse_word(aux1.lval.str,
 									   yyextra->core_yy_extra.scanbuf + aux1.lloc,
 									   true,
 									   &aux1.lval.wdatum,
@@ -265,21 +265,21 @@ plpgsql_yylex(YYSTYPE *yylvalp, YYLTYPE *yyllocp, yyscan_t yyscanner)
 			 * we are at start of statement and the next token isn't
 			 * assignment or '['.  In that case, it couldn't validly be a
 			 * variable name, and skipping the lookup allows variable names to
-			 * be used that would conflict with plpgsql or core keywords that
+			 * be used that would conflict with plsql or core keywords that
 			 * introduce statements (e.g., "comment").  Without this special
 			 * logic, every statement-introducing keyword would effectively be
 			 * reserved in PL/pgSQL, which would be unpleasant.
 			 *
 			 * If it isn't a variable name, try to match against unreserved
-			 * plpgsql keywords.  If not one of those either, it's T_WORD.
+			 * plsql keywords.  If not one of those either, it's T_WORD.
 			 *
-			 * Note: we must call plpgsql_parse_word even if we don't want to
+			 * Note: we must call plsql_parse_word even if we don't want to
 			 * do variable lookup, because it sets up aux1.lval.word for the
 			 * non-variable cases.
 			 */
-			if (plpgsql_parse_word(aux1.lval.str,
+			if (plsql_parse_word(aux1.lval.str,
 								   yyextra->core_yy_extra.scanbuf + aux1.lloc,
-								   (!AT_STMT_START(yyextra->plpgsql_yytoken) ||
+								   (!AT_STMT_START(yyextra->plsql_yytoken) ||
 									(tok2 == '=' || tok2 == COLON_EQUALS ||
 									 tok2 == '[')),
 								   &aux1.lval.wdatum,
@@ -300,33 +300,33 @@ plpgsql_yylex(YYSTYPE *yylvalp, YYLTYPE *yyllocp, yyscan_t yyscanner)
 	else
 	{
 		/*
-		 * Not a potential plpgsql variable name, just return the data.
+		 * Not a potential plsql variable name, just return the data.
 		 *
 		 * Note that we also come through here if the grammar pushed back a
 		 * T_DATUM, T_CWORD, T_WORD, or unreserved-keyword token returned by a
 		 * previous lookup cycle; thus, pushbacks do not incur extra lookup
 		 * work, since we'll never do the above code twice for the same token.
 		 * This property also makes it safe to rely on the old value of
-		 * plpgsql_yytoken in the is-this-start-of-statement test above.
+		 * plsql_yytoken in the is-this-start-of-statement test above.
 		 */
 	}
 
 	*yylvalp = aux1.lval;
 	*yyllocp = aux1.lloc;
-	yyextra->plpgsql_yyleng = aux1.leng;
-	yyextra->plpgsql_yytoken = tok1;
+	yyextra->plsql_yyleng = aux1.leng;
+	yyextra->plsql_yytoken = tok1;
 	return tok1;
 }
 
 /*
- * Return the length of the token last returned by plpgsql_yylex().
+ * Return the length of the token last returned by plsql_yylex().
  *
  * In the case of compound tokens, the length includes all the parts.
  */
 int
-plpgsql_token_length(yyscan_t yyscanner)
+plsql_token_length(yyscan_t yyscanner)
 {
-	return yyextra->plpgsql_yyleng;
+	return yyextra->plsql_yyleng;
 }
 
 /*
@@ -392,19 +392,19 @@ push_back_token(int token, TokenAuxData *auxdata, yyscan_t yyscanner)
 }
 
 /*
- * Push back a single token to be re-read by next plpgsql_yylex() call.
+ * Push back a single token to be re-read by next plsql_yylex() call.
  *
  * NOTE: this does not cause yylval or yylloc to "back up".  Also, it
  * is not a good idea to push back a token code other than what you read.
  */
 void
-plpgsql_push_back_token(int token, YYSTYPE *yylvalp, YYLTYPE *yyllocp, yyscan_t yyscanner)
+plsql_push_back_token(int token, YYSTYPE *yylvalp, YYLTYPE *yyllocp, yyscan_t yyscanner)
 {
 	TokenAuxData auxdata;
 
 	auxdata.lval = *yylvalp;
 	auxdata.lloc = *yyllocp;
-	auxdata.leng = yyextra->plpgsql_yyleng;
+	auxdata.leng = yyextra->plsql_yyleng;
 	push_back_token(token, &auxdata, yyscanner);
 }
 
@@ -415,7 +415,7 @@ plpgsql_push_back_token(int token, YYSTYPE *yylvalp, YYLTYPE *yyllocp, yyscan_t 
  * do not need to offer that data here.)
  */
 bool
-plpgsql_token_is_unreserved_keyword(int token)
+plsql_token_is_unreserved_keyword(int token)
 {
 	int			i;
 
@@ -432,7 +432,7 @@ plpgsql_token_is_unreserved_keyword(int token)
  * (not including) endlocation onto the existing contents of "buf".
  */
 void
-plpgsql_append_source_text(StringInfo buf,
+plsql_append_source_text(StringInfo buf,
 						   int startlocation, int endlocation,
 						   yyscan_t yyscanner)
 {
@@ -449,7 +449,7 @@ plpgsql_append_source_text(StringInfo buf,
  * be returned as IDENT. Reserved keywords are resolved as usual.
  */
 int
-plpgsql_peek(yyscan_t yyscanner)
+plsql_peek(yyscan_t yyscanner)
 {
 	int			tok1;
 	TokenAuxData aux1;
@@ -468,7 +468,7 @@ plpgsql_peek(yyscan_t yyscanner)
  * be returned as IDENT. Reserved keywords are resolved as usual.
  */
 void
-plpgsql_peek2(int *tok1_p, int *tok2_p, int *tok1_loc, int *tok2_loc, yyscan_t yyscanner)
+plsql_peek2(int *tok1_p, int *tok2_p, int *tok1_loc, int *tok2_loc, yyscan_t yyscanner)
 {
 	int			tok1,
 				tok2;
@@ -490,18 +490,18 @@ plpgsql_peek2(int *tok1_p, int *tok2_p, int *tok1_loc, int *tok2_loc, yyscan_t y
 }
 
 /*
- * plpgsql_scanner_errposition
+ * plsql_scanner_errposition
  *		Report an error cursor position, if possible.
  *
  * This is expected to be used within an ereport() call.  The return value
  * is a dummy (always 0, in fact).
  *
  * Note that this can only be used for messages emitted during initial
- * parsing of a plpgsql function, since it requires the scanorig string
+ * parsing of a plsql function, since it requires the scanorig string
  * to still be available.
  */
 int
-plpgsql_scanner_errposition(int location, yyscan_t yyscanner)
+plsql_scanner_errposition(int location, yyscan_t yyscanner)
 {
 	int			pos;
 
@@ -517,11 +517,11 @@ plpgsql_scanner_errposition(int location, yyscan_t yyscanner)
 }
 
 /*
- * plpgsql_yyerror
+ * plsql_yyerror
  *		Report a lexer or grammar error.
  *
  * The message's cursor position refers to the current token (the one
- * last returned by plpgsql_yylex()).
+ * last returned by plsql_yylex()).
  * This is OK for syntax error messages from the Bison parser, because Bison
  * parsers report error as soon as the first unparsable token is reached.
  * Beware of using yyerror for other purposes, as the cursor position might
@@ -531,7 +531,7 @@ plpgsql_scanner_errposition(int location, yyscan_t yyscanner)
  * yyparse(), but it is not used here.)
  */
 void
-plpgsql_yyerror(YYLTYPE *yyllocp, PLpgSQL_stmt_block **plpgsql_parse_result_p, yyscan_t yyscanner, const char *message)
+plsql_yyerror(YYLTYPE *yyllocp, PLSQL_stmt_block **plsql_parse_result_p, yyscan_t yyscanner, const char *message)
 {
 	char	   *yytext = yyextra->core_yy_extra.scanbuf + *yyllocp;
 
@@ -541,7 +541,7 @@ plpgsql_yyerror(YYLTYPE *yyllocp, PLpgSQL_stmt_block **plpgsql_parse_result_p, y
 				(errcode(ERRCODE_SYNTAX_ERROR),
 		/* translator: %s is typically the translation of "syntax error" */
 				 errmsg("%s at end of input", _(message)),
-				 plpgsql_scanner_errposition(*yyllocp, yyscanner)));
+				 plsql_scanner_errposition(*yyllocp, yyscanner)));
 	}
 	else
 	{
@@ -551,13 +551,13 @@ plpgsql_yyerror(YYLTYPE *yyllocp, PLpgSQL_stmt_block **plpgsql_parse_result_p, y
 		 * only the single token here.  This modifies scanbuf but we no longer
 		 * care about that.
 		 */
-		yytext[yyextra->plpgsql_yyleng] = '\0';
+		yytext[yyextra->plsql_yyleng] = '\0';
 
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 		/* translator: first %s is typically the translation of "syntax error" */
 				 errmsg("%s at or near \"%s\"", _(message), yytext),
-				 plpgsql_scanner_errposition(*yyllocp, yyscanner)));
+				 plsql_scanner_errposition(*yyllocp, yyscanner)));
 	}
 }
 
@@ -570,7 +570,7 @@ plpgsql_yyerror(YYLTYPE *yyllocp, PLpgSQL_stmt_block **plpgsql_parse_result_p, y
  * of the "current" line.
  */
 int
-plpgsql_location_to_lineno(int location, yyscan_t yyscanner)
+plsql_location_to_lineno(int location, yyscan_t yyscanner)
 {
 	const char *loc;
 
@@ -592,7 +592,7 @@ plpgsql_location_to_lineno(int location, yyscan_t yyscanner)
 	return yyextra->cur_line_num;
 }
 
-/* initialize or reset the state for plpgsql_location_to_lineno */
+/* initialize or reset the state for plsql_location_to_lineno */
 static void
 location_lineno_init(yyscan_t yyscanner)
 {
@@ -604,7 +604,7 @@ location_lineno_init(yyscan_t yyscanner)
 
 /* return the most recently computed lineno */
 int
-plpgsql_latest_lineno(yyscan_t yyscanner)
+plsql_latest_lineno(yyscan_t yyscanner)
 {
 	return yyextra->cur_line_num;
 }
@@ -613,15 +613,15 @@ plpgsql_latest_lineno(yyscan_t yyscanner)
 /*
  * Called before any actual parsing is done
  *
- * Note: the passed "str" must remain valid until plpgsql_scanner_finish().
+ * Note: the passed "str" must remain valid until plsql_scanner_finish().
  * Although it is not fed directly to flex, we need the original string
  * to cite in error messages.
  */
 yyscan_t
-plpgsql_scanner_init(const char *str)
+plsql_scanner_init(const char *str)
 {
 	yyscan_t	yyscanner;
-	struct plpgsql_yy_extra_type *yyext = palloc0_object(struct plpgsql_yy_extra_type);
+	struct plsql_yy_extra_type *yyext = palloc0_object(struct plsql_yy_extra_type);
 
 	/* Start up the core scanner */
 	yyscanner = scanner_init(str, (core_yy_extra_type *) yyext,
@@ -636,8 +636,8 @@ plpgsql_scanner_init(const char *str)
 	yyext->scanorig = str;
 
 	/* Other setup */
-	plpgsql_IdentifierLookup = IDENTIFIER_LOOKUP_NORMAL;
-	yyext->plpgsql_yytoken = 0;
+	plsql_IdentifierLookup = IDENTIFIER_LOOKUP_NORMAL;
+	yyext->plsql_yytoken = 0;
 
 	yyext->num_pushbacks = 0;
 
@@ -647,10 +647,10 @@ plpgsql_scanner_init(const char *str)
 }
 
 /*
- * Called after parsing is done to clean up after plpgsql_scanner_init()
+ * Called after parsing is done to clean up after plsql_scanner_init()
  */
 void
-plpgsql_scanner_finish(yyscan_t yyscanner)
+plsql_scanner_finish(yyscan_t yyscanner)
 {
 	/* release storage */
 	scanner_finish(yyscanner);

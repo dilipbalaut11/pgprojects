@@ -1,10 +1,10 @@
-# Russian message translation file for plpgsql
+# Russian message translation file for plsql
 # Copyright (C) 2012-2016 PostgreSQL Global Development Group
 # This file is distributed under the same license as the PostgreSQL package.
 # Alexander Lakhin <exclusion@gmail.com>, 2012-2017, 2018, 2019, 2020, 2021, 2022, 2024.
 msgid ""
 msgstr ""
-"Project-Id-Version: plpgsql (PostgreSQL current)\n"
+"Project-Id-Version: plsql (PostgreSQL current)\n"
 "Report-Msgid-Bugs-To: pgsql-bugs@lists.postgresql.org\n"
 "POT-Creation-Date: 2024-09-02 09:29+0300\n"
 "PO-Revision-Date: 2024-09-04 20:00+0300\n"
@@ -210,7 +210,7 @@ msgstr "функция PL/pgSQL %s, строка %d, %s"
 msgid "PL/pgSQL function %s %s"
 msgstr "функция PL/pgSQL %s, %s"
 
-#. translator: last %s is a plpgsql statement type name
+#. translator: last %s is a plsql statement type name
 #: pl_exec.c:1282
 #, c-format
 msgid "PL/pgSQL function %s line %d at %s"

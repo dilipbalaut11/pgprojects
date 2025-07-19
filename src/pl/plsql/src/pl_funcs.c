@@ -8,14 +8,14 @@
  *
  *
  * IDENTIFICATION
- *	  src/pl/plpgsql/src/pl_funcs.c
+ *	  src/pl/plsql/src/pl_funcs.c
  *
  *-------------------------------------------------------------------------
  */
 
 #include "postgres.h"
 
-#include "plpgsql.h"
+#include "plsql.h"
 #include "utils/memutils.h"
 
 /* ----------
@@ -23,81 +23,81 @@
  *
  * The namespace structure actually forms a tree, of which only one linear
  * list or "chain" (from the youngest item to the root) is accessible from
- * any one plpgsql statement.  During initial parsing of a function, ns_top
+ * any one plsql statement.  During initial parsing of a function, ns_top
  * points to the youngest item accessible from the block currently being
  * parsed.  We store the entire tree, however, since at runtime we will need
  * to access the chain that's relevant to any one statement.
  *
- * Block boundaries in the namespace chain are marked by PLPGSQL_NSTYPE_LABEL
+ * Block boundaries in the namespace chain are marked by PLSQL_NSTYPE_LABEL
  * items.
  * ----------
  */
-static PLpgSQL_nsitem *ns_top = NULL;
+static PLSQL_nsitem *ns_top = NULL;
 
 
 /* ----------
- * plpgsql_ns_init			Initialize namespace processing for a new function
+ * plsql_ns_init			Initialize namespace processing for a new function
  * ----------
  */
 void
-plpgsql_ns_init(void)
+plsql_ns_init(void)
 {
 	ns_top = NULL;
 }
 
 
 /* ----------
- * plpgsql_ns_push			Create a new namespace level
+ * plsql_ns_push			Create a new namespace level
  * ----------
  */
 void
-plpgsql_ns_push(const char *label, PLpgSQL_label_type label_type)
+plsql_ns_push(const char *label, PLSQL_label_type label_type)
 {
 	if (label == NULL)
 		label = "";
-	plpgsql_ns_additem(PLPGSQL_NSTYPE_LABEL, (int) label_type, label);
+	plsql_ns_additem(PLSQL_NSTYPE_LABEL, (int) label_type, label);
 }
 
 
 /* ----------
- * plpgsql_ns_pop			Pop entries back to (and including) the last label
+ * plsql_ns_pop			Pop entries back to (and including) the last label
  * ----------
  */
 void
-plpgsql_ns_pop(void)
+plsql_ns_pop(void)
 {
 	Assert(ns_top != NULL);
-	while (ns_top->itemtype != PLPGSQL_NSTYPE_LABEL)
+	while (ns_top->itemtype != PLSQL_NSTYPE_LABEL)
 		ns_top = ns_top->prev;
 	ns_top = ns_top->prev;
 }
 
 
 /* ----------
- * plpgsql_ns_top			Fetch the current namespace chain end
+ * plsql_ns_top			Fetch the current namespace chain end
  * ----------
  */
-PLpgSQL_nsitem *
-plpgsql_ns_top(void)
+PLSQL_nsitem *
+plsql_ns_top(void)
 {
 	return ns_top;
 }
 
 
 /* ----------
- * plpgsql_ns_additem		Add an item to the current namespace chain
+ * plsql_ns_additem		Add an item to the current namespace chain
  * ----------
  */
 void
-plpgsql_ns_additem(PLpgSQL_nsitem_type itemtype, int itemno, const char *name)
+plsql_ns_additem(PLSQL_nsitem_type itemtype, int itemno, const char *name)
 {
-	PLpgSQL_nsitem *nse;
+	PLSQL_nsitem *nse;
 
 	Assert(name != NULL);
 	/* first item added must be a label */
-	Assert(ns_top != NULL || itemtype == PLPGSQL_NSTYPE_LABEL);
+	Assert(ns_top != NULL || itemtype == PLSQL_NSTYPE_LABEL);
 
-	nse = palloc(offsetof(PLpgSQL_nsitem, name) + strlen(name) + 1);
+	nse = palloc(offsetof(PLSQL_nsitem, name) + strlen(name) + 1);
 	nse->itemtype = itemtype;
 	nse->itemno = itemno;
 	nse->prev = ns_top;
@@ -107,7 +107,7 @@ plpgsql_ns_additem(PLpgSQL_nsitem_type itemtype, int itemno, const char *name)
 
 
 /* ----------
- * plpgsql_ns_lookup		Lookup an identifier in the given namespace chain
+ * plsql_ns_lookup		Lookup an identifier in the given namespace chain
  *
  * Note that this only searches for variables, not labels.
  *
@@ -126,25 +126,25 @@ plpgsql_ns_additem(PLpgSQL_nsitem_type itemtype, int itemno, const char *name)
  * scalar variables.
  * ----------
  */
-PLpgSQL_nsitem *
-plpgsql_ns_lookup(PLpgSQL_nsitem *ns_cur, bool localmode,
+PLSQL_nsitem *
+plsql_ns_lookup(PLSQL_nsitem *ns_cur, bool localmode,
 				  const char *name1, const char *name2, const char *name3,
 				  int *names_used)
 {
 	/* Outer loop iterates once per block level in the namespace chain */
 	while (ns_cur != NULL)
 	{
-		PLpgSQL_nsitem *nsitem;
+		PLSQL_nsitem *nsitem;
 
 		/* Check this level for unqualified match to variable name */
 		for (nsitem = ns_cur;
-			 nsitem->itemtype != PLPGSQL_NSTYPE_LABEL;
+			 nsitem->itemtype != PLSQL_NSTYPE_LABEL;
 			 nsitem = nsitem->prev)
 		{
 			if (strcmp(nsitem->name, name1) == 0)
 			{
 				if (name2 == NULL ||
-					nsitem->itemtype != PLPGSQL_NSTYPE_VAR)
+					nsitem->itemtype != PLSQL_NSTYPE_VAR)
 				{
 					if (names_used)
 						*names_used = 1;
@@ -158,13 +158,13 @@ plpgsql_ns_lookup(PLpgSQL_nsitem *ns_cur, bool localmode,
 			strcmp(nsitem->name, name1) == 0)
 		{
 			for (nsitem = ns_cur;
-				 nsitem->itemtype != PLPGSQL_NSTYPE_LABEL;
+				 nsitem->itemtype != PLSQL_NSTYPE_LABEL;
 				 nsitem = nsitem->prev)
 			{
 				if (strcmp(nsitem->name, name2) == 0)
 				{
 					if (name3 == NULL ||
-						nsitem->itemtype != PLPGSQL_NSTYPE_VAR)
+						nsitem->itemtype != PLSQL_NSTYPE_VAR)
 					{
 						if (names_used)
 							*names_used = 2;
@@ -188,15 +188,15 @@ plpgsql_ns_lookup(PLpgSQL_nsitem *ns_cur, bool localmode,
 
 
 /* ----------
- * plpgsql_ns_lookup_label		Lookup a label in the given namespace chain
+ * plsql_ns_lookup_label		Lookup a label in the given namespace chain
  * ----------
  */
-PLpgSQL_nsitem *
-plpgsql_ns_lookup_label(PLpgSQL_nsitem *ns_cur, const char *name)
+PLSQL_nsitem *
+plsql_ns_lookup_label(PLSQL_nsitem *ns_cur, const char *name)
 {
 	while (ns_cur != NULL)
 	{
-		if (ns_cur->itemtype == PLPGSQL_NSTYPE_LABEL &&
+		if (ns_cur->itemtype == PLSQL_NSTYPE_LABEL &&
 			strcmp(ns_cur->name, name) == 0)
 			return ns_cur;
 		ns_cur = ns_cur->prev;
@@ -207,16 +207,16 @@ plpgsql_ns_lookup_label(PLpgSQL_nsitem *ns_cur, const char *name)
 
 
 /* ----------
- * plpgsql_ns_find_nearest_loop		Find innermost loop label in namespace chain
+ * plsql_ns_find_nearest_loop		Find innermost loop label in namespace chain
  * ----------
  */
-PLpgSQL_nsitem *
-plpgsql_ns_find_nearest_loop(PLpgSQL_nsitem *ns_cur)
+PLSQL_nsitem *
+plsql_ns_find_nearest_loop(PLSQL_nsitem *ns_cur)
 {
 	while (ns_cur != NULL)
 	{
-		if (ns_cur->itemtype == PLPGSQL_NSTYPE_LABEL &&
-			ns_cur->itemno == PLPGSQL_LABEL_LOOP)
+		if (ns_cur->itemtype == PLSQL_NSTYPE_LABEL &&
+			ns_cur->itemno == PLSQL_LABEL_LOOP)
 			return ns_cur;
 		ns_cur = ns_cur->prev;
 	}
@@ -229,64 +229,64 @@ plpgsql_ns_find_nearest_loop(PLpgSQL_nsitem *ns_cur)
  * Statement type as a string, for use in error messages etc.
  */
 const char *
-plpgsql_stmt_typename(PLpgSQL_stmt *stmt)
+plsql_stmt_typename(PLSQL_stmt *stmt)
 {
 	switch (stmt->cmd_type)
 	{
-		case PLPGSQL_STMT_BLOCK:
+		case PLSQL_STMT_BLOCK:
 			return _("statement block");
-		case PLPGSQL_STMT_ASSIGN:
+		case PLSQL_STMT_ASSIGN:
 			return _("assignment");
-		case PLPGSQL_STMT_IF:
+		case PLSQL_STMT_IF:
 			return "IF";
-		case PLPGSQL_STMT_CASE:
+		case PLSQL_STMT_CASE:
 			return "CASE";
-		case PLPGSQL_STMT_LOOP:
+		case PLSQL_STMT_LOOP:
 			return "LOOP";
-		case PLPGSQL_STMT_WHILE:
+		case PLSQL_STMT_WHILE:
 			return "WHILE";
-		case PLPGSQL_STMT_FORI:
+		case PLSQL_STMT_FORI:
 			return _("FOR with integer loop variable");
-		case PLPGSQL_STMT_FORS:
+		case PLSQL_STMT_FORS:
 			return _("FOR over SELECT rows");
-		case PLPGSQL_STMT_FORC:
+		case PLSQL_STMT_FORC:
 			return _("FOR over cursor");
-		case PLPGSQL_STMT_FOREACH_A:
+		case PLSQL_STMT_FOREACH_A:
 			return _("FOREACH over array");
-		case PLPGSQL_STMT_EXIT:
-			return ((PLpgSQL_stmt_exit *) stmt)->is_exit ? "EXIT" : "CONTINUE";
-		case PLPGSQL_STMT_RETURN:
+		case PLSQL_STMT_EXIT:
+			return ((PLSQL_stmt_exit *) stmt)->is_exit ? "EXIT" : "CONTINUE";
+		case PLSQL_STMT_RETURN:
 			return "RETURN";
-		case PLPGSQL_STMT_RETURN_NEXT:
+		case PLSQL_STMT_RETURN_NEXT:
 			return "RETURN NEXT";
-		case PLPGSQL_STMT_RETURN_QUERY:
+		case PLSQL_STMT_RETURN_QUERY:
 			return "RETURN QUERY";
-		case PLPGSQL_STMT_RAISE:
+		case PLSQL_STMT_RAISE:
 			return "RAISE";
-		case PLPGSQL_STMT_ASSERT:
+		case PLSQL_STMT_ASSERT:
 			return "ASSERT";
-		case PLPGSQL_STMT_EXECSQL:
+		case PLSQL_STMT_EXECSQL:
 			return _("SQL statement");
-		case PLPGSQL_STMT_DYNEXECUTE:
+		case PLSQL_STMT_DYNEXECUTE:
 			return "EXECUTE";
-		case PLPGSQL_STMT_DYNFORS:
+		case PLSQL_STMT_DYNFORS:
 			return _("FOR over EXECUTE statement");
-		case PLPGSQL_STMT_GETDIAG:
-			return ((PLpgSQL_stmt_getdiag *) stmt)->is_stacked ?
+		case PLSQL_STMT_GETDIAG:
+			return ((PLSQL_stmt_getdiag *) stmt)->is_stacked ?
 				"GET STACKED DIAGNOSTICS" : "GET DIAGNOSTICS";
-		case PLPGSQL_STMT_OPEN:
+		case PLSQL_STMT_OPEN:
 			return "OPEN";
-		case PLPGSQL_STMT_FETCH:
-			return ((PLpgSQL_stmt_fetch *) stmt)->is_move ? "MOVE" : "FETCH";
-		case PLPGSQL_STMT_CLOSE:
+		case PLSQL_STMT_FETCH:
+			return ((PLSQL_stmt_fetch *) stmt)->is_move ? "MOVE" : "FETCH";
+		case PLSQL_STMT_CLOSE:
 			return "CLOSE";
-		case PLPGSQL_STMT_PERFORM:
+		case PLSQL_STMT_PERFORM:
 			return "PERFORM";
-		case PLPGSQL_STMT_CALL:
-			return ((PLpgSQL_stmt_call *) stmt)->is_call ? "CALL" : "DO";
-		case PLPGSQL_STMT_COMMIT:
+		case PLSQL_STMT_CALL:
+			return ((PLSQL_stmt_call *) stmt)->is_call ? "CALL" : "DO";
+		case PLSQL_STMT_COMMIT:
 			return "COMMIT";
-		case PLPGSQL_STMT_ROLLBACK:
+		case PLSQL_STMT_ROLLBACK:
 			return "ROLLBACK";
 	}
 
@@ -297,35 +297,35 @@ plpgsql_stmt_typename(PLpgSQL_stmt *stmt)
  * GET DIAGNOSTICS item name as a string, for use in error messages etc.
  */
 const char *
-plpgsql_getdiag_kindname(PLpgSQL_getdiag_kind kind)
+plsql_getdiag_kindname(PLSQL_getdiag_kind kind)
 {
 	switch (kind)
 	{
-		case PLPGSQL_GETDIAG_ROW_COUNT:
+		case PLSQL_GETDIAG_ROW_COUNT:
 			return "ROW_COUNT";
-		case PLPGSQL_GETDIAG_ROUTINE_OID:
+		case PLSQL_GETDIAG_ROUTINE_OID:
 			return "PG_ROUTINE_OID";
-		case PLPGSQL_GETDIAG_CONTEXT:
+		case PLSQL_GETDIAG_CONTEXT:
 			return "PG_CONTEXT";
-		case PLPGSQL_GETDIAG_ERROR_CONTEXT:
+		case PLSQL_GETDIAG_ERROR_CONTEXT:
 			return "PG_EXCEPTION_CONTEXT";
-		case PLPGSQL_GETDIAG_ERROR_DETAIL:
+		case PLSQL_GETDIAG_ERROR_DETAIL:
 			return "PG_EXCEPTION_DETAIL";
-		case PLPGSQL_GETDIAG_ERROR_HINT:
+		case PLSQL_GETDIAG_ERROR_HINT:
 			return "PG_EXCEPTION_HINT";
-		case PLPGSQL_GETDIAG_RETURNED_SQLSTATE:
+		case PLSQL_GETDIAG_RETURNED_SQLSTATE:
 			return "RETURNED_SQLSTATE";
-		case PLPGSQL_GETDIAG_COLUMN_NAME:
+		case PLSQL_GETDIAG_COLUMN_NAME:
 			return "COLUMN_NAME";
-		case PLPGSQL_GETDIAG_CONSTRAINT_NAME:
+		case PLSQL_GETDIAG_CONSTRAINT_NAME:
 			return "CONSTRAINT_NAME";
-		case PLPGSQL_GETDIAG_DATATYPE_NAME:
+		case PLSQL_GETDIAG_DATATYPE_NAME:
 			return "PG_DATATYPE_NAME";
-		case PLPGSQL_GETDIAG_MESSAGE_TEXT:
+		case PLSQL_GETDIAG_MESSAGE_TEXT:
 			return "MESSAGE_TEXT";
-		case PLPGSQL_GETDIAG_TABLE_NAME:
+		case PLSQL_GETDIAG_TABLE_NAME:
 			return "TABLE_NAME";
-		case PLPGSQL_GETDIAG_SCHEMA_NAME:
+		case PLSQL_GETDIAG_SCHEMA_NAME:
 			return "SCHEMA_NAME";
 	}
 
@@ -343,12 +343,12 @@ plpgsql_getdiag_kindname(PLpgSQL_getdiag_kind kind)
  * (The recursion should be started by invoking the statement callback
  * on function->action.)  The statement callback should do any
  * statement-type-specific action it needs, then recurse by calling
- * plpgsql_statement_tree_walker().  The expression callback can be a
+ * plsql_statement_tree_walker().  The expression callback can be a
  * no-op if no per-expression behavior is needed.
  **********************************************************************/
-typedef void (*plpgsql_stmt_walker_callback) (PLpgSQL_stmt *stmt,
+typedef void (*plsql_stmt_walker_callback) (PLSQL_stmt *stmt,
 											  void *context);
-typedef void (*plpgsql_expr_walker_callback) (PLpgSQL_expr *expr,
+typedef void (*plsql_expr_walker_callback) (PLSQL_expr *expr,
 											  void *context);
 
 /*
@@ -356,31 +356,31 @@ typedef void (*plpgsql_expr_walker_callback) (PLpgSQL_expr *expr,
  * position that a pointer to struct is incompatible with "void *".  Instead,
  * silence related compiler warnings using casts in this macro wrapper.
  */
-#define plpgsql_statement_tree_walker(s, sw, ew, c) \
-	plpgsql_statement_tree_walker_impl(s, (plpgsql_stmt_walker_callback) (sw), \
-									   (plpgsql_expr_walker_callback) (ew), c)
+#define plsql_statement_tree_walker(s, sw, ew, c) \
+	plsql_statement_tree_walker_impl(s, (plsql_stmt_walker_callback) (sw), \
+									   (plsql_expr_walker_callback) (ew), c)
 
 static void
-plpgsql_statement_tree_walker_impl(PLpgSQL_stmt *stmt,
-								   plpgsql_stmt_walker_callback stmt_callback,
-								   plpgsql_expr_walker_callback expr_callback,
+plsql_statement_tree_walker_impl(PLSQL_stmt *stmt,
+								   plsql_stmt_walker_callback stmt_callback,
+								   plsql_expr_walker_callback expr_callback,
 								   void *context)
 {
 #define S_WALK(st) stmt_callback(st, context)
 #define E_WALK(ex) expr_callback(ex, context)
-#define S_LIST_WALK(lst) foreach_ptr(PLpgSQL_stmt, st, lst) S_WALK(st)
-#define E_LIST_WALK(lst) foreach_ptr(PLpgSQL_expr, ex, lst) E_WALK(ex)
+#define S_LIST_WALK(lst) foreach_ptr(PLSQL_stmt, st, lst) S_WALK(st)
+#define E_LIST_WALK(lst) foreach_ptr(PLSQL_expr, ex, lst) E_WALK(ex)
 
 	switch (stmt->cmd_type)
 	{
-		case PLPGSQL_STMT_BLOCK:
+		case PLSQL_STMT_BLOCK:
 			{
-				PLpgSQL_stmt_block *bstmt = (PLpgSQL_stmt_block *) stmt;
+				PLSQL_stmt_block *bstmt = (PLSQL_stmt_block *) stmt;
 
 				S_LIST_WALK(bstmt->body);
 				if (bstmt->exceptions)
 				{
-					foreach_ptr(PLpgSQL_exception, exc, bstmt->exceptions->exc_list)
+					foreach_ptr(PLSQL_exception, exc, bstmt->exceptions->exc_list)
 					{
 						/* conditions list has no interesting sub-structure */
 						S_LIST_WALK(exc->action);
@@ -388,20 +388,20 @@ plpgsql_statement_tree_walker_impl(PLpgSQL_stmt *stmt,
 				}
 				break;
 			}
-		case PLPGSQL_STMT_ASSIGN:
+		case PLSQL_STMT_ASSIGN:
 			{
-				PLpgSQL_stmt_assign *astmt = (PLpgSQL_stmt_assign *) stmt;
+				PLSQL_stmt_assign *astmt = (PLSQL_stmt_assign *) stmt;
 
 				E_WALK(astmt->expr);
 				break;
 			}
-		case PLPGSQL_STMT_IF:
+		case PLSQL_STMT_IF:
 			{
-				PLpgSQL_stmt_if *ifstmt = (PLpgSQL_stmt_if *) stmt;
+				PLSQL_stmt_if *ifstmt = (PLSQL_stmt_if *) stmt;
 
 				E_WALK(ifstmt->cond);
 				S_LIST_WALK(ifstmt->then_body);
-				foreach_ptr(PLpgSQL_if_elsif, elif, ifstmt->elsif_list)
+				foreach_ptr(PLSQL_if_elsif, elif, ifstmt->elsif_list)
 				{
 					E_WALK(elif->cond);
 					S_LIST_WALK(elif->stmts);
@@ -409,12 +409,12 @@ plpgsql_statement_tree_walker_impl(PLpgSQL_stmt *stmt,
 				S_LIST_WALK(ifstmt->else_body);
 				break;
 			}
-		case PLPGSQL_STMT_CASE:
+		case PLSQL_STMT_CASE:
 			{
-				PLpgSQL_stmt_case *cstmt = (PLpgSQL_stmt_case *) stmt;
+				PLSQL_stmt_case *cstmt = (PLSQL_stmt_case *) stmt;
 
 				E_WALK(cstmt->t_expr);
-				foreach_ptr(PLpgSQL_case_when, cwt, cstmt->case_when_list)
+				foreach_ptr(PLSQL_case_when, cwt, cstmt->case_when_list)
 				{
 					E_WALK(cwt->expr);
 					S_LIST_WALK(cwt->stmts);
@@ -422,24 +422,24 @@ plpgsql_statement_tree_walker_impl(PLpgSQL_stmt *stmt,
 				S_LIST_WALK(cstmt->else_stmts);
 				break;
 			}
-		case PLPGSQL_STMT_LOOP:
+		case PLSQL_STMT_LOOP:
 			{
-				PLpgSQL_stmt_loop *lstmt = (PLpgSQL_stmt_loop *) stmt;
+				PLSQL_stmt_loop *lstmt = (PLSQL_stmt_loop *) stmt;
 
 				S_LIST_WALK(lstmt->body);
 				break;
 			}
-		case PLPGSQL_STMT_WHILE:
+		case PLSQL_STMT_WHILE:
 			{
-				PLpgSQL_stmt_while *wstmt = (PLpgSQL_stmt_while *) stmt;
+				PLSQL_stmt_while *wstmt = (PLSQL_stmt_while *) stmt;
 
 				E_WALK(wstmt->cond);
 				S_LIST_WALK(wstmt->body);
 				break;
 			}
-		case PLPGSQL_STMT_FORI:
+		case PLSQL_STMT_FORI:
 			{
-				PLpgSQL_stmt_fori *fori = (PLpgSQL_stmt_fori *) stmt;
+				PLSQL_stmt_fori *fori = (PLSQL_stmt_fori *) stmt;
 
 				E_WALK(fori->lower);
 				E_WALK(fori->upper);
@@ -447,111 +447,111 @@ plpgsql_statement_tree_walker_impl(PLpgSQL_stmt *stmt,
 				S_LIST_WALK(fori->body);
 				break;
 			}
-		case PLPGSQL_STMT_FORS:
+		case PLSQL_STMT_FORS:
 			{
-				PLpgSQL_stmt_fors *fors = (PLpgSQL_stmt_fors *) stmt;
+				PLSQL_stmt_fors *fors = (PLSQL_stmt_fors *) stmt;
 
 				S_LIST_WALK(fors->body);
 				E_WALK(fors->query);
 				break;
 			}
-		case PLPGSQL_STMT_FORC:
+		case PLSQL_STMT_FORC:
 			{
-				PLpgSQL_stmt_forc *forc = (PLpgSQL_stmt_forc *) stmt;
+				PLSQL_stmt_forc *forc = (PLSQL_stmt_forc *) stmt;
 
 				S_LIST_WALK(forc->body);
 				E_WALK(forc->argquery);
 				break;
 			}
-		case PLPGSQL_STMT_FOREACH_A:
+		case PLSQL_STMT_FOREACH_A:
 			{
-				PLpgSQL_stmt_foreach_a *fstmt = (PLpgSQL_stmt_foreach_a *) stmt;
+				PLSQL_stmt_foreach_a *fstmt = (PLSQL_stmt_foreach_a *) stmt;
 
 				E_WALK(fstmt->expr);
 				S_LIST_WALK(fstmt->body);
 				break;
 			}
-		case PLPGSQL_STMT_EXIT:
+		case PLSQL_STMT_EXIT:
 			{
-				PLpgSQL_stmt_exit *estmt = (PLpgSQL_stmt_exit *) stmt;
+				PLSQL_stmt_exit *estmt = (PLSQL_stmt_exit *) stmt;
 
 				E_WALK(estmt->cond);
 				break;
 			}
-		case PLPGSQL_STMT_RETURN:
+		case PLSQL_STMT_RETURN:
 			{
-				PLpgSQL_stmt_return *rstmt = (PLpgSQL_stmt_return *) stmt;
+				PLSQL_stmt_return *rstmt = (PLSQL_stmt_return *) stmt;
 
 				E_WALK(rstmt->expr);
 				break;
 			}
-		case PLPGSQL_STMT_RETURN_NEXT:
+		case PLSQL_STMT_RETURN_NEXT:
 			{
-				PLpgSQL_stmt_return_next *rstmt = (PLpgSQL_stmt_return_next *) stmt;
+				PLSQL_stmt_return_next *rstmt = (PLSQL_stmt_return_next *) stmt;
 
 				E_WALK(rstmt->expr);
 				break;
 			}
-		case PLPGSQL_STMT_RETURN_QUERY:
+		case PLSQL_STMT_RETURN_QUERY:
 			{
-				PLpgSQL_stmt_return_query *rstmt = (PLpgSQL_stmt_return_query *) stmt;
+				PLSQL_stmt_return_query *rstmt = (PLSQL_stmt_return_query *) stmt;
 
 				E_WALK(rstmt->query);
 				E_WALK(rstmt->dynquery);
 				E_LIST_WALK(rstmt->params);
 				break;
 			}
-		case PLPGSQL_STMT_RAISE:
+		case PLSQL_STMT_RAISE:
 			{
-				PLpgSQL_stmt_raise *rstmt = (PLpgSQL_stmt_raise *) stmt;
+				PLSQL_stmt_raise *rstmt = (PLSQL_stmt_raise *) stmt;
 
 				E_LIST_WALK(rstmt->params);
-				foreach_ptr(PLpgSQL_raise_option, opt, rstmt->options)
+				foreach_ptr(PLSQL_raise_option, opt, rstmt->options)
 				{
 					E_WALK(opt->expr);
 				}
 				break;
 			}
-		case PLPGSQL_STMT_ASSERT:
+		case PLSQL_STMT_ASSERT:
 			{
-				PLpgSQL_stmt_assert *astmt = (PLpgSQL_stmt_assert *) stmt;
+				PLSQL_stmt_assert *astmt = (PLSQL_stmt_assert *) stmt;
 
 				E_WALK(astmt->cond);
 				E_WALK(astmt->message);
 				break;
 			}
-		case PLPGSQL_STMT_EXECSQL:
+		case PLSQL_STMT_EXECSQL:
 			{
-				PLpgSQL_stmt_execsql *xstmt = (PLpgSQL_stmt_execsql *) stmt;
+				PLSQL_stmt_execsql *xstmt = (PLSQL_stmt_execsql *) stmt;
 
 				E_WALK(xstmt->sqlstmt);
 				break;
 			}
-		case PLPGSQL_STMT_DYNEXECUTE:
+		case PLSQL_STMT_DYNEXECUTE:
 			{
-				PLpgSQL_stmt_dynexecute *dstmt = (PLpgSQL_stmt_dynexecute *) stmt;
+				PLSQL_stmt_dynexecute *dstmt = (PLSQL_stmt_dynexecute *) stmt;
 
 				E_WALK(dstmt->query);
 				E_LIST_WALK(dstmt->params);
 				break;
 			}
-		case PLPGSQL_STMT_DYNFORS:
+		case PLSQL_STMT_DYNFORS:
 			{
-				PLpgSQL_stmt_dynfors *dstmt = (PLpgSQL_stmt_dynfors *) stmt;
+				PLSQL_stmt_dynfors *dstmt = (PLSQL_stmt_dynfors *) stmt;
 
 				S_LIST_WALK(dstmt->body);
 				E_WALK(dstmt->query);
 				E_LIST_WALK(dstmt->params);
 				break;
 			}
-		case PLPGSQL_STMT_GETDIAG:
+		case PLSQL_STMT_GETDIAG:
 			{
 				/* no interesting sub-structure */
 				break;
 			}
-		case PLPGSQL_STMT_OPEN:
+		case PLSQL_STMT_OPEN:
 			{
-				PLpgSQL_stmt_open *ostmt = (PLpgSQL_stmt_open *) stmt;
+				PLSQL_stmt_open *ostmt = (PLSQL_stmt_open *) stmt;
 
 				E_WALK(ostmt->argquery);
 				E_WALK(ostmt->query);
@@ -559,34 +559,34 @@ plpgsql_statement_tree_walker_impl(PLpgSQL_stmt *stmt,
 				E_LIST_WALK(ostmt->params);
 				break;
 			}
-		case PLPGSQL_STMT_FETCH:
+		case PLSQL_STMT_FETCH:
 			{
-				PLpgSQL_stmt_fetch *fstmt = (PLpgSQL_stmt_fetch *) stmt;
+				PLSQL_stmt_fetch *fstmt = (PLSQL_stmt_fetch *) stmt;
 
 				E_WALK(fstmt->expr);
 				break;
 			}
-		case PLPGSQL_STMT_CLOSE:
+		case PLSQL_STMT_CLOSE:
 			{
 				/* no interesting sub-structure */
 				break;
 			}
-		case PLPGSQL_STMT_PERFORM:
+		case PLSQL_STMT_PERFORM:
 			{
-				PLpgSQL_stmt_perform *pstmt = (PLpgSQL_stmt_perform *) stmt;
+				PLSQL_stmt_perform *pstmt = (PLSQL_stmt_perform *) stmt;
 
 				E_WALK(pstmt->expr);
 				break;
 			}
-		case PLPGSQL_STMT_CALL:
+		case PLSQL_STMT_CALL:
 			{
-				PLpgSQL_stmt_call *cstmt = (PLpgSQL_stmt_call *) stmt;
+				PLSQL_stmt_call *cstmt = (PLSQL_stmt_call *) stmt;
 
 				E_WALK(cstmt->expr);
 				break;
 			}
-		case PLPGSQL_STMT_COMMIT:
-		case PLPGSQL_STMT_ROLLBACK:
+		case PLSQL_STMT_COMMIT:
+		case PLSQL_STMT_ROLLBACK:
 			{
 				/* no interesting sub-structure */
 				break;
@@ -606,7 +606,7 @@ plpgsql_statement_tree_walker_impl(PLpgSQL_stmt *stmt,
  * error, since the variable will no longer be accessible afterwards.
  * Detecting this allows better optimization.)
  *
- * This code need not be called if the plpgsql function contains no exception
+ * This code need not be called if the plsql function contains no exception
  * blocks, because mark_expr_as_assignment_source will have set all the flags
  * to true already.  Also, we need not reconsider default-value expressions
  * for variables, because variable declarations are necessarily within the
@@ -616,17 +616,17 @@ plpgsql_statement_tree_walker_impl(PLpgSQL_stmt *stmt,
  * Within the recursion, local_dnos is a Bitmapset of dnos of variables
  * known to be declared within the current exception level.
  **********************************************************************/
-static void mark_stmt(PLpgSQL_stmt *stmt, Bitmapset *local_dnos);
-static void mark_expr(PLpgSQL_expr *expr, Bitmapset *local_dnos);
+static void mark_stmt(PLSQL_stmt *stmt, Bitmapset *local_dnos);
+static void mark_expr(PLSQL_expr *expr, Bitmapset *local_dnos);
 
 static void
-mark_stmt(PLpgSQL_stmt *stmt, Bitmapset *local_dnos)
+mark_stmt(PLSQL_stmt *stmt, Bitmapset *local_dnos)
 {
 	if (stmt == NULL)
 		return;
-	if (stmt->cmd_type == PLPGSQL_STMT_BLOCK)
+	if (stmt->cmd_type == PLSQL_STMT_BLOCK)
 	{
-		PLpgSQL_stmt_block *block = (PLpgSQL_stmt_block *) stmt;
+		PLSQL_stmt_block *block = (PLSQL_stmt_block *) stmt;
 
 		if (block->exceptions)
 		{
@@ -636,7 +636,7 @@ mark_stmt(PLpgSQL_stmt *stmt, Bitmapset *local_dnos)
 			 * variables declared in the block's DECLARE section.  Hence, we
 			 * must pass down empty local_dnos.
 			 */
-			plpgsql_statement_tree_walker(stmt, mark_stmt, mark_expr, NULL);
+			plsql_statement_tree_walker(stmt, mark_stmt, mark_expr, NULL);
 		}
 		else
 		{
@@ -649,17 +649,17 @@ mark_stmt(PLpgSQL_stmt *stmt, Bitmapset *local_dnos)
 			local_dnos = bms_copy(local_dnos);
 			for (int i = 0; i < block->n_initvars; i++)
 				local_dnos = bms_add_member(local_dnos, block->initvarnos[i]);
-			plpgsql_statement_tree_walker(stmt, mark_stmt, mark_expr,
+			plsql_statement_tree_walker(stmt, mark_stmt, mark_expr,
 										  local_dnos);
 			bms_free(local_dnos);
 		}
 	}
 	else
-		plpgsql_statement_tree_walker(stmt, mark_stmt, mark_expr, local_dnos);
+		plsql_statement_tree_walker(stmt, mark_stmt, mark_expr, local_dnos);
 }
 
 static void
-mark_expr(PLpgSQL_expr *expr, Bitmapset *local_dnos)
+mark_expr(PLSQL_expr *expr, Bitmapset *local_dnos)
 {
 	/*
 	 * If this expression has an assignment target, check whether the target
@@ -670,7 +670,7 @@ mark_expr(PLpgSQL_expr *expr, Bitmapset *local_dnos)
 }
 
 void
-plpgsql_mark_local_assignment_targets(PLpgSQL_function *func)
+plsql_mark_local_assignment_targets(PLSQL_function *func)
 {
 	Bitmapset  *local_dnos;
 
@@ -678,7 +678,7 @@ plpgsql_mark_local_assignment_targets(PLpgSQL_function *func)
 	local_dnos = NULL;
 	for (int i = 0; i < func->fn_nargs; i++)
 		local_dnos = bms_add_member(local_dnos, func->fn_argvarnos[i]);
-	mark_stmt((PLpgSQL_stmt *) func->action, local_dnos);
+	mark_stmt((PLSQL_stmt *) func->action, local_dnos);
 	bms_free(local_dnos);
 }
 
@@ -686,24 +686,24 @@ plpgsql_mark_local_assignment_targets(PLpgSQL_function *func)
 /**********************************************************************
  * Release memory when a PL/pgSQL function is no longer needed
  *
- * This code only needs to deal with cleaning up PLpgSQL_expr nodes,
+ * This code only needs to deal with cleaning up PLSQL_expr nodes,
  * which may contain references to saved SPI Plans that must be freed.
  * The function tree itself, along with subsidiary data, is freed in
  * one swoop by freeing the function's permanent memory context.
  **********************************************************************/
-static void free_stmt(PLpgSQL_stmt *stmt, void *context);
-static void free_expr(PLpgSQL_expr *expr, void *context);
+static void free_stmt(PLSQL_stmt *stmt, void *context);
+static void free_expr(PLSQL_expr *expr, void *context);
 
 static void
-free_stmt(PLpgSQL_stmt *stmt, void *context)
+free_stmt(PLSQL_stmt *stmt, void *context)
 {
 	if (stmt == NULL)
 		return;
-	plpgsql_statement_tree_walker(stmt, free_stmt, free_expr, NULL);
+	plsql_statement_tree_walker(stmt, free_stmt, free_expr, NULL);
 }
 
 static void
-free_expr(PLpgSQL_expr *expr, void *context)
+free_expr(PLSQL_expr *expr, void *context)
 {
 	if (expr && expr->plan)
 	{
@@ -713,7 +713,7 @@ free_expr(PLpgSQL_expr *expr, void *context)
 }
 
 void
-plpgsql_free_function_memory(PLpgSQL_function *func)
+plsql_free_function_memory(PLSQL_function *func)
 {
 	int			i;
 
@@ -723,29 +723,29 @@ plpgsql_free_function_memory(PLpgSQL_function *func)
 	/* Release plans associated with variable declarations */
 	for (i = 0; i < func->ndatums; i++)
 	{
-		PLpgSQL_datum *d = func->datums[i];
+		PLSQL_datum *d = func->datums[i];
 
 		switch (d->dtype)
 		{
-			case PLPGSQL_DTYPE_VAR:
-			case PLPGSQL_DTYPE_PROMISE:
+			case PLSQL_DTYPE_VAR:
+			case PLSQL_DTYPE_PROMISE:
 				{
-					PLpgSQL_var *var = (PLpgSQL_var *) d;
+					PLSQL_var *var = (PLSQL_var *) d;
 
 					free_expr(var->default_val, NULL);
 					free_expr(var->cursor_explicit_expr, NULL);
 				}
 				break;
-			case PLPGSQL_DTYPE_ROW:
+			case PLSQL_DTYPE_ROW:
 				break;
-			case PLPGSQL_DTYPE_REC:
+			case PLSQL_DTYPE_REC:
 				{
-					PLpgSQL_rec *rec = (PLpgSQL_rec *) d;
+					PLSQL_rec *rec = (PLSQL_rec *) d;
 
 					free_expr(rec->default_val, NULL);
 				}
 				break;
-			case PLPGSQL_DTYPE_RECFIELD:
+			case PLSQL_DTYPE_RECFIELD:
 				break;
 			default:
 				elog(ERROR, "unrecognized data type: %d", d->dtype);
@@ -754,11 +754,11 @@ plpgsql_free_function_memory(PLpgSQL_function *func)
 	func->ndatums = 0;
 
 	/* Release plans in statement tree */
-	free_stmt((PLpgSQL_stmt *) func->action, NULL);
+	free_stmt((PLSQL_stmt *) func->action, NULL);
 	func->action = NULL;
 
 	/*
-	 * And finally, release all memory except the PLpgSQL_function struct
+	 * And finally, release all memory except the PLSQL_function struct
 	 * itself (which has to be kept around because there may be multiple
 	 * fn_extra pointers to it).
 	 */
@@ -769,51 +769,51 @@ plpgsql_free_function_memory(PLpgSQL_function *func)
 
 /* Deletion callback used by funccache.c */
 void
-plpgsql_delete_callback(CachedFunction *cfunc)
+plsql_delete_callback(CachedFunction *cfunc)
 {
-	plpgsql_free_function_memory((PLpgSQL_function *) cfunc);
+	plsql_free_function_memory((PLSQL_function *) cfunc);
 }
 
 
 /**********************************************************************
  * Debug functions for analyzing the compiled code
  *
- * Sadly, there doesn't seem to be any way to let plpgsql_statement_tree_walker
+ * Sadly, there doesn't seem to be any way to let plsql_statement_tree_walker
  * bear some of the burden for this.
  **********************************************************************/
 static int	dump_indent;
 
 static void dump_ind(void);
-static void dump_stmt(PLpgSQL_stmt *stmt);
-static void dump_block(PLpgSQL_stmt_block *block);
-static void dump_assign(PLpgSQL_stmt_assign *stmt);
-static void dump_if(PLpgSQL_stmt_if *stmt);
-static void dump_case(PLpgSQL_stmt_case *stmt);
-static void dump_loop(PLpgSQL_stmt_loop *stmt);
-static void dump_while(PLpgSQL_stmt_while *stmt);
-static void dump_fori(PLpgSQL_stmt_fori *stmt);
-static void dump_fors(PLpgSQL_stmt_fors *stmt);
-static void dump_forc(PLpgSQL_stmt_forc *stmt);
-static void dump_foreach_a(PLpgSQL_stmt_foreach_a *stmt);
-static void dump_exit(PLpgSQL_stmt_exit *stmt);
-static void dump_return(PLpgSQL_stmt_return *stmt);
-static void dump_return_next(PLpgSQL_stmt_return_next *stmt);
-static void dump_return_query(PLpgSQL_stmt_return_query *stmt);
-static void dump_raise(PLpgSQL_stmt_raise *stmt);
-static void dump_assert(PLpgSQL_stmt_assert *stmt);
-static void dump_execsql(PLpgSQL_stmt_execsql *stmt);
-static void dump_dynexecute(PLpgSQL_stmt_dynexecute *stmt);
-static void dump_dynfors(PLpgSQL_stmt_dynfors *stmt);
-static void dump_getdiag(PLpgSQL_stmt_getdiag *stmt);
-static void dump_open(PLpgSQL_stmt_open *stmt);
-static void dump_fetch(PLpgSQL_stmt_fetch *stmt);
-static void dump_cursor_direction(PLpgSQL_stmt_fetch *stmt);
-static void dump_close(PLpgSQL_stmt_close *stmt);
-static void dump_perform(PLpgSQL_stmt_perform *stmt);
-static void dump_call(PLpgSQL_stmt_call *stmt);
-static void dump_commit(PLpgSQL_stmt_commit *stmt);
-static void dump_rollback(PLpgSQL_stmt_rollback *stmt);
-static void dump_expr(PLpgSQL_expr *expr);
+static void dump_stmt(PLSQL_stmt *stmt);
+static void dump_block(PLSQL_stmt_block *block);
+static void dump_assign(PLSQL_stmt_assign *stmt);
+static void dump_if(PLSQL_stmt_if *stmt);
+static void dump_case(PLSQL_stmt_case *stmt);
+static void dump_loop(PLSQL_stmt_loop *stmt);
+static void dump_while(PLSQL_stmt_while *stmt);
+static void dump_fori(PLSQL_stmt_fori *stmt);
+static void dump_fors(PLSQL_stmt_fors *stmt);
+static void dump_forc(PLSQL_stmt_forc *stmt);
+static void dump_foreach_a(PLSQL_stmt_foreach_a *stmt);
+static void dump_exit(PLSQL_stmt_exit *stmt);
+static void dump_return(PLSQL_stmt_return *stmt);
+static void dump_return_next(PLSQL_stmt_return_next *stmt);
+static void dump_return_query(PLSQL_stmt_return_query *stmt);
+static void dump_raise(PLSQL_stmt_raise *stmt);
+static void dump_assert(PLSQL_stmt_assert *stmt);
+static void dump_execsql(PLSQL_stmt_execsql *stmt);
+static void dump_dynexecute(PLSQL_stmt_dynexecute *stmt);
+static void dump_dynfors(PLSQL_stmt_dynfors *stmt);
+static void dump_getdiag(PLSQL_stmt_getdiag *stmt);
+static void dump_open(PLSQL_stmt_open *stmt);
+static void dump_fetch(PLSQL_stmt_fetch *stmt);
+static void dump_cursor_direction(PLSQL_stmt_fetch *stmt);
+static void dump_close(PLSQL_stmt_close *stmt);
+static void dump_perform(PLSQL_stmt_perform *stmt);
+static void dump_call(PLSQL_stmt_call *stmt);
+static void dump_commit(PLSQL_stmt_commit *stmt);
+static void dump_rollback(PLSQL_stmt_rollback *stmt);
+static void dump_expr(PLSQL_expr *expr);
 
 
 static void
@@ -826,91 +826,91 @@ dump_ind(void)
 }
 
 static void
-dump_stmt(PLpgSQL_stmt *stmt)
+dump_stmt(PLSQL_stmt *stmt)
 {
 	printf("%3d:", stmt->lineno);
 	switch (stmt->cmd_type)
 	{
-		case PLPGSQL_STMT_BLOCK:
-			dump_block((PLpgSQL_stmt_block *) stmt);
+		case PLSQL_STMT_BLOCK:
+			dump_block((PLSQL_stmt_block *) stmt);
 			break;
-		case PLPGSQL_STMT_ASSIGN:
-			dump_assign((PLpgSQL_stmt_assign *) stmt);
+		case PLSQL_STMT_ASSIGN:
+			dump_assign((PLSQL_stmt_assign *) stmt);
 			break;
-		case PLPGSQL_STMT_IF:
-			dump_if((PLpgSQL_stmt_if *) stmt);
+		case PLSQL_STMT_IF:
+			dump_if((PLSQL_stmt_if *) stmt);
 			break;
-		case PLPGSQL_STMT_CASE:
-			dump_case((PLpgSQL_stmt_case *) stmt);
+		case PLSQL_STMT_CASE:
+			dump_case((PLSQL_stmt_case *) stmt);
 			break;
-		case PLPGSQL_STMT_LOOP:
-			dump_loop((PLpgSQL_stmt_loop *) stmt);
+		case PLSQL_STMT_LOOP:
+			dump_loop((PLSQL_stmt_loop *) stmt);
 			break;
-		case PLPGSQL_STMT_WHILE:
-			dump_while((PLpgSQL_stmt_while *) stmt);
+		case PLSQL_STMT_WHILE:
+			dump_while((PLSQL_stmt_while *) stmt);
 			break;
-		case PLPGSQL_STMT_FORI:
-			dump_fori((PLpgSQL_stmt_fori *) stmt);
+		case PLSQL_STMT_FORI:
+			dump_fori((PLSQL_stmt_fori *) stmt);
 			break;
-		case PLPGSQL_STMT_FORS:
-			dump_fors((PLpgSQL_stmt_fors *) stmt);
+		case PLSQL_STMT_FORS:
+			dump_fors((PLSQL_stmt_fors *) stmt);
 			break;
-		case PLPGSQL_STMT_FORC:
-			dump_forc((PLpgSQL_stmt_forc *) stmt);
+		case PLSQL_STMT_FORC:
+			dump_forc((PLSQL_stmt_forc *) stmt);
 			break;
-		case PLPGSQL_STMT_FOREACH_A:
-			dump_foreach_a((PLpgSQL_stmt_foreach_a *) stmt);
+		case PLSQL_STMT_FOREACH_A:
+			dump_foreach_a((PLSQL_stmt_foreach_a *) stmt);
 			break;
-		case PLPGSQL_STMT_EXIT:
-			dump_exit((PLpgSQL_stmt_exit *) stmt);
+		case PLSQL_STMT_EXIT:
+			dump_exit((PLSQL_stmt_exit *) stmt);
 			break;
-		case PLPGSQL_STMT_RETURN:
-			dump_return((PLpgSQL_stmt_return *) stmt);
+		case PLSQL_STMT_RETURN:
+			dump_return((PLSQL_stmt_return *) stmt);
 			break;
-		case PLPGSQL_STMT_RETURN_NEXT:
-			dump_return_next((PLpgSQL_stmt_return_next *) stmt);
+		case PLSQL_STMT_RETURN_NEXT:
+			dump_return_next((PLSQL_stmt_return_next *) stmt);
 			break;
-		case PLPGSQL_STMT_RETURN_QUERY:
-			dump_return_query((PLpgSQL_stmt_return_query *) stmt);
+		case PLSQL_STMT_RETURN_QUERY:
+			dump_return_query((PLSQL_stmt_return_query *) stmt);
 			break;
-		case PLPGSQL_STMT_RAISE:
-			dump_raise((PLpgSQL_stmt_raise *) stmt);
+		case PLSQL_STMT_RAISE:
+			dump_raise((PLSQL_stmt_raise *) stmt);
 			break;
-		case PLPGSQL_STMT_ASSERT:
-			dump_assert((PLpgSQL_stmt_assert *) stmt);
+		case PLSQL_STMT_ASSERT:
+			dump_assert((PLSQL_stmt_assert *) stmt);
 			break;
-		case PLPGSQL_STMT_EXECSQL:
-			dump_execsql((PLpgSQL_stmt_execsql *) stmt);
+		case PLSQL_STMT_EXECSQL:
+			dump_execsql((PLSQL_stmt_execsql *) stmt);
 			break;
-		case PLPGSQL_STMT_DYNEXECUTE:
-			dump_dynexecute((PLpgSQL_stmt_dynexecute *) stmt);
+		case PLSQL_STMT_DYNEXECUTE:
+			dump_dynexecute((PLSQL_stmt_dynexecute *) stmt);
 			break;
-		case PLPGSQL_STMT_DYNFORS:
-			dump_dynfors((PLpgSQL_stmt_dynfors *) stmt);
+		case PLSQL_STMT_DYNFORS:
+			dump_dynfors((PLSQL_stmt_dynfors *) stmt);
 			break;
-		case PLPGSQL_STMT_GETDIAG:
-			dump_getdiag((PLpgSQL_stmt_getdiag *) stmt);
+		case PLSQL_STMT_GETDIAG:
+			dump_getdiag((PLSQL_stmt_getdiag *) stmt);
 			break;
-		case PLPGSQL_STMT_OPEN:
-			dump_open((PLpgSQL_stmt_open *) stmt);
+		case PLSQL_STMT_OPEN:
+			dump_open((PLSQL_stmt_open *) stmt);
 			break;
-		case PLPGSQL_STMT_FETCH:
-			dump_fetch((PLpgSQL_stmt_fetch *) stmt);
+		case PLSQL_STMT_FETCH:
+			dump_fetch((PLSQL_stmt_fetch *) stmt);
 			break;
-		case PLPGSQL_STMT_CLOSE:
-			dump_close((PLpgSQL_stmt_close *) stmt);
+		case PLSQL_STMT_CLOSE:
+			dump_close((PLSQL_stmt_close *) stmt);
 			break;
-		case PLPGSQL_STMT_PERFORM:
-			dump_perform((PLpgSQL_stmt_perform *) stmt);
+		case PLSQL_STMT_PERFORM:
+			dump_perform((PLSQL_stmt_perform *) stmt);
 			break;
-		case PLPGSQL_STMT_CALL:
-			dump_call((PLpgSQL_stmt_call *) stmt);
+		case PLSQL_STMT_CALL:
+			dump_call((PLSQL_stmt_call *) stmt);
 			break;
-		case PLPGSQL_STMT_COMMIT:
-			dump_commit((PLpgSQL_stmt_commit *) stmt);
+		case PLSQL_STMT_COMMIT:
+			dump_commit((PLSQL_stmt_commit *) stmt);
 			break;
-		case PLPGSQL_STMT_ROLLBACK:
-			dump_rollback((PLpgSQL_stmt_rollback *) stmt);
+		case PLSQL_STMT_ROLLBACK:
+			dump_rollback((PLSQL_stmt_rollback *) stmt);
 			break;
 		default:
 			elog(ERROR, "unrecognized cmd_type: %d", stmt->cmd_type);
@@ -925,12 +925,12 @@ dump_stmts(List *stmts)
 
 	dump_indent += 2;
 	foreach(s, stmts)
-		dump_stmt((PLpgSQL_stmt *) lfirst(s));
+		dump_stmt((PLSQL_stmt *) lfirst(s));
 	dump_indent -= 2;
 }
 
 static void
-dump_block(PLpgSQL_stmt_block *block)
+dump_block(PLSQL_stmt_block *block)
 {
 	char	   *name;
 
@@ -950,8 +950,8 @@ dump_block(PLpgSQL_stmt_block *block)
 
 		foreach(e, block->exceptions->exc_list)
 		{
-			PLpgSQL_exception *exc = (PLpgSQL_exception *) lfirst(e);
-			PLpgSQL_condition *cond;
+			PLSQL_exception *exc = (PLSQL_exception *) lfirst(e);
+			PLSQL_condition *cond;
 
 			dump_ind();
 			printf("    EXCEPTION WHEN ");
@@ -971,7 +971,7 @@ dump_block(PLpgSQL_stmt_block *block)
 }
 
 static void
-dump_assign(PLpgSQL_stmt_assign *stmt)
+dump_assign(PLSQL_stmt_assign *stmt)
 {
 	dump_ind();
 	printf("ASSIGN var %d := ", stmt->varno);
@@ -980,7 +980,7 @@ dump_assign(PLpgSQL_stmt_assign *stmt)
 }
 
 static void
-dump_if(PLpgSQL_stmt_if *stmt)
+dump_if(PLSQL_stmt_if *stmt)
 {
 	ListCell   *l;
 
@@ -991,7 +991,7 @@ dump_if(PLpgSQL_stmt_if *stmt)
 	dump_stmts(stmt->then_body);
 	foreach(l, stmt->elsif_list)
 	{
-		PLpgSQL_if_elsif *elif = (PLpgSQL_if_elsif *) lfirst(l);
+		PLSQL_if_elsif *elif = (PLSQL_if_elsif *) lfirst(l);
 
 		dump_ind();
 		printf("    ELSIF ");
@@ -1010,7 +1010,7 @@ dump_if(PLpgSQL_stmt_if *stmt)
 }
 
 static void
-dump_case(PLpgSQL_stmt_case *stmt)
+dump_case(PLSQL_stmt_case *stmt)
 {
 	ListCell   *l;
 
@@ -1022,7 +1022,7 @@ dump_case(PLpgSQL_stmt_case *stmt)
 	dump_indent += 6;
 	foreach(l, stmt->case_when_list)
 	{
-		PLpgSQL_case_when *cwt = (PLpgSQL_case_when *) lfirst(l);
+		PLSQL_case_when *cwt = (PLSQL_case_when *) lfirst(l);
 
 		dump_ind();
 		printf("WHEN ");
@@ -1048,7 +1048,7 @@ dump_case(PLpgSQL_stmt_case *stmt)
 }
 
 static void
-dump_loop(PLpgSQL_stmt_loop *stmt)
+dump_loop(PLSQL_stmt_loop *stmt)
 {
 	dump_ind();
 	printf("LOOP\n");
@@ -1060,7 +1060,7 @@ dump_loop(PLpgSQL_stmt_loop *stmt)
 }
 
 static void
-dump_while(PLpgSQL_stmt_while *stmt)
+dump_while(PLSQL_stmt_while *stmt)
 {
 	dump_ind();
 	printf("WHILE ");
@@ -1074,7 +1074,7 @@ dump_while(PLpgSQL_stmt_while *stmt)
 }
 
 static void
-dump_fori(PLpgSQL_stmt_fori *stmt)
+dump_fori(PLSQL_stmt_fori *stmt)
 {
 	dump_ind();
 	printf("FORI %s %s\n", stmt->var->refname, (stmt->reverse) ? "REVERSE" : "NORMAL");
@@ -1104,7 +1104,7 @@ dump_fori(PLpgSQL_stmt_fori *stmt)
 }
 
 static void
-dump_fors(PLpgSQL_stmt_fors *stmt)
+dump_fors(PLSQL_stmt_fors *stmt)
 {
 	dump_ind();
 	printf("FORS %s ", stmt->var->refname);
@@ -1118,7 +1118,7 @@ dump_fors(PLpgSQL_stmt_fors *stmt)
 }
 
 static void
-dump_forc(PLpgSQL_stmt_forc *stmt)
+dump_forc(PLSQL_stmt_forc *stmt)
 {
 	dump_ind();
 	printf("FORC %s ", stmt->var->refname);
@@ -1141,7 +1141,7 @@ dump_forc(PLpgSQL_stmt_forc *stmt)
 }
 
 static void
-dump_foreach_a(PLpgSQL_stmt_foreach_a *stmt)
+dump_foreach_a(PLSQL_stmt_foreach_a *stmt)
 {
 	dump_ind();
 	printf("FOREACHA var %d ", stmt->varno);
@@ -1158,7 +1158,7 @@ dump_foreach_a(PLpgSQL_stmt_foreach_a *stmt)
 }
 
 static void
-dump_open(PLpgSQL_stmt_open *stmt)
+dump_open(PLSQL_stmt_open *stmt)
 {
 	dump_ind();
 	printf("OPEN curvar=%d\n", stmt->curvar);
@@ -1199,7 +1199,7 @@ dump_open(PLpgSQL_stmt_open *stmt)
 			{
 				dump_ind();
 				printf("    parameter $%d: ", i++);
-				dump_expr((PLpgSQL_expr *) lfirst(lc));
+				dump_expr((PLSQL_expr *) lfirst(lc));
 				printf("\n");
 			}
 			dump_indent -= 4;
@@ -1209,7 +1209,7 @@ dump_open(PLpgSQL_stmt_open *stmt)
 }
 
 static void
-dump_fetch(PLpgSQL_stmt_fetch *stmt)
+dump_fetch(PLSQL_stmt_fetch *stmt)
 {
 	dump_ind();
 
@@ -1235,7 +1235,7 @@ dump_fetch(PLpgSQL_stmt_fetch *stmt)
 }
 
 static void
-dump_cursor_direction(PLpgSQL_stmt_fetch *stmt)
+dump_cursor_direction(PLSQL_stmt_fetch *stmt)
 {
 	dump_indent += 2;
 	dump_ind();
@@ -1269,14 +1269,14 @@ dump_cursor_direction(PLpgSQL_stmt_fetch *stmt)
 }
 
 static void
-dump_close(PLpgSQL_stmt_close *stmt)
+dump_close(PLSQL_stmt_close *stmt)
 {
 	dump_ind();
 	printf("CLOSE curvar=%d\n", stmt->curvar);
 }
 
 static void
-dump_perform(PLpgSQL_stmt_perform *stmt)
+dump_perform(PLSQL_stmt_perform *stmt)
 {
 	dump_ind();
 	printf("PERFORM expr = ");
@@ -1285,7 +1285,7 @@ dump_perform(PLpgSQL_stmt_perform *stmt)
 }
 
 static void
-dump_call(PLpgSQL_stmt_call *stmt)
+dump_call(PLSQL_stmt_call *stmt)
 {
 	dump_ind();
 	printf("%s expr = ", stmt->is_call ? "CALL" : "DO");
@@ -1294,7 +1294,7 @@ dump_call(PLpgSQL_stmt_call *stmt)
 }
 
 static void
-dump_commit(PLpgSQL_stmt_commit *stmt)
+dump_commit(PLSQL_stmt_commit *stmt)
 {
 	dump_ind();
 	if (stmt->chain)
@@ -1304,7 +1304,7 @@ dump_commit(PLpgSQL_stmt_commit *stmt)
 }
 
 static void
-dump_rollback(PLpgSQL_stmt_rollback *stmt)
+dump_rollback(PLSQL_stmt_rollback *stmt)
 {
 	dump_ind();
 	if (stmt->chain)
@@ -1314,7 +1314,7 @@ dump_rollback(PLpgSQL_stmt_rollback *stmt)
 }
 
 static void
-dump_exit(PLpgSQL_stmt_exit *stmt)
+dump_exit(PLSQL_stmt_exit *stmt)
 {
 	dump_ind();
 	printf("%s", stmt->is_exit ? "EXIT" : "CONTINUE");
@@ -1329,7 +1329,7 @@ dump_exit(PLpgSQL_stmt_exit *stmt)
 }
 
 static void
-dump_return(PLpgSQL_stmt_return *stmt)
+dump_return(PLSQL_stmt_return *stmt)
 {
 	dump_ind();
 	printf("RETURN ");
@@ -1343,7 +1343,7 @@ dump_return(PLpgSQL_stmt_return *stmt)
 }
 
 static void
-dump_return_next(PLpgSQL_stmt_return_next *stmt)
+dump_return_next(PLSQL_stmt_return_next *stmt)
 {
 	dump_ind();
 	printf("RETURN NEXT ");
@@ -1357,7 +1357,7 @@ dump_return_next(PLpgSQL_stmt_return_next *stmt)
 }
 
 static void
-dump_return_query(PLpgSQL_stmt_return_query *stmt)
+dump_return_query(PLSQL_stmt_return_query *stmt)
 {
 	dump_ind();
 	if (stmt->query)
@@ -1385,7 +1385,7 @@ dump_return_query(PLpgSQL_stmt_return_query *stmt)
 			{
 				dump_ind();
 				printf("    parameter $%d: ", i++);
-				dump_expr((PLpgSQL_expr *) lfirst(lc));
+				dump_expr((PLSQL_expr *) lfirst(lc));
 				printf("\n");
 			}
 			dump_indent -= 4;
@@ -1394,7 +1394,7 @@ dump_return_query(PLpgSQL_stmt_return_query *stmt)
 }
 
 static void
-dump_raise(PLpgSQL_stmt_raise *stmt)
+dump_raise(PLSQL_stmt_raise *stmt)
 {
 	ListCell   *lc;
 	int			i = 0;
@@ -1411,7 +1411,7 @@ dump_raise(PLpgSQL_stmt_raise *stmt)
 	{
 		dump_ind();
 		printf("    parameter %d: ", i++);
-		dump_expr((PLpgSQL_expr *) lfirst(lc));
+		dump_expr((PLSQL_expr *) lfirst(lc));
 		printf("\n");
 	}
 	if (stmt->options)
@@ -1421,36 +1421,36 @@ dump_raise(PLpgSQL_stmt_raise *stmt)
 		dump_indent += 2;
 		foreach(lc, stmt->options)
 		{
-			PLpgSQL_raise_option *opt = (PLpgSQL_raise_option *) lfirst(lc);
+			PLSQL_raise_option *opt = (PLSQL_raise_option *) lfirst(lc);
 
 			dump_ind();
 			switch (opt->opt_type)
 			{
-				case PLPGSQL_RAISEOPTION_ERRCODE:
+				case PLSQL_RAISEOPTION_ERRCODE:
 					printf("    ERRCODE = ");
 					break;
-				case PLPGSQL_RAISEOPTION_MESSAGE:
+				case PLSQL_RAISEOPTION_MESSAGE:
 					printf("    MESSAGE = ");
 					break;
-				case PLPGSQL_RAISEOPTION_DETAIL:
+				case PLSQL_RAISEOPTION_DETAIL:
 					printf("    DETAIL = ");
 					break;
-				case PLPGSQL_RAISEOPTION_HINT:
+				case PLSQL_RAISEOPTION_HINT:
 					printf("    HINT = ");
 					break;
-				case PLPGSQL_RAISEOPTION_COLUMN:
+				case PLSQL_RAISEOPTION_COLUMN:
 					printf("    COLUMN = ");
 					break;
-				case PLPGSQL_RAISEOPTION_CONSTRAINT:
+				case PLSQL_RAISEOPTION_CONSTRAINT:
 					printf("    CONSTRAINT = ");
 					break;
-				case PLPGSQL_RAISEOPTION_DATATYPE:
+				case PLSQL_RAISEOPTION_DATATYPE:
 					printf("    DATATYPE = ");
 					break;
-				case PLPGSQL_RAISEOPTION_TABLE:
+				case PLSQL_RAISEOPTION_TABLE:
 					printf("    TABLE = ");
 					break;
-				case PLPGSQL_RAISEOPTION_SCHEMA:
+				case PLSQL_RAISEOPTION_SCHEMA:
 					printf("    SCHEMA = ");
 					break;
 			}
@@ -1463,7 +1463,7 @@ dump_raise(PLpgSQL_stmt_raise *stmt)
 }
 
 static void
-dump_assert(PLpgSQL_stmt_assert *stmt)
+dump_assert(PLSQL_stmt_assert *stmt)
 {
 	dump_ind();
 	printf("ASSERT ");
@@ -1482,7 +1482,7 @@ dump_assert(PLpgSQL_stmt_assert *stmt)
 }
 
 static void
-dump_execsql(PLpgSQL_stmt_execsql *stmt)
+dump_execsql(PLSQL_stmt_execsql *stmt)
 {
 	dump_ind();
 	printf("EXECSQL ");
@@ -1501,7 +1501,7 @@ dump_execsql(PLpgSQL_stmt_execsql *stmt)
 }
 
 static void
-dump_dynexecute(PLpgSQL_stmt_dynexecute *stmt)
+dump_dynexecute(PLSQL_stmt_dynexecute *stmt)
 {
 	dump_ind();
 	printf("EXECUTE ");
@@ -1529,7 +1529,7 @@ dump_dynexecute(PLpgSQL_stmt_dynexecute *stmt)
 		{
 			dump_ind();
 			printf("    parameter %d: ", i++);
-			dump_expr((PLpgSQL_expr *) lfirst(lc));
+			dump_expr((PLSQL_expr *) lfirst(lc));
 			printf("\n");
 		}
 		dump_indent -= 2;
@@ -1538,7 +1538,7 @@ dump_dynexecute(PLpgSQL_stmt_dynexecute *stmt)
 }
 
 static void
-dump_dynfors(PLpgSQL_stmt_dynfors *stmt)
+dump_dynfors(PLSQL_stmt_dynfors *stmt)
 {
 	dump_ind();
 	printf("FORS %s EXECUTE ", stmt->var->refname);
@@ -1558,7 +1558,7 @@ dump_dynfors(PLpgSQL_stmt_dynfors *stmt)
 		{
 			dump_ind();
 			printf("    parameter $%d: ", i++);
-			dump_expr((PLpgSQL_expr *) lfirst(lc));
+			dump_expr((PLSQL_expr *) lfirst(lc));
 			printf("\n");
 		}
 		dump_indent -= 4;
@@ -1569,7 +1569,7 @@ dump_dynfors(PLpgSQL_stmt_dynfors *stmt)
 }
 
 static void
-dump_getdiag(PLpgSQL_stmt_getdiag *stmt)
+dump_getdiag(PLSQL_stmt_getdiag *stmt)
 {
 	ListCell   *lc;
 
@@ -1577,19 +1577,19 @@ dump_getdiag(PLpgSQL_stmt_getdiag *stmt)
 	printf("GET %s DIAGNOSTICS ", stmt->is_stacked ? "STACKED" : "CURRENT");
 	foreach(lc, stmt->diag_items)
 	{
-		PLpgSQL_diag_item *diag_item = (PLpgSQL_diag_item *) lfirst(lc);
+		PLSQL_diag_item *diag_item = (PLSQL_diag_item *) lfirst(lc);
 
 		if (lc != list_head(stmt->diag_items))
 			printf(", ");
 
 		printf("{var %d} = %s", diag_item->target,
-			   plpgsql_getdiag_kindname(diag_item->kind));
+			   plsql_getdiag_kindname(diag_item->kind));
 	}
 	printf("\n");
 }
 
 static void
-dump_expr(PLpgSQL_expr *expr)
+dump_expr(PLSQL_expr *expr)
 {
 	printf("'%s'", expr->query);
 	if (expr->target_param >= 0)
@@ -1598,10 +1598,10 @@ dump_expr(PLpgSQL_expr *expr)
 }
 
 void
-plpgsql_dumptree(PLpgSQL_function *func)
+plsql_dumptree(PLSQL_function *func)
 {
 	int			i;
-	PLpgSQL_datum *d;
+	PLSQL_datum *d;
 
 	printf("\nExecution tree of successfully compiled PL/pgSQL function %s:\n",
 		   func->fn_signature);
@@ -1614,10 +1614,10 @@ plpgsql_dumptree(PLpgSQL_function *func)
 		printf("    entry %d: ", i);
 		switch (d->dtype)
 		{
-			case PLPGSQL_DTYPE_VAR:
-			case PLPGSQL_DTYPE_PROMISE:
+			case PLSQL_DTYPE_VAR:
+			case PLSQL_DTYPE_PROMISE:
 				{
-					PLpgSQL_var *var = (PLpgSQL_var *) d;
+					PLSQL_var *var = (PLSQL_var *) d;
 
 					printf("VAR %-16s type %s (typoid %u) atttypmod %d\n",
 						   var->refname, var->datatype->typname,
@@ -1642,14 +1642,14 @@ plpgsql_dumptree(PLpgSQL_function *func)
 						dump_expr(var->cursor_explicit_expr);
 						printf("\n");
 					}
-					if (var->promise != PLPGSQL_PROMISE_NONE)
+					if (var->promise != PLSQL_PROMISE_NONE)
 						printf("                                  PROMISE %d\n",
 							   (int) var->promise);
 				}
 				break;
-			case PLPGSQL_DTYPE_ROW:
+			case PLSQL_DTYPE_ROW:
 				{
-					PLpgSQL_row *row = (PLpgSQL_row *) d;
+					PLSQL_row *row = (PLSQL_row *) d;
 
 					printf("ROW %-16s fields", row->refname);
 					for (int j = 0; j < row->nfields; j++)
@@ -1660,25 +1660,25 @@ plpgsql_dumptree(PLpgSQL_function *func)
 					printf("\n");
 				}
 				break;
-			case PLPGSQL_DTYPE_REC:
+			case PLSQL_DTYPE_REC:
 				printf("REC %-16s typoid %u\n",
-					   ((PLpgSQL_rec *) d)->refname,
-					   ((PLpgSQL_rec *) d)->rectypeid);
-				if (((PLpgSQL_rec *) d)->isconst)
+					   ((PLSQL_rec *) d)->refname,
+					   ((PLSQL_rec *) d)->rectypeid);
+				if (((PLSQL_rec *) d)->isconst)
 					printf("                                  CONSTANT\n");
-				if (((PLpgSQL_rec *) d)->notnull)
+				if (((PLSQL_rec *) d)->notnull)
 					printf("                                  NOT NULL\n");
-				if (((PLpgSQL_rec *) d)->default_val != NULL)
+				if (((PLSQL_rec *) d)->default_val != NULL)
 				{
 					printf("                                  DEFAULT ");
-					dump_expr(((PLpgSQL_rec *) d)->default_val);
+					dump_expr(((PLSQL_rec *) d)->default_val);
 					printf("\n");
 				}
 				break;
-			case PLPGSQL_DTYPE_RECFIELD:
+			case PLSQL_DTYPE_RECFIELD:
 				printf("RECFIELD %-16s of REC %d\n",
-					   ((PLpgSQL_recfield *) d)->fieldname,
-					   ((PLpgSQL_recfield *) d)->recparentno);
+					   ((PLSQL_recfield *) d)->fieldname,
+					   ((PLSQL_recfield *) d)->recparentno);
 				break;
 			default:
 				printf("??? unknown data type %d\n", d->dtype);

@@ -1,6 +1,6 @@
 #
-# plpgsql.po
-#   Italian message translation file for plpgsql
+# plsql.po
+#   Italian message translation file for plsql
 #
 # For development and bug report please use:
 # https://github.com/dvarrazzo/postgresql-it
@@ -15,7 +15,7 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: plpgsql (PostgreSQL) 11\n"
+"Project-Id-Version: plsql (PostgreSQL) 11\n"
 "Report-Msgid-Bugs-To: pgsql-bugs@lists.postgresql.org\n"
 "POT-Creation-Date: 2022-09-26 08:09+0000\n"
 "PO-Revision-Date: 2022-09-26 15:08+0200\n"
@@ -194,7 +194,7 @@ msgstr "funzione PL/pgSQL %s riga %d %s"
 msgid "PL/pgSQL function %s %s"
 msgstr "funzione PL/pgSQL %s %s"
 
-#. translator: last %s is a plpgsql statement type name
+#. translator: last %s is a plsql statement type name
 #: pl_exec.c:1271
 #, c-format
 msgid "PL/pgSQL function %s line %d at %s"

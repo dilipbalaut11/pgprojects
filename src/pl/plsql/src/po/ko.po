@@ -1,10 +1,10 @@
-# Korean message translation file for plpgsql
+# Korean message translation file for plsql
 # Copyright (C) 2010 PostgreSQL Global Development Group
 # This file is distributed under the same license as the PostgreSQL package.
 # Ioseph Kim <ioseph@uri.sarang.net>, 2010
 msgid ""
 msgstr ""
-"Project-Id-Version: plpgsql (PostgreSQL) 17\n"
+"Project-Id-Version: plsql (PostgreSQL) 17\n"
 "Report-Msgid-Bugs-To: pgsql-bugs@lists.postgresql.org\n"
 "POT-Creation-Date: 2025-01-17 04:39+0000\n"
 "PO-Revision-Date: 2025-01-16 10:40+0900\n"
@@ -202,7 +202,7 @@ msgstr "PL/pgSQL 함수 \"%s\" 의 %d번째 줄 %s"
 msgid "PL/pgSQL function %s %s"
 msgstr "PL/pgSQL 함수 %s %s"
 
-#. translator: last %s is a plpgsql statement type name
+#. translator: last %s is a plsql statement type name
 #: pl_exec.c:1282
 #, c-format
 msgid "PL/pgSQL function %s line %d at %s"

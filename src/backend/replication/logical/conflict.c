@@ -56,6 +56,7 @@ static char *build_tuple_value_details(EState *estate, ResultRelInfo *relinfo,
 									   Oid indexoid);
 static char *build_index_value_desc(EState *estate, Relation localrel,
 									TupleTableSlot *slot, Oid indexoid);
+static void setup_conflict_log_table(char *schema_name, char *table_name);
 
 /*
  * Get the xmin and commit timestamp data (origin and timestamp) associated
@@ -89,14 +90,6 @@ GetTupleTransactionInfo(TupleTableSlot *localslot, TransactionId *xmin,
 	return TransactionIdGetCommitTsData(*xmin, localts, localorigin);
 }
 
-
-/*
- * Assuming these are defined globally or in an appropriate context for the apply worker
- */
-static SPIPlanPtr conflict_log_insert_plan = NULL;
-static Oid          conflict_log_insert_argtypes[13];
-
-
 /*
  * Helper function to convert a TupleTableSlot to Jsonb
  *
@@ -119,59 +112,41 @@ TupleTableSlotToJsonDatum(TupleTableSlot *slot)
 	return json;
 }
 
-/*
- * Function to initialize/get the prepared plan for conflict logging INSERT
- */
-static SPIPlanPtr
-GetConflictLogInsertPlan(void)
+static void
+setup_conflict_log_table(char *schema_name, char *table_name)
 {
-	if (conflict_log_insert_plan == NULL)
-	{
-		const char *command = "INSERT INTO public.conflict_log_table "
-				"(subscription_name, schema_name, table_name, conflict_type, "
-				"operation_type, replication_origin, "
-				"publisher_commit_time, replica_identity_key, "
-				"old_data, new_data, conflict_details) "
-				"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)";
+	StringInfoData querybuf;
 
-		int			nargs = 11;
+	initStringInfo(&querybuf);
 
-		/* Define argument types */
-		conflict_log_insert_argtypes[0] = TEXTOID;
-		conflict_log_insert_argtypes[1] = TEXTOID;
-		conflict_log_insert_argtypes[2] = TEXTOID;
-		conflict_log_insert_argtypes[3] = TEXTOID;
-		conflict_log_insert_argtypes[4] = TEXTOID;
-		conflict_log_insert_argtypes[5] = TEXTOID;
-		conflict_log_insert_argtypes[6] = TIMESTAMPTZOID;
-		conflict_log_insert_argtypes[7] = JSONOID;  /* replica_identity_key */
-		conflict_log_insert_argtypes[8] = JSONOID; /* old_data */
-		conflict_log_insert_argtypes[9] = JSONOID; /* new_data */
-		conflict_log_insert_argtypes[10] = TEXTOID;  /* conflict_details */
+	/* Open SPI context. */
+	SPI_connect();
 
-		/* Prepare the plan */
-		if (SPI_connect() != SPI_OK_CONNECT)
-		{
-			ereport(WARNING, (errmsg("could not connect to SPI for "
-									 "conflict logging")));
-			return NULL;
-		}
+	/* Create conflict log history table. */
+	appendStringInfo(&querybuf,
+					 "CREATE TABLE IF NOT EXITS \"%s.%s\" ("
+							"log_id  BIGSERIAL PRIMARY KEY,"
+							"log_timestamp        TIMESTAMPTZ DEFAULT NOW(),"
+							"subid                OID,"
+							"subscription_name    TEXT NOT NULL,"
+							"schema_name          TEXT NOT NULL,"
+							"table_name           TEXT NOT NULL,"
+							"conflict_type        TEXT NOT NULL,"
+							"operation_type       TEXT NOT NULL,"
+							"replication_origin   TEXT,"
+							"publisher_commit_time TIMESTAMPTZ,"
+							"replica_identity_key JSON,"
+							"old_data             JSON,"
+							"new_data             JSON,"
+							"conflict_resolution  TEXT,"
+							"conflict_details     TEXT)",
+					 schema_name, table_name);
+	if (SPI_exec(querybuf.data, 0) != SPI_OK_UTILITY)
+		elog(ERROR, "SPI_exec failed: %s", querybuf.data);
 
-		conflict_log_insert_plan = SPI_prepare(command, nargs,
-											   conflict_log_insert_argtypes);
-		if (conflict_log_insert_plan == NULL)
-		{
-			ereport(WARNING,
-					(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
-					 errmsg("could not prepare plan for conflict logging: %s",
-							SPI_result_code_string(SPI_result))));
-			SPI_finish();
-			return NULL;
-		}
-		SPI_keepplan(conflict_log_insert_plan); /* Keep the plan for reuse */
-		SPI_finish();
-	}
-	return conflict_log_insert_plan;
+	/* Close SPI context. */
+	if (SPI_finish() != SPI_OK_FINISH)
+		elog(ERROR, "SPI_finish failed");
 }
 
 
@@ -207,39 +182,26 @@ LogApplyConflictToTable(Oid subid, const char *subname, Oid reloid,
 						TimestampTz commit_ts, TupleTableSlot *searchslot,
 						TupleTableSlot *localslot, TupleTableSlot *remoteslot)
 {
-	SPIPlanPtr	plan;
-	int			ret;
-	int			i;
 	Oid			relid;
 	Datum		values[11];
-	//char		nulls[11];
 	bool		nulls[11];
 	char	   *conflict_type_str;
 	char	   *operation_type_str;
 	char	   *conflict_details_str;
-	TransactionId local_xid;
-	Datum		replica_identity;
-	Datum		old_data;
-	Datum		new_data;
 	Relation	rel;
 	HeapTuple	tup;
-	ParamListInfoData params_data;
-	SPIExecuteOptions options;
 
-	/* Get the prepared plan */
-	plan = GetConflictLogInsertPlan();
-	if (plan == NULL)
-	{
-		/* Error already reported in GetConflictLogInsertPlan */
-		return;
-	}
+	/* TODO : What if table exist with other schema */
+	setup_conflict_log_table("public", "conflict_log_table");
 
-	/* Map enums/types to text strings */
-	//conflict_type_str = GetConflictTypeString(conflict_type);  /* Assume this helper exists */
-	//operation_type_str = GetOperationTypeString(operation_type); /* Assume this helper exists */
+	relid = get_relname_relid("conflict_log_table", PG_PUBLIC_NAMESPACE);
+	rel = table_open(relid, RowExclusiveLock);
 
-	/* Convert TupleTableSlots to JSONB */
+
 	/* The logic here will depend on the conflict type and operation type */
+	operation_type_str = "opr";
+	conflict_type_str = "conflict";
+	conflict_details_str = "conflict_details";
 
 	/* Populate values and nulls arrays */
 	memset(nulls, 0, sizeof(bool) * 11);
@@ -254,7 +216,6 @@ LogApplyConflictToTable(Oid subid, const char *subname, Oid reloid,
 		values[5] = CStringGetTextDatum(origin_name);
 	else
 		nulls[5] = true;
-	//values[6] = LSNGetDatum(publisher_lsn);
 	values[6] = TimestampTzGetDatum(commit_ts);
 	nulls[6] = true;
 
@@ -280,7 +241,6 @@ LogApplyConflictToTable(Oid subid, const char *subname, Oid reloid,
 	 * to provide a rich description.
 	 */
 	//local_xid = 100; //FIXME
-	conflict_details_str = "test_string";
 /*	psprintf("Conflict type: %s, Operation: %s, "
 									"Table: %s.%s. Local XID: %u. "
 									"Publisher LSN: %X/%X.",
@@ -289,8 +249,6 @@ LogApplyConflictToTable(Oid subid, const char *subname, Oid reloid,
 									(uint32)(publisher_lsn >> 32),
 									(uint32)publisher_lsn); */
 
-	relid = get_relname_relid("conflict_log_table", PG_PUBLIC_NAMESPACE);
-	rel = table_open(relid, RowExclusiveLock);
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 	simple_heap_insert(rel, tup);
 	table_close(rel, RowExclusiveLock);

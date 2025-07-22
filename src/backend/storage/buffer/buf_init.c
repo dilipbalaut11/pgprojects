@@ -148,6 +148,9 @@ InitBufferPool(void)
 	/* Initialize per-backend file flush context */
 	WritebackContextInit(&BackendWritebackContext,
 						 &backend_flush_after);
+
+	/* Initialize block LSN validation hash */
+	InitLSNTable(NBuffers);
 }
 
 /*
@@ -181,6 +184,8 @@ BufferShmemSize(void)
 
 	/* size of checkpoint sort array in bufmgr.c */
 	size = add_size(size, mul_size(NBuffers, sizeof(CkptSortItem)));
+
+	size = add_size(size, LSNTableShmemSize(NBuffers));
 
 	return size;
 }

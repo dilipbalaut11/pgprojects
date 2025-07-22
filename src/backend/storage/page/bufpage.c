@@ -19,6 +19,10 @@
 #include "access/xlog.h"
 #include "pgstat.h"
 #include "storage/checksum.h"
+#include "storage/lwlock.h"
+#include "storage/relfilelocator.h"
+#include "storage/shmem.h"
+#include "utils/hsearch.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 
@@ -26,6 +30,34 @@
 /* GUC variable */
 bool		ignore_checksum_failure = false;
 
+/* LSN Validation feature code change START */
+
+/* key for LSN lookup hashtable */
+typedef struct LSNLookupKey
+{
+	RelFileLocator	locator;
+	ForkNumber		forknum;
+	BlockNumber		blocknum;
+} LSNLookupKey;
+
+/* entry for LSN lookup hashtable */
+typedef struct LSNLookupEnt
+{
+	LSNLookupKey	key;
+	XLogRecPtr		recptr;
+} LSNLookupEnt;
+
+typedef struct BlockLSNMapState
+{
+	int		max_elements;
+	LWLock *partition_locks;
+} BlockLSNMapState;
+
+#define	BLOCK_LSN_MAP_NUM_PARTITIONS	8
+BlockLSNMapState *block_lsn_map_state;
+HTAB *block_lsn_map;
+
+/* LSN Validation feature code change END */
 
 /* ----------------------------------------------------------------
  *						Page support functions
@@ -1547,3 +1579,223 @@ PageSetChecksumInplace(Page page, BlockNumber blkno)
 
 	((PageHeader) page)->pd_checksum = pg_checksum_page((char *) page, blkno);
 }
+
+/* LSN Validation feature code change START */
+
+/*
+ * TODO: This feature can be enabled/disabled via a GUC parameter
+ * so need to implement a new guc parameter.
+ */
+static bool
+PageLSNValidationEnabled()
+{
+	return true;
+}
+
+static LWLock *
+BlockLSNMapPartitionLock(LSNLookupKey *key)
+{
+	uint32	hashcode;
+	uint32	partition;
+
+	hashcode = get_hash_value(block_lsn_map, (void *) key);
+	partition = hashcode % BLOCK_LSN_MAP_NUM_PARTITIONS;
+	return &block_lsn_map_state->partition_locks[partition];
+}
+
+/*
+ * PageRegisterLSN - register a new page entry in hash with given LSN
+ *
+ * TODO:
+ * 1. Implement LWLock, partitioned lock for avoiding the contention.
+ * 2. If hash table is full remove old entries but that can increase
+ * 	  latancy of a single call, so for handling that we may create 2 hash
+ * 	  table, primary and secondary, so if primary hash is full then truncate
+ * 	  secondary hash and make it primary hash and make primary has as secondary
+ * 	  hash.  Truncating the complete hash is much faster than locating the
+ * 	  old LSN entries and removing them.
+ */
+void
+PageRegisterLSN(RelFileLocator rellocator, ForkNumber forknum,
+				BlockNumber blocknum, XLogRecPtr recptr)
+{
+	LSNLookupKey	key;
+	LSNLookupEnt   *hentry;
+	bool			found;
+	int				nentries;
+	LWLock		   *lock;
+
+	/* If we don't need a checksum, just return */
+	if (!PageLSNValidationEnabled())
+		return;
+
+	key.locator = rellocator;
+	key.forknum = forknum;
+	key.blocknum = blocknum;
+
+	/* TODO: Acquire hash partition lock in exclusive mode before lookup. */
+	lock = BlockLSNMapPartitionLock(&key);
+	LWLockAcquire(lock, LW_EXCLUSIVE);
+
+	nentries = hash_get_num_entries(block_lsn_map);
+
+	/* If hash is 80% full start cleanup. */
+	if (nentries >= block_lsn_map_state->max_elements * 0.8)
+	{
+		/* TODO: cleanup hash first and then insert new entry */
+		LWLockRelease(lock);
+		return; // for now just return to avoid OOSHM error
+	}
+
+	/* TODO: handle failure */
+	hentry = (LSNLookupEnt *) hash_search(block_lsn_map, &key,
+										  HASH_ENTER, &found);
+	hentry->recptr = recptr;
+
+	/* TODO: Release hash partition lock. */
+	LWLockRelease(lock);
+
+	/* TODO: Remove this log, this is just for debugging purpose in POC. */
+	elog(DEBUG2, "entry inserted for block %u of relation %s lsn=%X/%X;",
+		 blocknum,
+		 relpathperm(rellocator, forknum), LSN_FORMAT_ARGS(recptr));
+}
+
+/*
+ * PageValidateLSN - Lookup the page entry in hash and validate the LSN
+ *
+ * This function should be called whenever we are reading a page into the
+ * shared buffer.
+ */
+void
+PageValidateLSN(RelFileLocator rellocator, ForkNumber forknum,
+				BlockNumber blocknum, Page page)
+{
+	LSNLookupKey	key;
+	LSNLookupEnt   *hentry;
+	bool			found;
+	XLogRecPtr		recptr;
+	LWLock		   *lock;
+
+	/* If we don't need a checksum, just return */
+	if (PageIsNew(page) || !PageLSNValidationEnabled())
+		return;
+
+	key.locator = rellocator;
+	key.forknum = forknum;
+	key.blocknum = blocknum;
+
+	/* TODO: Acquire hash partition lock in shared mode before lookup. */
+	lock = BlockLSNMapPartitionLock(&key);
+	LWLockAcquire(lock, LW_SHARED);	
+	hentry = (LSNLookupEnt *) hash_search(block_lsn_map, &key,
+										  HASH_FIND, &found);
+	if (hentry == NULL)
+	{
+		/* TODO: Remove this log, this is just for debugging purpose in POC. */
+		elog(DEBUG2, "entry not found for block %u of relation %s;",
+			 blocknum,
+			 relpathperm(rellocator, forknum));
+		/* TODO: Release hash partition lock. */
+		LWLockRelease(lock);
+		return;
+	}
+
+	recptr = hentry->recptr;
+
+	/*
+	 * We have got the block back in shared buffer so now we can remove
+	 * entry from the hash.
+	 */
+	hash_search(block_lsn_map, &key, HASH_REMOVE, NULL);
+
+	/* TODO: Release hash partition lock. */
+	LWLockRelease(lock);
+
+	/*
+	 * Compare lsn of the block store in the hash entry with the LSN of the
+	 * page we just read.
+	 */
+	if (PageGetLSN(page) != recptr)
+	{
+		ereport(WARNING,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("invalid LSN in block %u of relation %s;",
+					blocknum, relpathperm(rellocator, forknum))),
+				 errdetail("Disk page has lsn %X/%X which is not same as last flushed page lsn=%X/%X",
+						   LSN_FORMAT_ARGS(PageGetLSN(page)),
+						   LSN_FORMAT_ARGS(recptr)));
+	}
+
+	/* TODO: Remove this log, this is just for debugging purpose in POC. */
+	elog(LOG, "lsn validated for block %u of relation %s;",
+		 blocknum,
+		 relpathperm(rellocator, forknum));
+}
+
+static inline Size
+LSNStateShmemSize()
+{
+	Size		size = 0;
+
+	size = MAXALIGN(sizeof(BlockLSNMapState));
+	size += MAXALIGN(BLOCK_LSN_MAP_NUM_PARTITIONS * sizeof(LWLockPadded));
+
+	return size;
+}
+/*
+ * Compute size for LSN validation hash.
+ */
+Size
+LSNTableShmemSize(int nentries)
+{
+	Size	size = LSNStateShmemSize();
+
+	size = add_size(size, hash_estimate_size(nentries,
+											 sizeof(LSNLookupEnt)));
+	return size;
+}
+
+/*
+ * Initialize LSN validation hash.
+ */
+void
+InitLSNTable(int nentries)
+{
+	bool		found;
+	HASHCTL		info;
+
+	block_lsn_map_state =
+					(BlockLSNMapState *) ShmemInitStruct("Block LSN MAP state",
+														 LSNStateShmemSize(),
+														 &found);
+	Assert(found || !IsUnderPostmaster);
+	if (!found)
+	{
+		int			i;
+
+		memset(block_lsn_map_state, 0, sizeof(BlockLSNMapState));
+		block_lsn_map_state->partition_locks =
+					(LWLock *)((char *) block_lsn_map_state +
+					MAXALIGN(sizeof(BlockLSNMapState)));
+
+		for (i = 0; i < BLOCK_LSN_MAP_NUM_PARTITIONS; i++)
+		{
+			/* TODO: fix transid */
+			LWLockInitialize(&block_lsn_map_state->partition_locks[i],
+							 LWTRANCHE_BUFFER_CONTENT);
+		}
+
+		block_lsn_map_state->max_elements = nentries;
+	}
+
+	info.keysize = sizeof(LSNLookupKey);
+	info.entrysize = sizeof(LSNLookupEnt);
+	info.num_partitions = BLOCK_LSN_MAP_NUM_PARTITIONS;
+	block_lsn_map = ShmemInitHash("Block LSN MAP",
+								  nentries, nentries,
+								  &info,
+								  HASH_ELEM | HASH_BLOBS | HASH_PARTITION);
+}
+
+/* LSN Validation feature code change END */

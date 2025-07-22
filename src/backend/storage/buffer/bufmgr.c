@@ -1146,6 +1146,9 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 								blockNum,
 								relpath(smgr->smgr_rlocator, forkNum))));
 		}
+
+		PageValidateLSN(smgr->smgr_rlocator.locator, forkNum, blockNum,
+						(Page) bufBlock);
 	}
 
 	/*
@@ -3419,6 +3422,11 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 	 * only one process at a time can set the BM_IO_IN_PROGRESS bit.
 	 */
 	bufBlock = BufHdrGetBlock(buf);
+
+	PageRegisterLSN(reln->smgr_rlocator.locator,
+					BufTagGetForkNum(&buf->tag),
+					buf->tag.blockNum,
+					recptr);
 
 	/*
 	 * Update page checksum if desired.  Since we have only shared lock on the

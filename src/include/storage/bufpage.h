@@ -18,6 +18,7 @@
 #include "storage/block.h"
 #include "storage/item.h"
 #include "storage/off.h"
+#include "storage/relfilelocator.h"
 
 /*
  * A postgres disk page is an abstraction layered on top of a postgres
@@ -506,5 +507,12 @@ extern bool PageIndexTupleOverwrite(Page page, OffsetNumber offnum,
 									Item newtup, Size newsize);
 extern char *PageSetChecksumCopy(Page page, BlockNumber blkno);
 extern void PageSetChecksumInplace(Page page, BlockNumber blkno);
+extern void PageRegisterLSN(RelFileLocator rellocator, ForkNumber forknum,
+							BlockNumber blocknum, XLogRecPtr recptr);
+extern void
+PageValidateLSN(RelFileLocator rellocator, ForkNumber forknum,
+				BlockNumber blocknum, Page page);
+extern Size LSNTableShmemSize(int size);
+extern void InitLSNTable(int size);
 
 #endif							/* BUFPAGE_H */

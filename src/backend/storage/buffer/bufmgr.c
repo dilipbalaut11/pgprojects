@@ -163,6 +163,9 @@ int			backend_flush_after = DEFAULT_BACKEND_FLUSH_AFTER;
 /* local state for LockBufferForCleanup */
 static BufferDesc *PinCountWaitBuf = NULL;
 
+page_flush_hook_type page_flush_hook = NULL;
+page_validate_hook_type page_validate_hook = NULL;
+
 /*
  * Backend-Private refcount management:
  *
@@ -1146,6 +1149,11 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 								blockNum,
 								relpath(smgr->smgr_rlocator, forkNum))));
 		}
+
+		if (page_validate_hook)
+			(*page_validate_hook) (smgr->smgr_rlocator.locator,
+								  forkNum, blockNum,
+								  (Page) bufBlock);
 	}
 
 	/*
@@ -3419,6 +3427,12 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 	 * only one process at a time can set the BM_IO_IN_PROGRESS bit.
 	 */
 	bufBlock = BufHdrGetBlock(buf);
+
+	if (page_flush_hook)
+		page_flush_hook(reln->smgr_rlocator.locator,
+						BufTagGetForkNum(&buf->tag),
+						buf->tag.blockNum,
+						recptr);
 
 	/*
 	 * Update page checksum if desired.  Since we have only shared lock on the

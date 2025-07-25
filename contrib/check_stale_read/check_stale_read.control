@@ -1,0 +1,5 @@
+# check_stale_read extension
+comment = 'Stale read checker'
+default_version = '1.0'
+module_pathname = '$libdir/check_stale_read'
+relocatable = false

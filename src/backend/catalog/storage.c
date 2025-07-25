@@ -531,6 +531,11 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 							blkno, relpath)));
 		}
 
+		if (page_validate_hook)
+			(*page_validate_hook) (src->smgr_rlocator.locator,
+								  forkNum, blkno,
+								  (Page) page);
+
 		/*
 		 * WAL-log the copied page. Unfortunately we don't know what kind of a
 		 * page this is, so we have to log the full page including any unused

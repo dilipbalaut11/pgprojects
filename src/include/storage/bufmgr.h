@@ -268,6 +268,17 @@ extern int	GetAccessStrategyBufferCount(BufferAccessStrategy strategy);
 
 extern void FreeAccessStrategy(BufferAccessStrategy strategy);
 
+/* hook type for page flush and validation */
+typedef void (*page_flush_hook_type) (RelFileLocator rellocator,
+									   ForkNumber forknum,
+									   BlockNumber blocknum,
+									   XLogRecPtr recptr);
+extern PGDLLIMPORT page_flush_hook_type page_flush_hook;
+typedef void (*page_validate_hook_type) (RelFileLocator rellocator,
+										  ForkNumber forknum,
+										  BlockNumber blocknum,
+										  Page page);
+extern PGDLLIMPORT page_validate_hook_type page_validate_hook;
 
 /* inline functions */
 

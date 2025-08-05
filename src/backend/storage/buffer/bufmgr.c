@@ -174,6 +174,9 @@ int			backend_flush_after = DEFAULT_BACKEND_FLUSH_AFTER;
 /* local state for LockBufferForCleanup */
 static BufferDesc *PinCountWaitBuf = NULL;
 
+page_flush_hook_type page_flush_hook = NULL;
+page_validate_hook_type page_validate_hook = NULL;
+
 /*
  * Backend-Private refcount management:
  *
@@ -1082,6 +1085,11 @@ ZeroAndLockBuffer(Buffer buffer, ReadBufferMode mode, bool already_valid)
 			/* Set BM_VALID, terminate IO, and wake up any waiters */
 			TerminateBufferIO(bufHdr, false, BM_VALID, true);
 		}
+
+		if (page_validate_hook)
+			(*page_validate_hook) (smgr->smgr_rlocator.locator,
+								  forkNum, blockNum,
+								  (Page) bufBlock);
 	}
 	else if (!isLocalBuf)
 	{
@@ -1541,6 +1549,11 @@ WaitReadBuffers(ReadBuffersOperation *operation)
 									io_first_block + j,
 									relpath(operation->smgr->smgr_rlocator, forknum))));
 			}
+
+			if (page_validate_hook)
+				(*page_validate_hook) (operation->smgr_rlocator.locator,
+									   forknum, io_first_block + j,
+									   (Page) bufBlock);
 
 			/* Terminate I/O and set BM_VALID. */
 			if (persistence == RELPERSISTENCE_TEMP)
@@ -3842,6 +3855,12 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 	 * only one process at a time can set the BM_IO_IN_PROGRESS bit.
 	 */
 	bufBlock = BufHdrGetBlock(buf);
+
+	if (page_flush_hook)
+		page_flush_hook(reln->smgr_rlocator.locator,
+						BufTagGetForkNum(&buf->tag),
+						buf->tag.blockNum,
+						recptr);
 
 	/*
 	 * Update page checksum if desired.  Since we have only shared lock on the

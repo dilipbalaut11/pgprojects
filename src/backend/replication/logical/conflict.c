@@ -112,44 +112,6 @@ TupleTableSlotToJsonDatum(TupleTableSlot *slot)
 	return json;
 }
 
-static void
-setup_conflict_log_table(char *schema_name, char *table_name)
-{
-	StringInfoData querybuf;
-
-	initStringInfo(&querybuf);
-
-	/* Open SPI context. */
-	SPI_connect();
-
-	/* Create conflict log history table. */
-	appendStringInfo(&querybuf,
-					 "CREATE TABLE IF NOT EXITS \"%s.%s\" ("
-							"log_id  BIGSERIAL PRIMARY KEY,"
-							"log_timestamp        TIMESTAMPTZ DEFAULT NOW(),"
-							"subid                OID,"
-							"subscription_name    TEXT NOT NULL,"
-							"schema_name          TEXT NOT NULL,"
-							"table_name           TEXT NOT NULL,"
-							"conflict_type        TEXT NOT NULL,"
-							"operation_type       TEXT NOT NULL,"
-							"replication_origin   TEXT,"
-							"publisher_commit_time TIMESTAMPTZ,"
-							"replica_identity_key JSON,"
-							"old_data             JSON,"
-							"new_data             JSON,"
-							"conflict_resolution  TEXT,"
-							"conflict_details     TEXT)",
-					 schema_name, table_name);
-	if (SPI_exec(querybuf.data, 0) != SPI_OK_UTILITY)
-		elog(ERROR, "SPI_exec failed: %s", querybuf.data);
-
-	/* Close SPI context. */
-	if (SPI_finish() != SPI_OK_FINISH)
-		elog(ERROR, "SPI_finish failed");
-}
-
-
 /*
  * LogApplyConflictToTable
  *
@@ -183,126 +145,53 @@ LogApplyConflictToTable(Oid subid, const char *subname, Oid reloid,
 						TupleTableSlot *localslot, TupleTableSlot *remoteslot)
 {
 	Oid			relid;
-	Datum		values[11];
-	bool		nulls[11];
+	Datum		values[9];
+	bool		nulls[9];
 	char	   *conflict_type_str;
 	char	   *operation_type_str;
 	char	   *conflict_details_str;
 	Relation	rel;
 	HeapTuple	tup;
 
-	/* TODO : What if table exist with other schema */
-	setup_conflict_log_table("public", "conflict_log_table");
-
-	relid = get_relname_relid("conflict_log_table", PG_PUBLIC_NAMESPACE);
-	rel = table_open(relid, RowExclusiveLock);
-
+	rel = table_open(ConflictHistoryRelationId, RowExclusiveLock);
 
 	/* The logic here will depend on the conflict type and operation type */
-	operation_type_str = "opr";
-	conflict_type_str = "conflict";
-	conflict_details_str = "conflict_details";
+	conflict_type_str = "conflict_type_todo";
 
 	/* Populate values and nulls arrays */
-	memset(nulls, 0, sizeof(bool) * 11);
-	memset(values, 0, sizeof(Datum) * 11);
+	memset(nulls, 0, sizeof(bool) * 9);
+	memset(values, 0, sizeof(Datum) * 9);
 
-	values[0] = CStringGetTextDatum(subname);
-	values[1] = CStringGetTextDatum(schemaname);
-	values[2] = CStringGetTextDatum(relname);
-	values[3] = CStringGetTextDatum(conflict_type_str);
-	values[4] = CStringGetTextDatum(operation_type_str);
+	values[0] = ObjectIdGetDatum(subid);
+	values[1] = ObjectIdGetDatum(reloid);
+	values[2] = TimestampTzGetDatum(commit_ts);
+	values[3] = TimestampTzGetDatum(commit_ts);
+	values[4] = CStringGetTextDatum(conflict_type_str);
+
 	if (origin_name)
 		values[5] = CStringGetTextDatum(origin_name);
 	else
 		nulls[5] = true;
-	values[6] = TimestampTzGetDatum(commit_ts);
-	nulls[6] = true;
 
 	if (searchslot != NULL)
-		values[7] = TupleTableSlotToJsonDatum(searchslot);
+		values[6] = TupleTableSlotToJsonDatum(searchslot);
+	else
+		nulls[6] = true;
+
+	if (localslot != NULL)
+		values[7] = TupleTableSlotToJsonDatum(localslot);
 	else
 		nulls[7] = true;
 
-	if (localslot != NULL)
-		values[8] = TupleTableSlotToJsonDatum(localslot);
+	if (remoteslot != NULL)
+		values[8] = TupleTableSlotToJsonDatum(remoteslot);
 	else
 		nulls[8] = true;
-	if (remoteslot != NULL)
-		values[9] = TupleTableSlotToJsonDatum(remoteslot);
-	else
-		nulls[9] = true;
-
-	values[10] = CStringGetTextDatum(conflict_details_str);
-
-	/* Build conflict_details_str */
-	/*
-	 * This part should be more sophisticated, using the contents of the slots
-	 * to provide a rich description.
-	 */
-	//local_xid = 100; //FIXME
-/*	psprintf("Conflict type: %s, Operation: %s, "
-									"Table: %s.%s. Local XID: %u. "
-									"Publisher LSN: %X/%X.",
-									conflict_type_str, operation_type_str,
-									schemaname, relname, local_xid,
-									(uint32)(publisher_lsn >> 32),
-									(uint32)publisher_lsn); */
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
-	simple_heap_insert(rel, tup);
+
+	CatalogTupleInsert(rel, tup);
 	table_close(rel, RowExclusiveLock);
-
-#if 0
-	/* Use SPI to execute INSERT */
-	if (SPI_connect() != SPI_OK_CONNECT)
-	{
-		ereport(WARNING, (errmsg("could not connect to SPI for "
-								 "conflict logging")));
-		goto cleanup;
-	}
-
-	/* Prepare ParamListInfo for SPI_execute_plan_extended */
-
-#if 0
-	memset(&params_data, 0, sizeof(params_data));
-
-	params_data.numParams = 11;
-	for (i = 0; i < 11; i++)
-	{
-		params_data.params[i].ptype = conflict_log_insert_argtypes[i];
-		params_data.params[i].value = values[i];
-		params_data.params[i].isnull = nulls[i];
-	}
-
-	memset(&options, 0, sizeof(options));
-	options.params = &params_data; /* Pass the ParamListInfo */
-	options.read_only = false;
-	options.tcount = 0; /* No limit on rows to return (for INSERT, typically 0/1) */
-
-	ret = SPI_execute_plan_extended(plan, &options);
-#endif
-	ret = SPI_execp(plan, values, nulls, 0);
-
-	if (ret != SPI_OK_INSERT)
-	{
-		ereport(WARNING, (errmsg("could not insert into conflict_log_table: %s",
-								 SPI_result_code_string(ret))));
-	}
-
-	SPI_finish();
-
-cleanup:
-	/* Free palloc'd memory: strings, Jsonb objects */
-//	if (conflict_type_str)
-//		pfree(conflict_type_str);
-//	if (operation_type_str)
-//		pfree(operation_type_str);
-//	if (conflict_details_str)
-//		pfree(conflict_details_str);
-//	if (params_array->params) /* Free dynamically allocated params */
-//		pfree(params_array->params);
-#endif
 }
 
 /*
@@ -350,10 +239,6 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 				   ConflictTypeNames[type]),
 			errdetail_internal("%s", err_detail.data));
 
-	{
-		int i=1;
-//		while(i);
-	}
 	LogApplyConflictToTable(1, "test_sub", RelationGetRelid(relinfo->ri_RelationDesc),
 							"schema", relinfo->ri_RelationDesc->rd_rel->relname.data, type,
 							CMD_INSERT, "origin_name_1", 0, 0, searchslot,

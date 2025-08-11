@@ -18,6 +18,8 @@
 #include "access/heapam.h"
 #include "access/tableam.h"
 #include "access/table.h"
+#include "catalog/indexing.h"
+#include "catalog/pg_conflict_history_d.h"
 #include "catalog/pg_namespace_d.h"
 #include "executor/executor.h"
 #include "executor/spi.h"
@@ -115,32 +117,11 @@ TupleTableSlotToJsonDatum(TupleTableSlot *slot)
 /*
  * LogApplyConflictToTable
  *
- * Logs details about a logical replication conflict to a user-defined table.
- *
- * Parameters:
- * subid: OID of the subscription.
- * subname: Name of the subscription.
- * reloid: OID of the conflicted table.
- * schemaname: Schema name of the conflicted table.
- * relname: Relation name of the conflicted table.
- * conflict_type: Type of conflict (e.g., 'duplicate_key').
- * operation_type: DML operation type ('INSERT', 'UPDATE', 'DELETE').
- * origin_name: Name of the replication origin.
- * publisher_lsn: LSN from the publisher.
- * publisher_commit_ts: Commit timestamp from the publisher.
- * local_xid: Local transaction ID of the apply worker.
- * searchslot: Tuple found on subscriber during search
- * (local old data for UPDATE/DELETE, existing row for INSERT).
- * localslot: The original local tuple state
- * (before remote change attempt).
- * remoteslot: The incoming tuple from the publisher
- * (remote new data for INSERT/UPDATE, old for DELETE).
+ * Logs details about a logical replication conflict to a conflict history table.
  */
 static void
-LogApplyConflictToTable(Oid subid, const char *subname, Oid reloid,
-						const char *schemaname, const char *relname,
-						ConflictType conflict_type, CmdType operation_type,
-						const char *origin_name, XLogRecPtr publisher_lsn,
+LogApplyConflictToTable(Oid reloid, ConflictType conflict_type,
+						RepOriginId origin_id, XLogRecPtr publisher_lsn,
 						TimestampTz commit_ts, TupleTableSlot *searchslot,
 						TupleTableSlot *localslot, TupleTableSlot *remoteslot)
 {
@@ -150,25 +131,26 @@ LogApplyConflictToTable(Oid subid, const char *subname, Oid reloid,
 	char	   *conflict_type_str;
 	char	   *operation_type_str;
 	char	   *conflict_details_str;
+	char	   *origin_name = NULL;
 	Relation	rel;
 	HeapTuple	tup;
 
 	rel = table_open(ConflictHistoryRelationId, RowExclusiveLock);
 
-	/* The logic here will depend on the conflict type and operation type */
-	conflict_type_str = "conflict_type_todo";
-
 	/* Populate values and nulls arrays */
 	memset(nulls, 0, sizeof(bool) * 9);
 	memset(values, 0, sizeof(Datum) * 9);
 
-	values[0] = ObjectIdGetDatum(subid);
+	values[0] = ObjectIdGetDatum(MyLogicalRepWorker->subid);
 	values[1] = ObjectIdGetDatum(reloid);
 	values[2] = TimestampTzGetDatum(commit_ts);
 	values[3] = TimestampTzGetDatum(commit_ts);
-	values[4] = CStringGetTextDatum(conflict_type_str);
+	values[4] = CStringGetTextDatum(ConflictTypeNames[conflict_type]);
 
-	if (origin_name)
+	if (origin_id != InvalidRepOriginId)
+		replorigin_by_oid(origin_id, true, &origin_name);
+
+	if (origin_name != NULL)
 		values[5] = CStringGetTextDatum(origin_name);
 	else
 		nulls[5] = true;
@@ -221,6 +203,7 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 
 	/* Form errdetail message by combining conflicting tuples information. */
 	foreach_ptr(ConflictTupleInfo, conflicttuple, conflicttuples)
+	{
 		errdetail_apply_conflict(estate, relinfo, type, searchslot,
 								 conflicttuple->slot, remoteslot,
 								 conflicttuple->indexoid,
@@ -228,6 +211,11 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 								 conflicttuple->origin,
 								 conflicttuple->ts,
 								 &err_detail);
+
+		LogApplyConflictToTable(RelationGetRelid(relinfo->ri_RelationDesc),
+								type, conflicttuple->origin, 0, conflicttuple->ts,
+								searchslot, conflicttuple->slot, remoteslot);
+	}
 
 	pgstat_report_subscription_conflict(MySubscription->oid, type);
 
@@ -238,11 +226,6 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 				   RelationGetRelationName(localrel),
 				   ConflictTypeNames[type]),
 			errdetail_internal("%s", err_detail.data));
-
-	LogApplyConflictToTable(1, "test_sub", RelationGetRelid(relinfo->ri_RelationDesc),
-							"schema", relinfo->ri_RelationDesc->rd_rel->relname.data, type,
-							CMD_INSERT, "origin_name_1", 0, 0, searchslot,
-							NULL, remoteslot);
 }
 
 /*

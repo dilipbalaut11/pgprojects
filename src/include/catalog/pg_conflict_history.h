@@ -31,14 +31,20 @@ CATALOG(pg_conflict_history,1566,ConflictHistoryRelationId)
 {
 	Oid			subid BKI_LOOKUP(pg_subscription);	/* Oid of subscription */
 	Oid			relid BKI_LOOKUP(pg_class);	/* Oid of relation */
+	xid			local_xid;	/* local xid at the time of conflict */
+	xid			remote_xid; /* remote node xid that produced the conflicting change */
+	pg_lsn		local_lsn  BKI_FORCE_NOT_NULL;	/* local lsn at the time of conflict */
+	pg_lsn		remote_commit_lsn  BKI_FORCE_NOT_NULL; /* commit lsn of the remote transaction */
 #ifdef CATALOG_VARLEN
-	timestamptz	remote_commit_ts;
-	timestamptz	local_commit_ts;
-	text		conflict_type BKI_FORCE_NOT_NULL;
-	text		suborigin BKI_DEFAULT(LOGICALREP_ORIGIN_ANY);
-	json		ri_key;
-	json		remote_tuple;
-	json		local_tuple;
+	timestamptz	local_commit_ts;	/* commit ts of the local tuple */
+	timestamptz	remote_commit_ts;	/* commit ts of the remote tuple */
+	text		table_schema;		/* name of the schema */
+	text		table_name;			/* name of the table */
+	text		conflict_type BKI_FORCE_NOT_NULL;	/* conflict type */
+	text		origin BKI_DEFAULT(LOGICALREP_ORIGIN_ANY); /* origin of remote tuple */
+	json		key_tuple;	/* json representation of the key used for searching */
+	json		local_tuple; /* json representation of the local tuple */
+	json		remote_tuple; /* json representation of the remote tuple */
 #endif
 } FormData_pg_conflict_history;
 

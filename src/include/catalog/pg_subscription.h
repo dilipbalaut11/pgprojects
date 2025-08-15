@@ -80,6 +80,8 @@ CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROW
 
 	bool		subretaindeadtuples;	/* True if dead tuples useful for
 										 * conflict detection are retained */
+	bool		subconflicthistory;	/* True if conflict information should be
+									 * preserved in conflict history table. */
 
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	/* Connection string to the publisher */

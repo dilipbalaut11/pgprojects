@@ -35,6 +35,7 @@
 #include "commands/event_trigger.h"
 #include "commands/subscriptioncmds.h"
 #include "executor/executor.h"
+#include "executor/spi.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "pgstat.h"
@@ -75,6 +76,7 @@
 #define SUBOPT_RETAIN_DEAD_TUPLES	0x00004000
 #define SUBOPT_LSN					0x00008000
 #define SUBOPT_ORIGIN				0x00010000
+#define SUBOPT_CONFLICT_HISTORY		0x00020000
 
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
@@ -101,10 +103,12 @@ typedef struct SubOpts
 	bool		runasowner;
 	bool		failover;
 	bool		retaindeadtuples;
+	bool		conflict_history;
 	char	   *origin;
 	XLogRecPtr	lsn;
 } SubOpts;
 
+static void CreateConflictHistoryTable(Oid subid);
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
 static void check_publications_origin(WalReceiverConn *wrconn,
 									  List *publications, bool copydata,
@@ -171,6 +175,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 		opts->retaindeadtuples = false;
 	if (IsSet(supported_opts, SUBOPT_ORIGIN))
 		opts->origin = pstrdup(LOGICALREP_ORIGIN_ANY);
+	if (IsSet(supported_opts, SUBOPT_CONFLICT_HISTORY))
+		opts->conflict_history = false;
 
 	/* Parse options */
 	foreach(lc, stmt_options)
@@ -373,6 +379,15 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 			opts->specified_opts |= SUBOPT_LSN;
 			opts->lsn = lsn;
 		}
+		else if (IsSet(supported_opts, SUBOPT_CONFLICT_HISTORY) &&
+				 strcmp(defel->defname, "conflict_log_history") == 0)
+		{
+			if (IsSet(opts->specified_opts, SUBOPT_CONFLICT_HISTORY))
+				errorConflictingDefElem(defel, pstate);
+
+			opts->specified_opts |= SUBOPT_CONFLICT_HISTORY;
+			opts->conflict_history = defGetBoolean(defel);
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -549,6 +564,49 @@ publicationListToArray(List *publist)
 }
 
 /*
+ * Create conflict log history table.
+ */
+static void
+CreateConflictHistoryTable(Oid subid)
+{
+	char   *conflict_nsp = "public";	//TODO: we should get namespace as input?
+	char	conflict_rel[NAMEDATALEN];
+	StringInfoData 	querybuf;
+
+	snprintf(conflict_rel, sizeof(conflict_rel), "conflict_log_history_%d",
+			 subid);
+
+	initStringInfo(&querybuf);
+
+	appendStringInfo(&querybuf,
+					 "CREATE TABLE %s.%s ("
+					 "relid	Oid,"						/* Oid of relation */
+					 "local_xid xid,"	/* local xid at the time of conflict */
+					 "remote_xid xid,"	/* remote node xid that produced the conflicting change */
+					 "local_lsn pg_lsn,"	/* local lsn at the time of conflict */
+					 "remote_commit_lsn pg_lsn,"	/* commit lsn of the remote transaction */
+					 "local_commit_ts TIMESTAMPTZ,"	/* commit ts of the local tuple */
+					 "remote_commit_ts TIMESTAMPTZ,"	/* commit ts of the remote tuple */
+					 "table_schema	TEXT,"	/* name of the schema */
+					 "table_name	TEXT,"	/* name of the table */
+					 "conflict_type TEXT,"	/* conflict type */
+					 "remote_origin	TEXT,"	/* origin of remote tuple */
+					 "key_tuple		JSON,"	/* json representation of the key used for searching */
+					 "local_tuple	JSON,"	/* json representation of the local tuple */
+					 "remote_tuple	JSON)",	 /* json representation of the remote tuple */
+					conflict_nsp, conflict_rel);
+
+	if (SPI_connect() != SPI_OK_CONNECT)
+		elog(ERROR, "SPI_connect failed");
+
+	if (SPI_execute(querybuf.data, false, 0) != SPI_OK_UTILITY)
+		elog(ERROR, "SPI_exec failed: %s", querybuf.data);
+
+	if (SPI_finish() != SPI_OK_FINISH)
+		elog(ERROR, "SPI_finish failed");
+}
+
+/*
  * Create new subscription.
  */
 ObjectAddress
@@ -580,7 +638,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					  SUBOPT_STREAMING | SUBOPT_TWOPHASE_COMMIT |
 					  SUBOPT_DISABLE_ON_ERR | SUBOPT_PASSWORD_REQUIRED |
 					  SUBOPT_RUN_AS_OWNER | SUBOPT_FAILOVER |
-					  SUBOPT_RETAIN_DEAD_TUPLES | SUBOPT_ORIGIN);
+					  SUBOPT_RETAIN_DEAD_TUPLES | SUBOPT_ORIGIN |
+					  SUBOPT_CONFLICT_HISTORY);
 	parse_subscription_options(pstate, stmt->options, supported_opts, &opts);
 
 	/*
@@ -693,6 +752,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	values[Anum_pg_subscription_subfailover - 1] = BoolGetDatum(opts.failover);
 	values[Anum_pg_subscription_subretaindeadtuples - 1] =
 		BoolGetDatum(opts.retaindeadtuples);
+	values[Anum_pg_subscription_subconflicthistory - 1] =
+		BoolGetDatum(opts.conflict_history);
 	values[Anum_pg_subscription_subconninfo - 1] =
 		CStringGetTextDatum(conninfo);
 	if (opts.slot_name)
@@ -717,6 +778,9 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 
 	ReplicationOriginNameForLogicalRep(subid, InvalidOid, originname, sizeof(originname));
 	replorigin_create(originname);
+
+	if (opts.conflict_history)
+		CreateConflictHistoryTable(subid);
 
 	/*
 	 * Connect to remote side to execute requested commands and fetch table

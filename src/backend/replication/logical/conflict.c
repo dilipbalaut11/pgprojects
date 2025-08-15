@@ -29,6 +29,7 @@
 #include "storage/lmgr.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_lsn.h"
 
 static const char *const ConflictTypeNames[] = {
 	[CT_INSERT_EXISTS] = "insert_exists",
@@ -127,49 +128,60 @@ LogApplyConflictToTable(Oid reloid, ConflictType conflict_type,
 						TupleTableSlot *localslot, TupleTableSlot *remoteslot)
 {
 	Oid			relid;
-	Datum		values[9];
-	bool		nulls[9];
+	Datum		values[14];
+	bool		nulls[14];
+	int			attno;
 	char	   *conflict_type_str;
 	char	   *operation_type_str;
 	char	   *conflict_details_str;
 	char	   *origin_name = NULL;
 	Relation	rel;
 	HeapTuple	tup;
+	char		conflict_rel[NAMEDATALEN];
+	StringInfoData 	querybuf;
 
-	rel = table_open(ConflictHistoryRelationId, RowExclusiveLock);
+	snprintf(conflict_rel, sizeof(conflict_rel), "conflict_log_history_%d",
+			 MyLogicalRepWorker->subid);
+
+	relid = get_relname_relid("conflict_log_table", PG_PUBLIC_NAMESPACE);
 
 	/* Populate values and nulls arrays */
 	memset(nulls, 0, sizeof(bool) * 9);
 	memset(values, 0, sizeof(Datum) * 9);
 
-	values[0] = ObjectIdGetDatum(MyLogicalRepWorker->subid);
-	values[1] = ObjectIdGetDatum(reloid);
-	values[2] = TimestampTzGetDatum(commit_ts);
-	values[3] = TimestampTzGetDatum(commit_ts);
-	values[4] = CStringGetTextDatum(ConflictTypeNames[conflict_type]);
-
+	attno = 0;
+	values[attno++] = ObjectIdGetDatum(reloid);
+	values[attno++] = TransactionIdGetDatum(10000);
+	values[attno++] = TransactionIdGetDatum(2000);
+	values[attno++] = LSNGetDatum(0);
+	values[attno++] = LSNGetDatum(0);
+	values[attno++] = TimestampTzGetDatum(commit_ts);
+	values[attno++] = TimestampTzGetDatum(commit_ts);
+	values[attno++] = CStringGetTextDatum("public");
+	values[attno++] = CStringGetTextDatum("user_table_name");
+	values[attno++] = CStringGetTextDatum(ConflictTypeNames[conflict_type]);
 	if (origin_id != InvalidRepOriginId)
 		replorigin_by_oid(origin_id, true, &origin_name);
 
 	if (origin_name != NULL)
-		values[5] = CStringGetTextDatum(origin_name);
+		values[attno++] = CStringGetTextDatum(origin_name);
 	else
-		nulls[5] = true;
+		nulls[attno++] = true;
 
 	if (searchslot != NULL)
-		values[6] = TupleTableSlotToJsonDatum(searchslot);
+		values[attno++] = TupleTableSlotToJsonDatum(searchslot);
 	else
-		nulls[6] = true;
+		nulls[attno++] = true;
 
 	if (localslot != NULL)
-		values[7] = TupleTableSlotToJsonDatum(localslot);
+		values[attno++] = TupleTableSlotToJsonDatum(localslot);
 	else
-		nulls[7] = true;
+		nulls[attno++] = true;
 
 	if (remoteslot != NULL)
-		values[8] = TupleTableSlotToJsonDatum(remoteslot);
+		values[attno++] = TupleTableSlotToJsonDatum(remoteslot);
 	else
-		nulls[8] = true;
+		nulls[attno++] = true;
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 

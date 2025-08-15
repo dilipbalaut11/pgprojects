@@ -604,6 +604,8 @@ CreateConflictHistoryTable(Oid subid)
 
 	if (SPI_finish() != SPI_OK_FINISH)
 		elog(ERROR, "SPI_finish failed");
+
+	pfree(querybuf.data);
 }
 
 /*

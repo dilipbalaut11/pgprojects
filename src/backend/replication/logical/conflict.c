@@ -19,8 +19,9 @@
 #include "access/tableam.h"
 #include "access/table.h"
 #include "catalog/indexing.h"
-#include "catalog/pg_conflict_history_d.h"
+#include "catalog/namespace.h"
 #include "catalog/pg_namespace_d.h"
+#include "catalog/pg_type.h"
 #include "executor/executor.h"
 #include "executor/spi.h"
 #include "pgstat.h"
@@ -30,6 +31,8 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/pg_lsn.h"
+
+#define		MAX_CONFLICT_ATTR_NUM	14
 
 static const char *const ConflictTypeNames[] = {
 	[CT_INSERT_EXISTS] = "insert_exists",
@@ -128,8 +131,9 @@ LogApplyConflictToTable(Oid reloid, ConflictType conflict_type,
 						TupleTableSlot *localslot, TupleTableSlot *remoteslot)
 {
 	Oid			relid;
-	Datum		values[14];
-	bool		nulls[14];
+	Datum		values[MAX_CONFLICT_ATTR_NUM];
+	char		nulls[MAX_CONFLICT_ATTR_NUM];
+	Oid			argtypes[MAX_CONFLICT_ATTR_NUM];
 	int			attno;
 	char	   *conflict_type_str;
 	char	   *operation_type_str;
@@ -137,56 +141,111 @@ LogApplyConflictToTable(Oid reloid, ConflictType conflict_type,
 	char	   *origin_name = NULL;
 	Relation	rel;
 	HeapTuple	tup;
+	char	   *conflict_nsp = "public";	//TODO: we should get namespace as input?
 	char		conflict_rel[NAMEDATALEN];
 	StringInfoData 	querybuf;
+	SPIPlanPtr	plan;
 
 	snprintf(conflict_rel, sizeof(conflict_rel), "conflict_log_history_%d",
 			 MyLogicalRepWorker->subid);
 
-	relid = get_relname_relid("conflict_log_table", PG_PUBLIC_NAMESPACE);
+	relid = get_relname_relid(conflict_rel,
+							  get_namespace_oid(conflict_nsp, false));
 
 	/* Populate values and nulls arrays */
-	memset(nulls, 0, sizeof(bool) * 9);
-	memset(values, 0, sizeof(Datum) * 9);
+	memset(nulls, 0, sizeof(bool) * MAX_CONFLICT_ATTR_NUM);
+	memset(values, 0, sizeof(Datum) * MAX_CONFLICT_ATTR_NUM);
 
 	attno = 0;
-	values[attno++] = ObjectIdGetDatum(reloid);
-	values[attno++] = TransactionIdGetDatum(10000);
-	values[attno++] = TransactionIdGetDatum(2000);
-	values[attno++] = LSNGetDatum(0);
-	values[attno++] = LSNGetDatum(0);
-	values[attno++] = TimestampTzGetDatum(commit_ts);
-	values[attno++] = TimestampTzGetDatum(commit_ts);
-	values[attno++] = CStringGetTextDatum("public");
-	values[attno++] = CStringGetTextDatum("user_table_name");
-	values[attno++] = CStringGetTextDatum(ConflictTypeNames[conflict_type]);
+	argtypes[attno] = OIDOID;
+	values[attno] = ObjectIdGetDatum(reloid);
+	attno++;
+
+	argtypes[attno] = XIDOID;
+	values[attno] = TransactionIdGetDatum(10000);
+	attno++;
+
+	argtypes[attno] = XIDOID;
+	values[attno] = TransactionIdGetDatum(2000);
+	attno++;
+
+	argtypes[attno] = LSNOID;
+	values[attno] = LSNGetDatum(0);
+	attno++;
+
+	argtypes[attno] = LSNOID;
+	values[attno] = LSNGetDatum(0);
+	attno++;
+
+	argtypes[attno] = TIMESTAMPTZOID;
+	values[attno] = TimestampTzGetDatum(commit_ts);
+	attno++;
+
+	argtypes[attno] = TIMESTAMPTZOID;
+	values[attno] = TimestampTzGetDatum(commit_ts);
+	attno++;
+
+	argtypes[attno] = TEXTOID;
+	values[attno] = CStringGetTextDatum("public");
+	attno++;
+
+	argtypes[attno] = TEXTOID;
+	values[attno] = CStringGetTextDatum("user_table_name");
+	attno++;
+
+	argtypes[attno] = TEXTOID;
+	values[attno] = CStringGetTextDatum(ConflictTypeNames[conflict_type]);
+	attno++;
+
 	if (origin_id != InvalidRepOriginId)
 		replorigin_by_oid(origin_id, true, &origin_name);
 
+	argtypes[attno] = TEXTOID;
 	if (origin_name != NULL)
-		values[attno++] = CStringGetTextDatum(origin_name);
+		values[attno] = CStringGetTextDatum(origin_name);
 	else
-		nulls[attno++] = true;
+		nulls[attno] = 'n';
+	attno++;
 
+	argtypes[attno] = JSONOID;
 	if (searchslot != NULL)
-		values[attno++] = TupleTableSlotToJsonDatum(searchslot);
+		values[attno] = TupleTableSlotToJsonDatum(searchslot);
 	else
-		nulls[attno++] = true;
+		nulls[attno] = 'n';
+	attno++;
 
+	argtypes[attno] = JSONOID;
 	if (localslot != NULL)
-		values[attno++] = TupleTableSlotToJsonDatum(localslot);
+		values[attno] = TupleTableSlotToJsonDatum(localslot);
 	else
-		nulls[attno++] = true;
+		nulls[attno] = 'n';
+	attno++;
 
+	argtypes[attno] = JSONOID;
 	if (remoteslot != NULL)
-		values[attno++] = TupleTableSlotToJsonDatum(remoteslot);
+		values[attno] = TupleTableSlotToJsonDatum(remoteslot);
 	else
-		nulls[attno++] = true;
+		nulls[attno] = 'n';
 
-	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
+	initStringInfo(&querybuf);
+	appendStringInfo(&querybuf,
+					 "INSERT INTO %s.%s VALUES ("
+					 "$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,"
+					 "$14)",
+					 conflict_nsp, conflict_rel);
 
-	CatalogTupleInsert(rel, tup);
-	table_close(rel, RowExclusiveLock);
+	if (SPI_connect() != SPI_OK_CONNECT)
+		elog(ERROR, "SPI_connect failed");
+
+	SPI_execute_with_args(querybuf.data,
+						  MAX_CONFLICT_ATTR_NUM, argtypes,
+						  values, nulls,
+						  false, 0);
+
+	if (SPI_finish() != SPI_OK_FINISH)
+		elog(ERROR, "SPI_finish failed");
+
+	pfree(querybuf.data);
 }
 
 /*

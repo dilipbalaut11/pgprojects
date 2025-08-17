@@ -590,6 +590,7 @@ CreateConflictHistoryTable(Oid subid)
 					 "table_schema	TEXT,"	/* name of the schema */
 					 "table_name	TEXT,"	/* name of the table */
 					 "conflict_type TEXT,"	/* conflict type */
+					 "local_origin	TEXT,"	/* origin of remote tuple */
 					 "remote_origin	TEXT,"	/* origin of remote tuple */
 					 "key_tuple		JSON,"	/* json representation of the key used for searching */
 					 "local_tuple	JSON,"	/* json representation of the local tuple */

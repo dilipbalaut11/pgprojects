@@ -5942,6 +5942,19 @@ set_apply_error_context_origin(char *originname)
 }
 
 /*
+ * Allocate the origin name in long-lived context for error context message.
+ */
+void
+get_apply_error_context_remote_info(char **origin_name,
+									TransactionId *remote_xid,
+									XLogRecPtr *remote_lsn)
+{
+	*origin_name = apply_error_callback_arg.origin_name;
+	*remote_xid = apply_error_callback_arg.remote_xid;
+	*remote_lsn = apply_error_callback_arg.finish_lsn;
+}
+
+/*
  * Return the action to be taken for the given transaction. See
  * TransApplyAction for information on each of the actions.
  *

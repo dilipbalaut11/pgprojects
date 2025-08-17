@@ -32,7 +32,7 @@
 #include "utils/lsyscache.h"
 #include "utils/pg_lsn.h"
 
-#define		MAX_CONFLICT_ATTR_NUM	14
+#define		MAX_CONFLICT_ATTR_NUM	15
 
 static const char *const ConflictTypeNames[] = {
 	[CT_INSERT_EXISTS] = "insert_exists",
@@ -63,7 +63,6 @@ static char *build_tuple_value_details(EState *estate, ResultRelInfo *relinfo,
 									   Oid indexoid);
 static char *build_index_value_desc(EState *estate, Relation localrel,
 									TupleTableSlot *slot, Oid indexoid);
-static void setup_conflict_log_table(char *schema_name, char *table_name);
 
 /*
  * Get the xmin and commit timestamp data (origin and timestamp) associated
@@ -125,72 +124,77 @@ TupleTableSlotToJsonDatum(TupleTableSlot *slot)
  * Logs details about a logical replication conflict to a conflict history table.
  */
 static void
-LogApplyConflictToTable(Oid reloid, ConflictType conflict_type,
-						RepOriginId origin_id, XLogRecPtr publisher_lsn,
-						TimestampTz commit_ts, TupleTableSlot *searchslot,
+LogApplyConflictToTable(Relation rel, TransactionId local_xid,
+						TimestampTz local_ts, ConflictType conflict_type,
+						RepOriginId origin_id, TupleTableSlot *searchslot,
 						TupleTableSlot *localslot, TupleTableSlot *remoteslot)
 {
-	Oid			relid;
 	Datum		values[MAX_CONFLICT_ATTR_NUM];
 	char		nulls[MAX_CONFLICT_ATTR_NUM];
 	Oid			argtypes[MAX_CONFLICT_ATTR_NUM];
 	int			attno;
-	char	   *conflict_type_str;
-	char	   *operation_type_str;
-	char	   *conflict_details_str;
 	char	   *origin_name = NULL;
-	Relation	rel;
-	HeapTuple	tup;
 	char	   *conflict_nsp = "public";	//TODO: we should get namespace as input?
 	char		conflict_rel[NAMEDATALEN];
+	char	   *remote_origin_name;
+	TransactionId	remote_xid;
+	XLogRecPtr		remote_lsn;
+	XLogRecPtr		local_lsn = 0;
+	TimestampTz		remote_ts = 0;
 	StringInfoData 	querybuf;
-	SPIPlanPtr	plan;
+
+	/* If conflict history is not enabled for the subscription just return. */
+	if (!get_subscription_conflict_history(MyLogicalRepWorker->subid))
+		return;
+
+	get_apply_error_context_remote_info(&remote_origin_name,
+										&remote_xid,
+										&remote_lsn);
 
 	snprintf(conflict_rel, sizeof(conflict_rel), "conflict_log_history_%d",
 			 MyLogicalRepWorker->subid);
 
-	relid = get_relname_relid(conflict_rel,
-							  get_namespace_oid(conflict_nsp, false));
-
-	/* Populate values and nulls arrays */
-	memset(nulls, 0, sizeof(bool) * MAX_CONFLICT_ATTR_NUM);
+	/* Initialize values and nulls arrays */
 	memset(values, 0, sizeof(Datum) * MAX_CONFLICT_ATTR_NUM);
+	memset(nulls, ' ', sizeof(char) * MAX_CONFLICT_ATTR_NUM);
 
+	/* Populate the values and nulls arrays */
 	attno = 0;
 	argtypes[attno] = OIDOID;
-	values[attno] = ObjectIdGetDatum(reloid);
+	values[attno] = ObjectIdGetDatum(RelationGetRelid(rel));
 	attno++;
 
 	argtypes[attno] = XIDOID;
-	values[attno] = TransactionIdGetDatum(10000);
+	values[attno] = TransactionIdGetDatum(local_xid);
 	attno++;
 
 	argtypes[attno] = XIDOID;
-	values[attno] = TransactionIdGetDatum(2000);
+	values[attno] = TransactionIdGetDatum(remote_xid);
 	attno++;
 
 	argtypes[attno] = LSNOID;
-	values[attno] = LSNGetDatum(0);
+	values[attno] = LSNGetDatum(local_lsn);
 	attno++;
 
 	argtypes[attno] = LSNOID;
-	values[attno] = LSNGetDatum(0);
+	values[attno] = LSNGetDatum(remote_lsn);
 	attno++;
 
 	argtypes[attno] = TIMESTAMPTZOID;
-	values[attno] = TimestampTzGetDatum(commit_ts);
+	values[attno] = TimestampTzGetDatum(local_ts);
 	attno++;
 
 	argtypes[attno] = TIMESTAMPTZOID;
-	values[attno] = TimestampTzGetDatum(commit_ts);
+	values[attno] = TimestampTzGetDatum(remote_ts);
 	attno++;
 
 	argtypes[attno] = TEXTOID;
-	values[attno] = CStringGetTextDatum("public");
+	values[attno] =
+			CStringGetTextDatum(get_namespace_name(RelationGetNamespace(rel)));
 	attno++;
 
 	argtypes[attno] = TEXTOID;
-	values[attno] = CStringGetTextDatum("user_table_name");
+	values[attno] = CStringGetTextDatum(RelationGetRelationName(rel));
 	attno++;
 
 	argtypes[attno] = TEXTOID;
@@ -205,6 +209,10 @@ LogApplyConflictToTable(Oid reloid, ConflictType conflict_type,
 		values[attno] = CStringGetTextDatum(origin_name);
 	else
 		nulls[attno] = 'n';
+	attno++;
+
+	argtypes[attno] = TEXTOID;
+	values[attno] = CStringGetTextDatum(remote_origin_name);
 	attno++;
 
 	argtypes[attno] = JSONOID;
@@ -227,20 +235,22 @@ LogApplyConflictToTable(Oid reloid, ConflictType conflict_type,
 	else
 		nulls[attno] = 'n';
 
+	/* Prepare a insert query. */
 	initStringInfo(&querybuf);
 	appendStringInfo(&querybuf,
 					 "INSERT INTO %s.%s VALUES ("
 					 "$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,"
-					 "$14)",
+					 "$14, $15)",
 					 conflict_nsp, conflict_rel);
 
 	if (SPI_connect() != SPI_OK_CONNECT)
 		elog(ERROR, "SPI_connect failed");
 
-	SPI_execute_with_args(querybuf.data,
-						  MAX_CONFLICT_ATTR_NUM, argtypes,
-						  values, nulls,
-						  false, 0);
+	if (SPI_execute_with_args(querybuf.data,
+							  MAX_CONFLICT_ATTR_NUM, argtypes,
+							  values, nulls,
+							  false, 0) != SPI_OK_INSERT)
+		elog(ERROR, "SPI_execute_with_args failed: %s", querybuf.data);
 
 	if (SPI_finish() != SPI_OK_FINISH)
 		elog(ERROR, "SPI_finish failed");
@@ -284,8 +294,8 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 								 conflicttuple->ts,
 								 &err_detail);
 
-		LogApplyConflictToTable(RelationGetRelid(relinfo->ri_RelationDesc),
-								type, conflicttuple->origin, 0, conflicttuple->ts,
+		LogApplyConflictToTable(relinfo->ri_RelationDesc, conflicttuple->xmin,
+								conflicttuple->ts, type, conflicttuple->origin, 
 								searchslot, conflicttuple->slot, remoteslot);
 	}
 

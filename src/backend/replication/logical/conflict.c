@@ -133,9 +133,8 @@ LogApplyConflictToTable(Relation rel, TransactionId local_xid,
 	char		nulls[MAX_CONFLICT_ATTR_NUM];
 	Oid			argtypes[MAX_CONFLICT_ATTR_NUM];
 	int			attno;
-	char	   *origin_name = NULL;
-	char	   *conflict_nsp = "public";	//TODO: we should get namespace as input?
-	char		conflict_rel[NAMEDATALEN];
+	char	   *origin_name;
+	char	   *conflict_rel;
 	char	   *remote_origin_name;
 	TransactionId	remote_xid;
 	XLogRecPtr		remote_lsn;
@@ -143,16 +142,15 @@ LogApplyConflictToTable(Relation rel, TransactionId local_xid,
 	TimestampTz		remote_ts = 0;
 	StringInfoData 	querybuf;
 
+
 	/* If conflict history is not enabled for the subscription just return. */
-	if (!get_subscription_conflict_history(MyLogicalRepWorker->subid))
+	conflict_rel = get_subscription_conflict_history(MyLogicalRepWorker->subid);
+	if (conflict_rel == NULL)
 		return;
 
 	get_apply_error_context_remote_info(&remote_origin_name,
 										&remote_xid,
 										&remote_lsn);
-
-	snprintf(conflict_rel, sizeof(conflict_rel), "conflict_log_history_%d",
-			 MyLogicalRepWorker->subid);
 
 	/* Initialize values and nulls arrays */
 	memset(values, 0, sizeof(Datum) * MAX_CONFLICT_ATTR_NUM);
@@ -238,10 +236,10 @@ LogApplyConflictToTable(Relation rel, TransactionId local_xid,
 	/* Prepare a insert query. */
 	initStringInfo(&querybuf);
 	appendStringInfo(&querybuf,
-					 "INSERT INTO %s.%s VALUES ("
+					 "INSERT INTO %s VALUES ("
 					 "$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,"
 					 "$14, $15)",
-					 conflict_nsp, conflict_rel);
+					 conflict_rel);
 
 	if (SPI_connect() != SPI_OK_CONNECT)
 		elog(ERROR, "SPI_connect failed");

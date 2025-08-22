@@ -3858,11 +3858,13 @@ get_subscription_name(Oid subid, bool missing_ok)
 /*
  * get_subscription_conflict_history - is conflict history enabled for a subid
  */
-bool
+char *
 get_subscription_conflict_history(Oid subid)
 {
 	HeapTuple	tup;
-	bool		confhistory;
+	char	   *conflict_table;
+	Datum		datum;
+	bool		isnull;
 	Form_pg_subscription subform;
 
 	tup = SearchSysCache1(SUBSCRIPTIONOID, ObjectIdGetDatum(subid));
@@ -3871,9 +3873,19 @@ get_subscription_conflict_history(Oid subid)
 		return NULL;
 
 	subform = (Form_pg_subscription) GETSTRUCT(tup);
-	confhistory = subform->subconflicthistory;
+
+	/* Get conflict table name */
+	datum = SysCacheGetAttr(SUBSCRIPTIONOID,
+							tup,
+							Anum_pg_subscription_subconflicttable,
+							&isnull);
+
+	if (!isnull)
+		conflict_table = pstrdup(TextDatumGetCString(datum));
+	else
+		conflict_table = NULL;
 
 	ReleaseSysCache(tup);
 
-	return confhistory;
+	return conflict_table;
 }

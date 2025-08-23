@@ -119,38 +119,32 @@ TupleTableSlotToJsonDatum(TupleTableSlot *slot)
 }
 
 /*
- * LogApplyConflictToTable
+ * InsertIntoLogHistoryTable
  *
- * Logs details about a logical replication conflict to a conflict history table.
+ * Insert conflict details into the conflict log history table.
  */
 static void
-LogApplyConflictToTable(Relation rel, TransactionId local_xid,
-						TimestampTz local_ts, ConflictType conflict_type,
-						RepOriginId origin_id, TupleTableSlot *searchslot,
-						TupleTableSlot *localslot, TupleTableSlot *remoteslot)
+InsertIntoLogHistoryTable(Relation rel, TransactionId local_xid,
+						  TimestampTz local_ts, ConflictType conflict_type,
+						  RepOriginId origin_id, TupleTableSlot *searchslot,
+						  TupleTableSlot *localslot,
+						  TupleTableSlot *remoteslot)
 {
 	Datum		values[MAX_CONFLICT_ATTR_NUM];
 	char		nulls[MAX_CONFLICT_ATTR_NUM];
 	Oid			argtypes[MAX_CONFLICT_ATTR_NUM];
 	int			attno;
-	char	   *origin_name;
+	char	   *origin = NULL;
 	char	   *conflict_rel;
-	char	   *remote_origin_name;
-	TransactionId	remote_xid;
-	XLogRecPtr		remote_lsn;
+	char	   *remote_origin = NULL;
 	XLogRecPtr		local_lsn = 0;
-	TimestampTz		remote_ts = 0;
 	StringInfoData 	querybuf;
 
 
 	/* If conflict history is not enabled for the subscription just return. */
-	conflict_rel = get_subscription_conflict_history(MyLogicalRepWorker->subid);
+	conflict_rel = get_subscription_conflictrel(MyLogicalRepWorker->subid);
 	if (conflict_rel == NULL)
 		return;
-
-	get_apply_error_context_remote_info(&remote_origin_name,
-										&remote_xid,
-										&remote_lsn);
 
 	/* Initialize values and nulls arrays */
 	memset(values, 0, sizeof(Datum) * MAX_CONFLICT_ATTR_NUM);
@@ -175,7 +169,7 @@ LogApplyConflictToTable(Relation rel, TransactionId local_xid,
 	attno++;
 
 	argtypes[attno] = LSNOID;
-	values[attno] = LSNGetDatum(remote_lsn);
+	values[attno] = LSNGetDatum(remote_final_lsn);
 	attno++;
 
 	argtypes[attno] = TIMESTAMPTZOID;
@@ -183,7 +177,7 @@ LogApplyConflictToTable(Relation rel, TransactionId local_xid,
 	attno++;
 
 	argtypes[attno] = TIMESTAMPTZOID;
-	values[attno] = TimestampTzGetDatum(remote_ts);
+	values[attno] = TimestampTzGetDatum(remote_commit_ts);
 	attno++;
 
 	argtypes[attno] = TEXTOID;
@@ -200,17 +194,23 @@ LogApplyConflictToTable(Relation rel, TransactionId local_xid,
 	attno++;
 
 	if (origin_id != InvalidRepOriginId)
-		replorigin_by_oid(origin_id, true, &origin_name);
+		replorigin_by_oid(origin_id, true, &origin);
 
 	argtypes[attno] = TEXTOID;
-	if (origin_name != NULL)
-		values[attno] = CStringGetTextDatum(origin_name);
+	if (origin != NULL)
+		values[attno] = CStringGetTextDatum(origin);
 	else
 		nulls[attno] = 'n';
 	attno++;
 
+	if (replorigin_session_origin != InvalidRepOriginId)
+		replorigin_by_oid(replorigin_session_origin, true, &remote_origin);
+
 	argtypes[attno] = TEXTOID;
-	values[attno] = CStringGetTextDatum(remote_origin_name);
+	if (remote_origin != NULL)
+		values[attno] = CStringGetTextDatum(remote_origin);
+	else
+		nulls[attno] = 'n';
 	attno++;
 
 	argtypes[attno] = JSONOID;
@@ -292,9 +292,13 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 								 conflicttuple->ts,
 								 &err_detail);
 
-		LogApplyConflictToTable(relinfo->ri_RelationDesc, conflicttuple->xmin,
-								conflicttuple->ts, type, conflicttuple->origin, 
-								searchslot, conflicttuple->slot, remoteslot);
+		/* Insert conflict details to log history table. */
+		InsertIntoLogHistoryTable(relinfo->ri_RelationDesc,
+								  conflicttuple->xmin,
+								  conflicttuple->ts, type,
+								  conflicttuple->origin,
+								  searchslot, conflicttuple->slot,
+								  remoteslot);
 	}
 
 	pgstat_report_subscription_conflict(MySubscription->oid, type);

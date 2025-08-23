@@ -53,6 +53,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_lsn.h"
+#include "utils/regproc.h"
 #include "utils/syscache.h"
 
 /*
@@ -624,7 +625,6 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	bits32		supported_opts;
 	SubOpts		opts = {0};
 	AclResult	aclresult;
-	StringInfoData 	conflicttable;
 
 	/*
 	 * Parse and check options.
@@ -717,12 +717,6 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	if (opts.synchronous_commit == NULL)
 		opts.synchronous_commit = "off";
 
-	if (opts.conflicttable != NULL)
-	{
-		initStringInfo(&conflicttable);
-		appendStringInfo(&conflicttable, "%s.%s", "public", opts.conflicttable);
-	}
-
 	conninfo = stmt->conninfo;
 	publications = stmt->publication;
 
@@ -770,11 +764,25 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 		publicationListToArray(publications);
 	values[Anum_pg_subscription_suborigin - 1] =
 		CStringGetTextDatum(opts.origin);
+
 	if (opts.conflicttable)
+	{
+		Oid		namespaceId;
+		char   *objname;
+		List   *names = stringToQualifiedNameList(opts.conflicttable, NULL);
+
 		values[Anum_pg_subscription_subconflicttable - 1] =
-			CStringGetTextDatum(conflicttable.data);
+			CStringGetTextDatum(opts.conflicttable);
+
+		namespaceId = QualifiedNameGetCreationNamespace(names, &objname);
+		values[Anum_pg_subscription_subconflictnspid - 1] =
+			ObjectIdGetDatum(namespaceId);
+	}
 	else
+	{
 		nulls[Anum_pg_subscription_subconflicttable - 1] = true;
+		nulls[Anum_pg_subscription_subconflictnspid - 1] = true;
+	}
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
@@ -787,8 +795,9 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	ReplicationOriginNameForLogicalRep(subid, InvalidOid, originname, sizeof(originname));
 	replorigin_create(originname);
 
+	/* If conflict log history table name is given than create the table. */
 	if (opts.conflicttable)
-		CreateConflictHistoryTable(conflicttable.data);
+		CreateConflictHistoryTable(opts.conflicttable);
 
 	/*
 	 * Connect to remote side to execute requested commands and fetch table

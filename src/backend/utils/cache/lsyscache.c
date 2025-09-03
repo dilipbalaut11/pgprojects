@@ -3881,3 +3881,48 @@ get_subscription_name(Oid subid, bool missing_ok)
 
 	return subname;
 }
+
+/*
+ * get_subscription_conflictrel
+ *
+ * Returns the schema-qualified name of the conflict history table.
+ * The returned string is palloc'd and must be freed by the caller.
+ *
+ */
+char *
+get_subscription_conflictrel(Oid subid)
+{
+	HeapTuple	tup;
+	Datum		datum;
+	bool		isnull;
+	StringInfoData 	conflictrel;
+	Form_pg_subscription subform;
+
+	tup = SearchSysCache1(SUBSCRIPTIONOID, ObjectIdGetDatum(subid));
+
+	if (!HeapTupleIsValid(tup))
+		return NULL;
+
+	subform = (Form_pg_subscription) GETSTRUCT(tup);
+
+	/* Get conflict table name */
+	datum = SysCacheGetAttr(SUBSCRIPTIONOID,
+							tup,
+							Anum_pg_subscription_subconflicttable,
+							&isnull);
+
+	if (!isnull)
+	{
+		initStringInfo(&conflictrel);
+		appendStringInfo(&conflictrel, "%s.%s",
+						 get_namespace_name(subform->subconflictnspid),
+						 TextDatumGetCString(datum));
+		ReleaseSysCache(tup);
+		return conflictrel.data;
+	}
+	else
+	{
+		ReleaseSysCache(tup);
+		return NULL;
+	}
+}

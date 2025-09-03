@@ -15,13 +15,24 @@
 #include "postgres.h"
 
 #include "access/commit_ts.h"
+#include "access/heapam.h"
 #include "access/tableam.h"
+#include "access/table.h"
+#include "catalog/indexing.h"
+#include "catalog/namespace.h"
+#include "catalog/pg_namespace_d.h"
+#include "catalog/pg_type.h"
 #include "executor/executor.h"
+#include "executor/spi.h"
 #include "pgstat.h"
 #include "replication/conflict.h"
 #include "replication/worker_internal.h"
 #include "storage/lmgr.h"
+#include "utils/builtins.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_lsn.h"
+
+#define		MAX_CONFLICT_ATTR_NUM	15
 
 static const char *const ConflictTypeNames[] = {
 	[CT_INSERT_EXISTS] = "insert_exists",
@@ -86,6 +97,174 @@ GetTupleTransactionInfo(TupleTableSlot *localslot, TransactionId *xmin,
 }
 
 /*
+ * Helper function to convert a TupleTableSlot to Jsonb
+ *
+ * This would be a new internal helper function for logical replication
+ * Needs to handle various data types and potentially TOASTed data
+ */
+static Datum
+TupleTableSlotToJsonDatum(TupleTableSlot *slot)
+{
+	HeapTuple	tuple = ExecCopySlotHeapTuple(slot);
+	Datum		datum = heap_copy_tuple_as_datum(tuple, slot->tts_tupleDescriptor);
+	Datum		json;
+
+	if (TupIsNull(slot))
+		return 0;
+
+	json = DirectFunctionCall1(row_to_json, datum);
+	heap_freetuple(tuple);
+
+	return json;
+}
+
+/*
+ * InsertIntoLogHistoryTable
+ *
+ * Logs details about a logical replication conflict to a conflict history
+ * table.
+ */
+static void
+InsertIntoLogHistoryTable(Relation rel, TransactionId local_xid,
+						  TimestampTz local_ts, ConflictType conflict_type,
+						  RepOriginId origin_id, TupleTableSlot *searchslot,
+						  TupleTableSlot *localslot,
+						  TupleTableSlot *remoteslot)
+{
+	Datum		values[MAX_CONFLICT_ATTR_NUM];
+	char		nulls[MAX_CONFLICT_ATTR_NUM];
+	Oid			argtypes[MAX_CONFLICT_ATTR_NUM];
+	int			attno;
+	char	   *origin = NULL;
+	char	   *conflict_rel;
+	char	   *remote_origin = NULL;
+	XLogRecPtr		local_lsn = 0;
+	StringInfoData 	querybuf;
+
+
+	/* If conflict history is not enabled for the subscription just return. */
+	conflict_rel = get_subscription_conflictrel(MyLogicalRepWorker->subid);
+	if (conflict_rel == NULL)
+		return;
+
+	/* Initialize values and nulls arrays */
+	memset(values, 0, sizeof(Datum) * MAX_CONFLICT_ATTR_NUM);
+	memset(nulls, ' ', sizeof(char) * MAX_CONFLICT_ATTR_NUM);
+
+	/* Populate the values and nulls arrays */
+	attno = 0;
+	argtypes[attno] = OIDOID;
+	values[attno] = ObjectIdGetDatum(RelationGetRelid(rel));
+	attno++;
+
+	argtypes[attno] = XIDOID;
+	values[attno] = TransactionIdGetDatum(local_xid);
+	attno++;
+
+	argtypes[attno] = XIDOID;
+	values[attno] = TransactionIdGetDatum(remote_xid);
+	attno++;
+
+	argtypes[attno] = LSNOID;
+	values[attno] = LSNGetDatum(local_lsn);
+	attno++;
+
+	argtypes[attno] = LSNOID;
+	values[attno] = LSNGetDatum(remote_final_lsn);
+	attno++;
+
+	argtypes[attno] = TIMESTAMPTZOID;
+	values[attno] = TimestampTzGetDatum(local_ts);
+	attno++;
+
+	argtypes[attno] = TIMESTAMPTZOID;
+	values[attno] = TimestampTzGetDatum(remote_commit_ts);
+	attno++;
+
+	argtypes[attno] = TEXTOID;
+	values[attno] =
+			CStringGetTextDatum(get_namespace_name(RelationGetNamespace(rel)));
+	attno++;
+
+	argtypes[attno] = TEXTOID;
+	values[attno] = CStringGetTextDatum(RelationGetRelationName(rel));
+	attno++;
+
+	argtypes[attno] = TEXTOID;
+	values[attno] = CStringGetTextDatum(ConflictTypeNames[conflict_type]);
+	attno++;
+
+	if (origin_id != InvalidRepOriginId)
+		replorigin_by_oid(origin_id, true, &origin);
+
+	argtypes[attno] = TEXTOID;
+	if (origin != NULL)
+		values[attno] = CStringGetTextDatum(origin);
+	else
+		nulls[attno] = 'n';
+	attno++;
+
+	if (replorigin_session_origin != InvalidRepOriginId)
+		replorigin_by_oid(replorigin_session_origin, true, &remote_origin);
+
+	argtypes[attno] = TEXTOID;
+	if (remote_origin != NULL)
+		values[attno] = CStringGetTextDatum(remote_origin);
+	else
+		nulls[attno] = 'n';
+	attno++;
+
+	argtypes[attno] = JSONOID;
+	if (searchslot != NULL)
+		values[attno] = TupleTableSlotToJsonDatum(searchslot);
+	else
+		nulls[attno] = 'n';
+	attno++;
+
+	argtypes[attno] = JSONOID;
+	if (localslot != NULL)
+		values[attno] = TupleTableSlotToJsonDatum(localslot);
+	else
+		nulls[attno] = 'n';
+	attno++;
+
+	argtypes[attno] = JSONOID;
+	if (remoteslot != NULL)
+		values[attno] = TupleTableSlotToJsonDatum(remoteslot);
+	else
+		nulls[attno] = 'n';
+
+	/* Prepare a insert query. */
+	initStringInfo(&querybuf);
+	appendStringInfo(&querybuf,
+					 "INSERT INTO %s VALUES ("
+					 "$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,"
+					 "$14, $15)",
+					 conflict_rel);
+
+	if (SPI_connect() != SPI_OK_CONNECT)
+		elog(ERROR, "SPI_connect failed");
+
+	/*
+	 * XXX The following section uses SPI to execute the INSERT. If the\
+	 * insertion fails, we currently throw an ERROR. A future improvement might
+	 * be to log a WARNING instead, to avoid aborting the entire replication
+	 * worker on a logging failure.
+	 */
+	if (SPI_execute_with_args(querybuf.data,
+							  MAX_CONFLICT_ATTR_NUM, argtypes,
+							  values, nulls,
+							  false, 0) != SPI_OK_INSERT)
+		elog(ERROR, "SPI_execute_with_args failed: %s", querybuf.data);
+
+	if (SPI_finish() != SPI_OK_FINISH)
+		elog(ERROR, "SPI_finish failed");
+
+	pfree(querybuf.data);
+	pfree(conflict_rel);
+}
+
+/*
  * This function is used to report a conflict while applying replication
  * changes.
  *
@@ -112,6 +291,7 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 
 	/* Form errdetail message by combining conflicting tuples information. */
 	foreach_ptr(ConflictTupleInfo, conflicttuple, conflicttuples)
+	{
 		errdetail_apply_conflict(estate, relinfo, type, searchslot,
 								 conflicttuple->slot, remoteslot,
 								 conflicttuple->indexoid,
@@ -119,6 +299,15 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 								 conflicttuple->origin,
 								 conflicttuple->ts,
 								 &err_detail);
+
+		/* Insert conflict details to log history table. */
+		InsertIntoLogHistoryTable(relinfo->ri_RelationDesc,
+								  conflicttuple->xmin,
+								  conflicttuple->ts, type,
+								  conflicttuple->origin,
+								  searchslot, conflicttuple->slot,
+								  remoteslot);
+	}
 
 	pgstat_report_subscription_conflict(MySubscription->oid, type);
 

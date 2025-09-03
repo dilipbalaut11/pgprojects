@@ -34,6 +34,7 @@
 #include "commands/event_trigger.h"
 #include "commands/subscriptioncmds.h"
 #include "executor/executor.h"
+#include "executor/spi.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "pgstat.h"
@@ -51,6 +52,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_lsn.h"
+#include "utils/regproc.h"
 #include "utils/syscache.h"
 
 /*
@@ -75,6 +77,7 @@
 #define SUBOPT_MAX_RETENTION_DURATION	0x00008000
 #define SUBOPT_LSN					0x00010000
 #define SUBOPT_ORIGIN				0x00020000
+#define SUBOPT_CONFLICT_TABLE		0x00030000
 
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
@@ -103,6 +106,7 @@ typedef struct SubOpts
 	bool		retaindeadtuples;
 	int32		maxretention;
 	char	   *origin;
+	char	   *conflicttable;
 	XLogRecPtr	lsn;
 } SubOpts;
 
@@ -174,6 +178,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 		opts->maxretention = 0;
 	if (IsSet(supported_opts, SUBOPT_ORIGIN))
 		opts->origin = pstrdup(LOGICALREP_ORIGIN_ANY);
+	if (IsSet(supported_opts, SUBOPT_CONFLICT_TABLE))
+		opts->conflicttable = NULL;
 
 	/* Parse options */
 	foreach(lc, stmt_options)
@@ -385,6 +391,15 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 			opts->specified_opts |= SUBOPT_LSN;
 			opts->lsn = lsn;
 		}
+		else if (IsSet(supported_opts, SUBOPT_CONFLICT_TABLE) &&
+				 strcmp(defel->defname, "conflict_log_table") == 0)
+		{
+			if (IsSet(opts->specified_opts, SUBOPT_CONFLICT_TABLE))
+				errorConflictingDefElem(defel, pstate);
+
+			opts->specified_opts |= SUBOPT_CONFLICT_TABLE;
+			opts->conflicttable = defGetString(defel);
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -561,6 +576,61 @@ publicationListToArray(List *publist)
 }
 
 /*
+ * CreateConflictHistoryTable: Create conflict log history table.
+ *
+ * The subscription creator becomes the owner of this table and has all
+ * privileges on it.
+ */
+static void
+CreateConflictHistoryTable(Oid namespaceId, char *conflictrel)
+{
+	StringInfoData 	querybuf;
+
+	initStringInfo(&querybuf);
+
+	/*
+	 * Build and execute the CREATE TABLE query.
+	 */
+	appendStringInfo(&querybuf,
+					 "CREATE TABLE %s.%s ("
+					 "relid	Oid,"						/* Oid of relation */
+					 "local_xid xid,"	/* local xid at the time of conflict */
+					 "remote_xid xid,"	/* remote node xid that produced the conflicting change */
+					 "local_lsn pg_lsn,"	/* local lsn at the time of conflict */
+					 "remote_commit_lsn pg_lsn,"	/* commit lsn of the remote transaction */
+					 "local_commit_ts TIMESTAMPTZ,"	/* commit ts of the local tuple */
+					 "remote_commit_ts TIMESTAMPTZ,"	/* commit ts of the remote tuple */
+					 "table_schema	TEXT,"	/* name of the schema */
+					 "table_name	TEXT,"	/* name of the table */
+					 "conflict_type TEXT,"	/* conflict type */
+					 "local_origin	TEXT,"	/* origin of remote tuple */
+					 "remote_origin	TEXT,"	/* origin of remote tuple */
+					 "key_tuple		JSON,"	/* json representation of the key used for searching */
+					 "local_tuple	JSON,"	/* json representation of the local tuple */
+					 "remote_tuple	JSON)",	 /* json representation of the remote tuple */
+					 quote_identifier(get_namespace_name(namespaceId)),
+					 quote_identifier(conflictrel));
+
+	if (SPI_connect() != SPI_OK_CONNECT)
+		elog(ERROR, "SPI_connect failed");
+
+	if (SPI_execute(querybuf.data, false, 0) != SPI_OK_UTILITY)
+		elog(ERROR, "SPI_exec failed: %s", querybuf.data);
+
+	if (SPI_finish() != SPI_OK_FINISH)
+		elog(ERROR, "SPI_finish failed");
+
+	/*
+	 * XXX: The table is created by the subscription owner, who will have full
+	 * permissions, including DROP and TRUNCATE.  This maybe fine because in
+	 * future we may allow user to create the table and in that case also they
+	 * will be having all the permissions on the table.
+	 */
+
+	pfree(querybuf.data);
+}
+
+/*
  * Create new subscription.
  */
 ObjectAddress
@@ -580,6 +650,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	bits32		supported_opts;
 	SubOpts		opts = {0};
 	AclResult	aclresult;
+	Oid			conflict_table_nspid;
+	char	   *conflict_table;
 
 	/*
 	 * Parse and check options.
@@ -593,7 +665,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					  SUBOPT_DISABLE_ON_ERR | SUBOPT_PASSWORD_REQUIRED |
 					  SUBOPT_RUN_AS_OWNER | SUBOPT_FAILOVER |
 					  SUBOPT_RETAIN_DEAD_TUPLES |
-					  SUBOPT_MAX_RETENTION_DURATION | SUBOPT_ORIGIN);
+					  SUBOPT_MAX_RETENTION_DURATION | SUBOPT_ORIGIN |
+					  SUBOPT_CONFLICT_TABLE);
 	parse_subscription_options(pstate, stmt->options, supported_opts, &opts);
 
 	/*
@@ -728,6 +801,25 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	values[Anum_pg_subscription_suborigin - 1] =
 		CStringGetTextDatum(opts.origin);
 
+	/*
+	 * If a conflict log history table name is specified, parse the schema and
+	 * table name from the string. Store the namespace OID and the table name in
+	 * the pg_subscription catalog tuple.
+	 */
+	if (opts.conflicttable)
+	{
+		List   *names = stringToQualifiedNameList(opts.conflicttable, NULL);
+
+		conflict_table_nspid =
+				QualifiedNameGetCreationNamespace(names, &conflict_table);
+		values[Anum_pg_subscription_subconflictnspid - 1] =
+					ObjectIdGetDatum(conflict_table_nspid);
+		values[Anum_pg_subscription_subconflicttable - 1] =
+					CStringGetTextDatum(conflict_table);
+	}
+	else
+		nulls[Anum_pg_subscription_subconflicttable - 1] = true;
+
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
 	/* Insert tuple into catalog. */
@@ -738,6 +830,10 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 
 	ReplicationOriginNameForLogicalRep(subid, InvalidOid, originname, sizeof(originname));
 	replorigin_create(originname);
+
+	/* If conflict log history table name is given than create the table. */
+	if (opts.conflicttable)
+		CreateConflictHistoryTable(conflict_table_nspid, conflict_table);
 
 	/*
 	 * Connect to remote side to execute requested commands and fetch table

@@ -306,6 +306,58 @@ CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUB
 
 \dRs+
 
+CREATE TABLE my_conflict_table(a int);
+CREATE VIEW myview AS SELECT * FROM my_conflict_table;
+
+--not ok
+CREATE SUBSCRIPTION regress_testsub_1 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_table='myview');
+
+--not ok
+CREATE SUBSCRIPTION regress_testsub_1 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_table='my_conflict_table');
+
+DROP VIEW myview;
+DROP TABLE my_conflict_table;
+CREATE TABLE my_conflict_table(
+	relid	Oid,
+	local_xid xid,
+	remote_xid xid,
+	local_lsn pg_lsn,
+	remote_commit_lsn pg_lsn,
+	local_commit_ts TIMESTAMPTZ,
+	remote_commit_ts TIMESTAMPTZ,
+	table_schema	TEXT,
+	table_name	TEXT,
+	conflict_type TEXT,
+	local_origin	TEXT,
+	remote_origin	TEXT,
+	key_tuple		JSON,
+	local_tuple	JSON,
+	remote_tuple	JSON);
+--ok
+CREATE SUBSCRIPTION regress_testsub_1 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_table='my_conflict_table');
+
+DROP TABLE my_conflict_table;
+
+--ok
+CREATE SUBSCRIPTION regress_testsub_2 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_table='my_conflict_table');
+\d+ my_conflict_table
+
+ALTER SUBSCRIPTION regress_testsub_1 SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_testsub_1;
+
+ALTER SUBSCRIPTION regress_testsub_2 SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_testsub_2;
+
+DROP TABLE my_conflict_table;
+CREATE SUBSCRIPTION regress_testsub_1 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_table='my_schema.my_conflict_table');
+CREATE SCHEMA my_schema;
+CREATE SUBSCRIPTION regress_testsub_1 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_table='my_schema.my_conflict_table');
+\d+ my_schema.my_conflict_table
+DROP TABLE my_schema.my_conflict_table;
+DROP SCHEMA my_schema;
+ALTER SUBSCRIPTION regress_testsub_1 SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_testsub_1;
+
 -- ok
 ALTER SUBSCRIPTION regress_testsub SET (max_retention_duration = 0);
 

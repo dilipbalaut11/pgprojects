@@ -456,6 +456,98 @@ HINT:  To initiate replication, you must manually create the replication slot, e
  regress_testsub | regress_subscription_user | f       | {testpub}   | f      | parallel  | d                | f                | any    | t                 | f             | f        | f                  |                   1000 | f                | off                | dbname=regress_doesnotexist | 0/00000000
 (1 row)
 
+CREATE TABLE my_conflict_table(a int);
+CREATE VIEW myview AS SELECT * FROM my_conflict_table;
+--not ok
+CREATE SUBSCRIPTION regress_testsub_1 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_table='myview');
+ERROR:  cannot use relation "myview" for storing conflict log
+DETAIL:  This operation is not supported for views.
+--not ok
+CREATE SUBSCRIPTION regress_testsub_1 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_table='my_conflict_table');
+ERROR:  table "my_conflict_table" cannot be used for storing conflict log
+DETAIL:  Table "my_conflict_table" data definition is not suitable for storing conflict log
+DROP VIEW myview;
+DROP TABLE my_conflict_table;
+CREATE TABLE my_conflict_table(
+	relid	Oid,
+	local_xid xid,
+	remote_xid xid,
+	local_lsn pg_lsn,
+	remote_commit_lsn pg_lsn,
+	local_commit_ts TIMESTAMPTZ,
+	remote_commit_ts TIMESTAMPTZ,
+	table_schema	TEXT,
+	table_name	TEXT,
+	conflict_type TEXT,
+	local_origin	TEXT,
+	remote_origin	TEXT,
+	key_tuple		JSON,
+	local_tuple	JSON,
+	remote_tuple	JSON);
+--ok
+CREATE SUBSCRIPTION regress_testsub_1 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_table='my_conflict_table');
+WARNING:  subscription was created, but is not connected
+HINT:  To initiate replication, you must manually create the replication slot, enable the subscription, and refresh the subscription.
+DROP TABLE my_conflict_table;
+--ok
+CREATE SUBSCRIPTION regress_testsub_2 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_table='my_conflict_table');
+WARNING:  subscription was created, but is not connected
+HINT:  To initiate replication, you must manually create the replication slot, enable the subscription, and refresh the subscription.
+\d+ my_conflict_table
+                                           Table "public.my_conflict_table"
+      Column       |           Type           | Collation | Nullable | Default | Storage  | Stats target | Description 
+-------------------+--------------------------+-----------+----------+---------+----------+--------------+-------------
+ relid             | oid                      |           |          |         | plain    |              | 
+ local_xid         | xid                      |           |          |         | plain    |              | 
+ remote_xid        | xid                      |           |          |         | plain    |              | 
+ local_lsn         | pg_lsn                   |           |          |         | plain    |              | 
+ remote_commit_lsn | pg_lsn                   |           |          |         | plain    |              | 
+ local_commit_ts   | timestamp with time zone |           |          |         | plain    |              | 
+ remote_commit_ts  | timestamp with time zone |           |          |         | plain    |              | 
+ table_schema      | text                     |           |          |         | extended |              | 
+ table_name        | text                     |           |          |         | extended |              | 
+ conflict_type     | text                     |           |          |         | extended |              | 
+ local_origin      | text                     |           |          |         | extended |              | 
+ remote_origin     | text                     |           |          |         | extended |              | 
+ key_tuple         | json                     |           |          |         | extended |              | 
+ local_tuple       | json                     |           |          |         | extended |              | 
+ remote_tuple      | json                     |           |          |         | extended |              | 
+
+ALTER SUBSCRIPTION regress_testsub_1 SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_testsub_1;
+ALTER SUBSCRIPTION regress_testsub_2 SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_testsub_2;
+DROP TABLE my_conflict_table;
+CREATE SUBSCRIPTION regress_testsub_1 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_table='my_schema.my_conflict_table');
+ERROR:  schema "my_schema" does not exist
+CREATE SCHEMA my_schema;
+CREATE SUBSCRIPTION regress_testsub_1 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_table='my_schema.my_conflict_table');
+WARNING:  subscription was created, but is not connected
+HINT:  To initiate replication, you must manually create the replication slot, enable the subscription, and refresh the subscription.
+\d+ my_schema.my_conflict_table
+                                          Table "my_schema.my_conflict_table"
+      Column       |           Type           | Collation | Nullable | Default | Storage  | Stats target | Description 
+-------------------+--------------------------+-----------+----------+---------+----------+--------------+-------------
+ relid             | oid                      |           |          |         | plain    |              | 
+ local_xid         | xid                      |           |          |         | plain    |              | 
+ remote_xid        | xid                      |           |          |         | plain    |              | 
+ local_lsn         | pg_lsn                   |           |          |         | plain    |              | 
+ remote_commit_lsn | pg_lsn                   |           |          |         | plain    |              | 
+ local_commit_ts   | timestamp with time zone |           |          |         | plain    |              | 
+ remote_commit_ts  | timestamp with time zone |           |          |         | plain    |              | 
+ table_schema      | text                     |           |          |         | extended |              | 
+ table_name        | text                     |           |          |         | extended |              | 
+ conflict_type     | text                     |           |          |         | extended |              | 
+ local_origin      | text                     |           |          |         | extended |              | 
+ remote_origin     | text                     |           |          |         | extended |              | 
+ key_tuple         | json                     |           |          |         | extended |              | 
+ local_tuple       | json                     |           |          |         | extended |              | 
+ remote_tuple      | json                     |           |          |         | extended |              | 
+
+DROP TABLE my_schema.my_conflict_table;
+DROP SCHEMA my_schema;
+ALTER SUBSCRIPTION regress_testsub_1 SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_testsub_1;
 -- ok
 ALTER SUBSCRIPTION regress_testsub SET (max_retention_duration = 0);
 \dRs+

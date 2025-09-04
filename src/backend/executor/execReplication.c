@@ -904,7 +904,7 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 	 * check_publication_add_relation() accountable.
 	 */
 	Assert(rel->rd_rel->relkind == RELKIND_RELATION);
-	Assert(!IsCatalogRelation(rel));
+	Assert(!IsCatalogRelation(rel) || RelationGetRelid(rel) == LargeObjectRelationId);
 
 	CheckCmdReplicaIdentity(rel, CMD_UPDATE);
 

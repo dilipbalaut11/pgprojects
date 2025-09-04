@@ -25,6 +25,7 @@
 #include "catalog/objectaddress.h"
 #include "catalog/partition.h"
 #include "catalog/pg_inherits.h"
+#include "catalog/pg_largeobject.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_publication.h"
 #include "catalog/pg_publication_namespace.h"
@@ -65,7 +66,7 @@ check_publication_add_relation(Relation targetrel)
 				 errdetail_relkind_not_supported(RelationGetForm(targetrel)->relkind)));
 
 	/* Can't be system table */
-	if (IsCatalogRelation(targetrel))
+	if (IsCatalogRelation(targetrel) && RelationGetRelid(targetrel) != LargeObjectRelationId)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("cannot add relation \"%s\" to publication",
@@ -135,9 +136,9 @@ is_publishable_class(Oid relid, Form_pg_class reltuple)
 {
 	return (reltuple->relkind == RELKIND_RELATION ||
 			reltuple->relkind == RELKIND_PARTITIONED_TABLE) &&
-		!IsCatalogRelationOid(relid) &&
+		!(IsCatalogRelationOid(relid) && relid != LargeObjectRelationId) &&
 		reltuple->relpersistence == RELPERSISTENCE_PERMANENT &&
-		relid >= FirstNormalObjectId;
+		(relid >= FirstNormalObjectId || relid == LargeObjectRelationId);
 }
 
 /*

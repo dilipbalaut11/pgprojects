@@ -3673,7 +3673,7 @@ RelationBuildLocalRelation(const char *relname,
 		rel->rd_rel->relispopulated = true;
 
 	/* set replica identity -- system catalogs and non-tables don't have one */
-	if (!IsCatalogNamespace(relnamespace) &&
+	if (!(IsCatalogNamespace(relnamespace) && relid != LargeObjectRelationId) &&
 		(relkind == RELKIND_RELATION ||
 		 relkind == RELKIND_MATVIEW ||
 		 relkind == RELKIND_PARTITIONED_TABLE))

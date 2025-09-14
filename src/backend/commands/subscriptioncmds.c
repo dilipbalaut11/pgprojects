@@ -34,6 +34,7 @@
 #include "commands/event_trigger.h"
 #include "commands/subscriptioncmds.h"
 #include "executor/executor.h"
+#include "executor/spi.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "pgstat.h"
@@ -47,10 +48,12 @@
 #include "storage/lmgr.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/fmgroids.h"
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_lsn.h"
+#include "utils/regproc.h"
 #include "utils/syscache.h"
 
 /*
@@ -75,6 +78,7 @@
 #define SUBOPT_MAX_RETENTION_DURATION	0x00008000
 #define SUBOPT_LSN					0x00010000
 #define SUBOPT_ORIGIN				0x00020000
+#define SUBOPT_CONFLICT_TABLE		0x00030000
 
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
@@ -103,6 +107,7 @@ typedef struct SubOpts
 	bool		retaindeadtuples;
 	int32		maxretention;
 	char	   *origin;
+	char	   *conflicttable;
 	XLogRecPtr	lsn;
 } SubOpts;
 
@@ -118,7 +123,7 @@ static List *merge_publications(List *oldpublist, List *newpublist, bool addpub,
 static void ReportSlotConnectionError(List *rstates, Oid subid, char *slotname, char *err);
 static void CheckAlterSubOption(Subscription *sub, const char *option,
 								bool slot_needs_update, bool isTopLevel);
-
+static void ValidateConflictHistoryTable(Oid namespaceId, char *conflictrel);
 
 /*
  * Common option parsing function for CREATE and ALTER SUBSCRIPTION commands.
@@ -174,6 +179,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 		opts->maxretention = 0;
 	if (IsSet(supported_opts, SUBOPT_ORIGIN))
 		opts->origin = pstrdup(LOGICALREP_ORIGIN_ANY);
+	if (IsSet(supported_opts, SUBOPT_CONFLICT_TABLE))
+		opts->conflicttable = NULL;
 
 	/* Parse options */
 	foreach(lc, stmt_options)
@@ -385,6 +392,15 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 			opts->specified_opts |= SUBOPT_LSN;
 			opts->lsn = lsn;
 		}
+		else if (IsSet(supported_opts, SUBOPT_CONFLICT_TABLE) &&
+				 strcmp(defel->defname, "conflict_log_table") == 0)
+		{
+			if (IsSet(opts->specified_opts, SUBOPT_CONFLICT_TABLE))
+				errorConflictingDefElem(defel, pstate);
+
+			opts->specified_opts |= SUBOPT_CONFLICT_TABLE;
+			opts->conflicttable = defGetString(defel);
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -561,6 +577,186 @@ publicationListToArray(List *publist)
 }
 
 /*
+ * ValidateConflictHistoryTable - Validate conflict history table
+ *
+ * Validate whether the input 'conflictrel' is suitable for considering as
+ * conflict log history table.
+ */
+static void
+ValidateConflictHistoryTable(Oid namespaceId, char *conflictrel)
+{
+	Datum		value;
+	Relation	pg_attribute;
+	Relation	rel;
+	Form_pg_attribute attForm;
+	ScanKeyData scankey;
+	SysScanDesc scan;
+	HeapTuple	atup;
+	Oid			relid;
+	int			attcnt = 0;
+	bool		tbl_ok = true;
+
+	relid = get_relname_relid(conflictrel, namespaceId);
+	if (!OidIsValid(relid))
+		ereport(ERROR,
+				errcode(ERRCODE_UNDEFINED_TABLE),
+				errmsg("relation \"%s.%s\" does not exist",
+						get_namespace_name(namespaceId), conflictrel));
+
+	/* log history table must be a regular realtion */
+	if (get_rel_relkind(relid) != RELKIND_RELATION)
+		ereport(ERROR,
+				errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				errmsg("cannot use relation \"%s.%s\" for storing conflict log",
+						get_namespace_name(namespaceId), conflictrel),
+				errdetail_relkind_not_supported(get_rel_relkind(relid)));
+
+	/*
+	 * We might insert tuples into the conflict log history table later, so we
+	 * first need to check its lock status. If it is already heavily locked,
+	 * our subsequent COPY operation may stuck. Instead of letting COPY FROM
+	 * hang, report an error indicating that the error-saving table is under
+	 * heavy lock.
+	 */
+	if (!ConditionalLockRelationOid(relid, RowExclusiveLock))
+		ereport(ERROR,
+				errcode(ERRCODE_OBJECT_IN_USE),
+				errmsg("can not use table \"%s.%s\" for storing conflict log because it was being locked",
+						get_namespace_name(namespaceId), conflictrel));
+
+	rel = table_open(relid, RowExclusiveLock);
+
+	/* The user should have INSERT privilege on conflict history table */
+	value = DirectFunctionCall3(has_table_privilege_id_id,
+								GetUserId(),
+								ObjectIdGetDatum(relid),
+								CStringGetTextDatum("INSERT"));
+	if (!DatumGetBool(value))
+		ereport(ERROR,
+				errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				errmsg("permission denied to set table \"%s\" as conflict log history table",
+						RelationGetRelationName(rel)),
+				errhint("Ensure current user have enough privilege on \"%s.%s\" for conflict log history table",
+						get_namespace_name(namespaceId), conflictrel));
+
+	/*
+	 * Check whether the table definition (conflictrel) including its column
+	 * names, data types, and column ordering meets the requirements for conflict
+	 * log history table
+	 */
+	pg_attribute = table_open(AttributeRelationId, AccessShareLock);
+	ScanKeyInit(&scankey,
+				Anum_pg_attribute_attrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(relid));
+
+	scan = systable_beginscan(pg_attribute, AttributeRelidNumIndexId, true,
+								SnapshotSelf, 1, &scankey);
+	while (HeapTupleIsValid(atup = systable_getnext(scan)) && tbl_ok)
+	{
+		attForm = (Form_pg_attribute) GETSTRUCT(atup);
+
+		if (attForm->attnum < 1 || attForm->attisdropped)
+			continue;
+
+		attcnt++;
+		switch (attForm->attnum)
+		{
+			case 1:
+				if (attForm->atttypid != OIDOID ||
+					strcmp(NameStr(attForm->attname), "relid") != 0)
+					tbl_ok = false;
+				break;
+			case 2:
+				if (attForm->atttypid != XIDOID ||
+					strcmp(NameStr(attForm->attname), "local_xid") != 0)
+					tbl_ok = false;
+				break;
+			case 3:
+				if (attForm->atttypid != XIDOID ||
+					strcmp(NameStr(attForm->attname), "remote_xid") != 0)
+					tbl_ok = false;
+				break;
+			case 4:
+				if (attForm->atttypid != LSNOID ||
+					strcmp(NameStr(attForm->attname), "local_lsn") != 0)
+					tbl_ok = false;
+				break;
+			case 5:
+				if (attForm->atttypid != LSNOID ||
+					strcmp(NameStr(attForm->attname), "remote_commit_lsn") != 0)
+					tbl_ok = false;
+				break;
+			case 6:
+				if (attForm->atttypid != TIMESTAMPTZOID ||
+					strcmp(NameStr(attForm->attname), "local_commit_ts") != 0)
+					tbl_ok = false;
+				break;
+			case 7:
+				if (attForm->atttypid != TIMESTAMPTZOID ||
+					strcmp(NameStr(attForm->attname), "remote_commit_ts") != 0)
+					tbl_ok = false;
+				break;
+			case 8:
+				if (attForm->atttypid != TEXTOID ||
+					strcmp(NameStr(attForm->attname), "table_schema") != 0)
+					tbl_ok = false;
+				break;
+			case 9:
+				if (attForm->atttypid != TEXTOID ||
+					strcmp(NameStr(attForm->attname), "table_name") != 0)
+					tbl_ok = false;
+				break;
+			case 10:
+				if (attForm->atttypid != TEXTOID ||
+					strcmp(NameStr(attForm->attname), "conflict_type") != 0)
+					tbl_ok = false;
+				break;
+			case 11:
+				if (attForm->atttypid != TEXTOID ||
+					strcmp(NameStr(attForm->attname), "local_origin") != 0)
+					tbl_ok = false;
+				break;
+			case 12:
+				if (attForm->atttypid != TEXTOID ||
+					strcmp(NameStr(attForm->attname), "remote_origin") != 0)
+					tbl_ok = false;
+				break;
+			case 13:
+				if (attForm->atttypid != JSONOID ||
+					strcmp(NameStr(attForm->attname), "key_tuple") != 0)
+					tbl_ok = false;
+				break;
+			case 14:
+				if (attForm->atttypid != JSONOID ||
+					strcmp(NameStr(attForm->attname), "local_tuple") != 0)
+					tbl_ok = false;
+				break;
+			case 15:
+				if (attForm->atttypid != JSONOID ||
+					strcmp(NameStr(attForm->attname), "remote_tuple") != 0)
+					tbl_ok = false;
+				break;
+			default:
+				tbl_ok = false;
+				break;
+		}
+	}
+	systable_endscan(scan);
+	table_close(pg_attribute, AccessShareLock);
+
+	if (attcnt != MAX_CONFLICT_ATTR_NUM || !tbl_ok)
+		ereport(ERROR,
+				errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				errmsg("table \"%s.%s\" cannot be used for storing conflict log",
+						get_namespace_name(namespaceId), conflictrel),
+				errdetail("Table \"%s.%s\" data definition is not suitable for storing conflict log",
+						  get_namespace_name(namespaceId), conflictrel));
+
+	table_close(rel, RowExclusiveLock);
+}
+
+/*
  * Create new subscription.
  */
 ObjectAddress
@@ -580,6 +776,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	bits32		supported_opts;
 	SubOpts		opts = {0};
 	AclResult	aclresult;
+	Oid			conflict_table_nspid;
+	char	   *conflict_table;
 
 	/*
 	 * Parse and check options.
@@ -593,7 +791,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					  SUBOPT_DISABLE_ON_ERR | SUBOPT_PASSWORD_REQUIRED |
 					  SUBOPT_RUN_AS_OWNER | SUBOPT_FAILOVER |
 					  SUBOPT_RETAIN_DEAD_TUPLES |
-					  SUBOPT_MAX_RETENTION_DURATION | SUBOPT_ORIGIN);
+					  SUBOPT_MAX_RETENTION_DURATION | SUBOPT_ORIGIN |
+					  SUBOPT_CONFLICT_TABLE);
 	parse_subscription_options(pstate, stmt->options, supported_opts, &opts);
 
 	/*
@@ -728,6 +927,25 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	values[Anum_pg_subscription_suborigin - 1] =
 		CStringGetTextDatum(opts.origin);
 
+	/*
+	 * If a conflict log history table name is specified, parse the schema and
+	 * table name from the string. Store the namespace OID and the table name in
+	 * the pg_subscription catalog tuple.
+	 */
+	if (opts.conflicttable)
+	{
+		List   *names = stringToQualifiedNameList(opts.conflicttable, NULL);
+
+		conflict_table_nspid =
+				QualifiedNameGetCreationNamespace(names, &conflict_table);
+		values[Anum_pg_subscription_subconflictnspid - 1] =
+					ObjectIdGetDatum(conflict_table_nspid);
+		values[Anum_pg_subscription_subconflicttable - 1] =
+					CStringGetTextDatum(conflict_table);
+	}
+	else
+		nulls[Anum_pg_subscription_subconflicttable - 1] = true;
+
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
 	/* Insert tuple into catalog. */
@@ -739,6 +957,10 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	ReplicationOriginNameForLogicalRep(subid, InvalidOid, originname, sizeof(originname));
 	replorigin_create(originname);
 
+	/* If conflict log history table name is given than create the table. */
+	if (opts.conflicttable)
+		ValidateConflictHistoryTable(conflict_table_nspid,
+									 conflict_table);
 	/*
 	 * Connect to remote side to execute requested commands and fetch table
 	 * info.
@@ -1272,7 +1494,8 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 								  SUBOPT_RUN_AS_OWNER | SUBOPT_FAILOVER |
 								  SUBOPT_RETAIN_DEAD_TUPLES |
 								  SUBOPT_MAX_RETENTION_DURATION |
-								  SUBOPT_ORIGIN);
+								  SUBOPT_ORIGIN |
+								  SUBOPT_CONFLICT_TABLE);
 
 				parse_subscription_options(pstate, stmt->options,
 										   supported_opts, &opts);
@@ -1525,6 +1748,25 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 						pg_strcasecmp(opts.origin, LOGICALREP_ORIGIN_ANY) == 0;
 
 					origin = opts.origin;
+				}
+
+				if (IsSet(opts.specified_opts, SUBOPT_CONFLICT_TABLE))
+				{
+					Oid		nspid;
+					char   *relname = NULL;
+					List   *names =
+						stringToQualifiedNameList(opts.conflicttable, NULL);
+
+					nspid = QualifiedNameGetCreationNamespace(names, &relname);
+					values[Anum_pg_subscription_subconflictnspid - 1] =
+								ObjectIdGetDatum(nspid);
+					values[Anum_pg_subscription_subconflicttable - 1] =
+						CStringGetTextDatum(relname);
+
+					replaces[Anum_pg_subscription_subconflictnspid - 1] = true;
+					replaces[Anum_pg_subscription_subconflicttable - 1] = true;
+
+					ValidateConflictHistoryTable(nspid, relname);
 				}
 
 				update_tuple = true;

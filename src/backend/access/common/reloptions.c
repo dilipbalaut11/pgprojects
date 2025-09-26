@@ -166,6 +166,15 @@ static relopt_bool boolRelOpts[] =
 		},
 		true
 	},
+	{
+		{
+			"non_publishable_table",
+			"Mark table as non publishable so that this will can not be included in publication",
+			RELOPT_KIND_HEAP,
+			AccessExclusiveLock
+		},
+		true
+	},
 	/* list terminator */
 	{{NULL}}
 };
@@ -1915,7 +1924,9 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		{"vacuum_truncate", RELOPT_TYPE_BOOL,
 		offsetof(StdRdOptions, vacuum_truncate), offsetof(StdRdOptions, vacuum_truncate_set)},
 		{"vacuum_max_eager_freeze_failure_rate", RELOPT_TYPE_REAL,
-		offsetof(StdRdOptions, vacuum_max_eager_freeze_failure_rate)}
+		offsetof(StdRdOptions, vacuum_max_eager_freeze_failure_rate)},
+		{"non_publishable_table", RELOPT_TYPE_BOOL,
+		offsetof(StdRdOptions, non_publishable_table)}
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate, kind,

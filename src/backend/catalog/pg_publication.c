@@ -146,7 +146,8 @@ is_publishable_class(Oid relid, Form_pg_class reltuple)
 bool
 is_publishable_relation(Relation rel)
 {
-	return is_publishable_class(RelationGetRelid(rel), rel->rd_rel);
+	return is_publishable_class(RelationGetRelid(rel), rel->rd_rel) &&
+		   !RelationIsNotPublishable(rel);
 }
 
 /*
@@ -162,12 +163,16 @@ pg_relation_is_publishable(PG_FUNCTION_ARGS)
 	Oid			relid = PG_GETARG_OID(0);
 	HeapTuple	tuple;
 	bool		result;
+	Relation	rel;
 
-	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
-	if (!HeapTupleIsValid(tuple))
+	rel = try_table_open(relid, AccessShareLock);
+	if (rel == NULL)
 		PG_RETURN_NULL();
-	result = is_publishable_class(relid, (Form_pg_class) GETSTRUCT(tuple));
-	ReleaseSysCache(tuple);
+
+	result = is_publishable_relation(rel);
+
+	table_close(rel, AccessShareLock);
+
 	PG_RETURN_BOOL(result);
 }
 
@@ -882,10 +887,15 @@ GetAllTablesPublicationRelations(bool pubviaroot)
 	{
 		Form_pg_class relForm = (Form_pg_class) GETSTRUCT(tuple);
 		Oid			relid = relForm->oid;
+		Relation	rel;
 
-		if (is_publishable_class(relid, relForm) &&
+		rel = table_open(relid, AccessShareLock);
+
+		if (is_publishable_relation(rel) &&
 			!(relForm->relispartition && pubviaroot))
 			result = lappend_oid(result, relid);
+
+		table_close(rel, AccessShareLock);
 	}
 
 	table_endscan(scan);
@@ -903,10 +913,15 @@ GetAllTablesPublicationRelations(bool pubviaroot)
 		{
 			Form_pg_class relForm = (Form_pg_class) GETSTRUCT(tuple);
 			Oid			relid = relForm->oid;
+			Relation	rel;
 
-			if (is_publishable_class(relid, relForm) &&
+			rel = table_open(relid, AccessShareLock);
+
+			if (is_publishable_relation(rel) &&
 				!relForm->relispartition)
 				result = lappend_oid(result, relid);
+
+			table_close(rel, AccessShareLock);
 		}
 
 		table_endscan(scan);
@@ -1010,9 +1025,16 @@ GetSchemaPublicationRelations(Oid schemaid, PublicationPartOpt pub_partopt)
 		Form_pg_class relForm = (Form_pg_class) GETSTRUCT(tuple);
 		Oid			relid = relForm->oid;
 		char		relkind;
+		Relation	rel;
 
-		if (!is_publishable_class(relid, relForm))
+		rel = table_open(relid, AccessShareLock);
+
+		if (!is_publishable_relation(rel))
+		{
+			table_close(rel, AccessShareLock);
 			continue;
+		}
+		table_close(rel, AccessShareLock);
 
 		relkind = get_rel_relkind(relid);
 		if (relkind == RELKIND_RELATION)

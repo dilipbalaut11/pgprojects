@@ -348,6 +348,7 @@ typedef struct StdRdOptions
 	StdRdOptIndexCleanup vacuum_index_cleanup;	/* controls index vacuuming */
 	bool		vacuum_truncate;	/* enables vacuum to truncate a relation */
 	bool		vacuum_truncate_set;	/* whether vacuum_truncate is set */
+	bool		non_publishable_table;	/* table will not be published */
 
 	/*
 	 * Fraction of pages in a relation that vacuum can eagerly scan and fail
@@ -399,6 +400,16 @@ typedef struct StdRdOptions
 	 ((relation)->rd_rel->relkind == RELKIND_RELATION || \
 	  (relation)->rd_rel->relkind == RELKIND_MATVIEW) ? \
 	 ((StdRdOptions *) (relation)->rd_options)->user_catalog_table : false)
+
+/*
+ * RelationIsNonPublishable
+ *		Returns whether the relation can be added in publication or not.
+ */
+#define RelationIsNotPublishable(relation)	\
+	((relation)->rd_options && \
+	 ((relation)->rd_rel->relkind == RELKIND_RELATION || \
+	  (relation)->rd_rel->relkind == RELKIND_MATVIEW) ? \
+	 ((StdRdOptions *) (relation)->rd_options)->non_publishable_table : false)
 
 /*
  * RelationGetParallelWorkers

@@ -31,6 +31,7 @@
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_type.h"
 #include "commands/publicationcmds.h"
+#include "commands/subscriptioncmds.h"
 #include "funcapi.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -883,7 +884,9 @@ GetAllTablesPublicationRelations(bool pubviaroot)
 		Form_pg_class relForm = (Form_pg_class) GETSTRUCT(tuple);
 		Oid			relid = relForm->oid;
 
+		/* conflict history tables are not published. */
 		if (is_publishable_class(relid, relForm) &&
+			!IsConflictHistoryRelid(relid) &&
 			!(relForm->relispartition && pubviaroot))
 			result = lappend_oid(result, relid);
 	}

@@ -15,6 +15,7 @@
 #include "postgres.h"
 
 #include "access/commit_ts.h"
+#include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/table.h"
 #include "access/twophase.h"
@@ -3023,4 +3024,43 @@ defGetStreamingMode(DefElem *def)
 			 errmsg("%s requires a Boolean value or \"parallel\"",
 					def->defname)));
 	return LOGICALREP_STREAM_OFF;	/* keep compiler quiet */
+}
+
+/*
+ * IsConflictHistoryRelid -  is this relid used as conflict history table
+ *
+ * Scan all the subscription and check whether the relation is used as
+ * conflict history table.
+ */
+bool
+IsConflictHistoryRelid(Oid relid)
+{
+	Relation		rel;
+	TableScanDesc	scan;
+	HeapTuple		tup;
+	bool			found = false;
+
+	rel = table_open(SubscriptionRelationId, AccessShareLock);
+	scan = table_beginscan_catalog(rel, 0, NULL);
+
+	while (HeapTupleIsValid(tup = heap_getnext(scan, ForwardScanDirection)))
+	{
+		Form_pg_subscription subform = (Form_pg_subscription) GETSTRUCT(tup);
+		Oid		nspid;
+		char   *relname;
+
+		relname = get_subscription_conflictrel(subform->oid, &nspid);
+		if (relname == NULL)
+			continue;
+		if (relid == get_relname_relid(relname, nspid))
+		{
+			found = true;
+			break;
+		}
+	}
+
+	table_endscan(scan);
+	table_close(rel, AccessShareLock);
+
+	return found;
 }

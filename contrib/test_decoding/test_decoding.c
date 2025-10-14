@@ -470,6 +470,38 @@ pg_decode_filter(LogicalDecodingContext *ctx,
 	return false;
 }
 
+static void
+pg_decode_lo_write(LogicalDecodingContext *ctx,
+				   ReorderBufferChange *change)
+{
+	TestDecodingData   *data;
+	MemoryContext		old;
+	Oid					loid = change->data.lo_write.loid;
+	int64				offset = change->data.lo_write.offset;
+	Size				datalen = change->data.lo_write.datalen;
+	char			   *lodata = change->data.lo_write.data;
+
+	data = ctx->output_plugin_private;
+
+	/* Avoid leaking memory by using and resetting our own context */
+	old = MemoryContextSwitchTo(data->context);
+
+	OutputPluginPrepareWrite(ctx, true);
+
+	appendStringInfo(ctx->out, "LO_WRITE:");
+	appendStringInfo(ctx->out, " loid: %u offset: " INT64_FORMAT " datalen: %zu data: ",
+					 loid, offset, datalen);
+
+	appendBinaryStringInfo(ctx->out, lodata, datalen);
+
+	/* For test_decoding, we print the data length but typically skip the binary data itself */
+
+	MemoryContextSwitchTo(old);
+	MemoryContextReset(data->context);
+
+	OutputPluginWrite(ctx, true);
+}
+
 /*
  * Print literal `outputstr' already represented as string of type `typid'
  * into stringbuf `s'.
@@ -618,6 +650,13 @@ pg_decode_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 		pg_output_begin(ctx, data, txn, false);
 	}
 	txndata->xact_wrote_changes = true;
+
+	/* Handle large object changes independent of the table changes. */
+	if (change->action == REORDER_BUFFER_CHANGE_LOWRITE)
+	{
+		pg_decode_lo_write(ctx, change);
+		return;
+	}
 
 	class_form = RelationGetForm(relation);
 	tupdesc = RelationGetDescr(relation);

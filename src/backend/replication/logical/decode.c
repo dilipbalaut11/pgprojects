@@ -26,6 +26,7 @@
  */
 #include "postgres.h"
 
+#include "access/detoast.h"
 #include "access/heapam_xlog.h"
 #include "access/transam.h"
 #include "access/xact.h"
@@ -33,11 +34,13 @@
 #include "access/xlogreader.h"
 #include "access/xlogrecord.h"
 #include "catalog/pg_control.h"
+#include "catalog/pg_largeobject.h"
 #include "replication/decode.h"
 #include "replication/logical.h"
 #include "replication/message.h"
 #include "replication/reorderbuffer.h"
 #include "replication/snapbuild.h"
+#include "storage/large_object.h"
 #include "storage/standbydefs.h"
 
 /* individual record(group)'s handlers */
@@ -56,6 +59,10 @@ static void DecodeAbort(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 						bool two_phase);
 static void DecodePrepare(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 						  xl_xact_parsed_prepare *parsed);
+static void DecodeLargeObjectInsert(LogicalDecodingContext *ctx,
+									XLogRecordBuffer *buf);
+static void DecodeLargeObjectChanges(uint8 info, LogicalDecodingContext *ctx,
+									 XLogRecordBuffer *buf);
 
 
 /* common function to decode tuples */
@@ -471,6 +478,8 @@ heap_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	uint8		info = XLogRecGetInfo(buf->record) & XLOG_HEAP_OPMASK;
 	TransactionId xid = XLogRecGetXid(buf->record);
 	SnapBuild  *builder = ctx->snapshot_builder;
+	RelFileLocator target_locator;
+	XLogReaderState *r = buf->record;
 
 	ReorderBufferProcessXid(ctx->reorder, xid, buf->origptr);
 
@@ -484,6 +493,22 @@ heap_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	 */
 	if (SnapBuildCurrentState(builder) < SNAPBUILD_FULL_SNAPSHOT)
 		return;
+
+	XLogRecGetBlockTag(r, 0, &target_locator, NULL, NULL);
+
+	/*
+	 * Check if the WAL record pertains to 'pg_largeobject'. If it does,
+	 * handle the large object changes separately via
+	 * DecodeLargeObjectChanges, bypassing the standard heap table decoding
+	 * logic that follows.
+	 */
+	if (target_locator.relNumber == LargeObjectRelationId)
+	{
+		if (SnapBuildProcessChange(builder, xid, buf->origptr) &&
+			!ctx->fast_forward)
+			DecodeLargeObjectChanges(info, ctx, buf);
+		return;
+	}
 
 	switch (info)
 	{
@@ -1322,4 +1347,112 @@ DecodeTXNNeedSkip(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 	}
 
 	return false;
+}
+
+/*
+ * Helper function to decode a 'pg_largeobject' INSERT record into a
+ * 'REORDER_BUFFER_CHANGE_LOWRITE' change.
+ *
+ * Each row in 'pg_largeobject' represents only a small page (or chunk) of
+ * a large object's data. Logically, these individual page-level inserts
+ * are not meaningful on their own to a consumer. Therefore, instead of
+ * treating them as regular heap tuple changes, we convert the physical
+ * page insert into a single, more meaningful logical operation: a
+ * 'LO_WRITE' change, which can be applied as an independent large object
+ * operation.
+ */
+static void
+DecodeLargeObjectInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+{
+	XLogReaderState *r = buf->record;
+	ReorderBufferChange *change;
+	Size		datalen;
+	char		*tupledata;
+	HeapTuple	tuple;
+	bytea	   *data_chunk;
+	Oid			loid;
+	int32 		pageno;
+	int64		offset;
+	Size		chunk_datalen;
+	char	   *data_copy;
+	bool		freeit = false;
+	Form_pg_largeobject	largeobject;
+
+	tupledata = XLogRecGetBlockData(r, 0, &datalen);
+	if (datalen == 0)
+		return;
+
+	tuple = ReorderBufferAllocTupleBuf(ctx->reorder, datalen - SizeOfHeapHeader);
+	DecodeXLogTuple(tupledata, datalen, tuple);
+	largeobject = GETSTRUCT(tuple);
+
+	/* Fetch loid, pageno and actual data from the pg_largeobject tuple. */
+	loid = largeobject->loid;
+	pageno = largeobject->pageno;
+	data_chunk = &(largeobject->data);
+	if (VARATT_IS_EXTENDED(data_chunk))
+	{
+		data_chunk = (bytea *)
+			detoast_attr((struct varlena *) data_chunk);
+		freeit = true;
+	}
+	chunk_datalen = VARSIZE(data_chunk) - VARHDRSZ;
+
+	/*
+	 * Convert the single 'pg_largeobject' row (which represents a data page)
+	 * into a logical 'LOWRITE' operation. The absolute offset for this write
+	 * is computed by multiplying the page number ('pageno') by the fixed
+	 * large object block size (LOBLKSIZE).
+	 */
+	offset = (int64) pageno * LOBLKSIZE;
+	//chunk_datalen = VARSIZE_ANY_EXHDR(data_chunk);
+	data_copy = ReorderBufferAllocRawBuffer(ctx->reorder, chunk_datalen);
+	memcpy(data_copy, VARDATA(data_chunk), chunk_datalen);
+
+
+	/* Create the LOWRITE change */
+	change = ReorderBufferAllocChange(ctx->reorder);
+	change->action = REORDER_BUFFER_CHANGE_LOWRITE;
+	change->origin_id = XLogRecGetOrigin(r);
+
+	change->data.lo_write.loid = loid;
+	change->data.lo_write.offset = offset;
+	change->data.lo_write.datalen = chunk_datalen;
+	change->data.lo_write.data = data_copy;
+
+	/* Enqueue the change */
+	ReorderBufferQueueChange(ctx->reorder, XLogRecGetXid(r), buf->origptr,
+							 change, false);
+	ReorderBufferFreeTupleBuf(tuple);
+	if (freeit)
+		pfree(data_chunk);
+}
+
+/*
+ * Processes and decodes all logical changes for large objects (LOs).
+ * Since LO data is spread across 'pg_largeobject' rows, this function
+ * maps physical changes (INSERT/UPDATE) to a single logical 'LO_WRITE'
+ * operation.
+ *
+ * TODO: Temporarily ignoring LO_UNLINK (DELETE), which will be
+ * handled during a later phase.
+ */
+static void
+DecodeLargeObjectChanges(uint8 info, LogicalDecodingContext *ctx,
+						 XLogRecordBuffer *buf)
+{
+	switch (info)
+	{
+		case XLOG_HEAP_INSERT:
+		case XLOG_HEAP_HOT_UPDATE:
+		case XLOG_HEAP_UPDATE:
+			DecodeLargeObjectInsert(ctx, buf);
+			break;
+		case XLOG_HEAP_DELETE:
+			/* LO_UNLINK (delete) is handled in a later phase */
+			break;
+		default:
+			/* Ignore other operations on pg_largeobject for now */
+			break;
+	}
 }

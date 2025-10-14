@@ -1,0 +1,216 @@
+-- test that we can insert into the large objects and decode the changes
+-- predictability
+SET synchronous_commit = on;
+SELECT 'init' FROM pg_create_logical_replication_slot('regression_slot', 'test_decoding');
+ ?column? 
+----------
+ init
+(1 row)
+
+-- slot works
+SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'include-xids', '0', 'skip-empty-xacts', '1');
+ data 
+------
+(0 rows)
+
+-- Create a new large object
+CREATE TABLE lotest_stash_values (loid oid, fd integer);
+INSERT INTO lotest_stash_values (loid) SELECT lo_creat(42);
+-- NOTE: large objects require transactions
+BEGIN;
+UPDATE lotest_stash_values SET fd = lo_open(loid, CAST(x'20000' | x'40000' AS integer));
+SELECT lowrite(fd, 'large object test data') FROM lotest_stash_values;
+ lowrite 
+---------
+      22
+(1 row)
+
+SELECT lo_close(fd) FROM lotest_stash_values;
+ lo_close 
+----------
+        0
+(1 row)
+
+END;
+SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'include-xids', '0', 'skip-empty-xacts', '1');
+                                    data                                    
+----------------------------------------------------------------------------
+ BEGIN
+ table public.lotest_stash_values: INSERT: loid[oid]:16970 fd[integer]:null
+ COMMIT
+ BEGIN
+ table public.lotest_stash_values: UPDATE: loid[oid]:16970 fd[integer]:0
+ LO_WRITE: loid: 16970 offset: 0 datalen: 22 data: large object test data
+ COMMIT
+(7 rows)
+
+BEGIN;
+UPDATE lotest_stash_values SET fd=lo_open(loid, CAST(x'20000' | x'40000' AS integer));
+SELECT lo_lseek(fd, 10, 0) FROM lotest_stash_values;
+ lo_lseek 
+----------
+       10
+(1 row)
+
+SELECT lowrite(fd, 'overwrite some data') FROM lotest_stash_values;
+ lowrite 
+---------
+      19
+(1 row)
+
+END;
+SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'include-xids', '0', 'skip-empty-xacts', '1');
+                                      data                                       
+---------------------------------------------------------------------------------
+ BEGIN
+ table public.lotest_stash_values: UPDATE: loid[oid]:16970 fd[integer]:0
+ LO_WRITE: loid: 16970 offset: 0 datalen: 29 data: large objeoverwrite some data
+ COMMIT
+(4 rows)
+
+BEGIN;
+UPDATE lotest_stash_values SET fd=lo_open(loid, CAST(x'20000' | x'40000' AS integer));
+SELECT lo_lseek(fd, 2048, 0) FROM lotest_stash_values;
+ lo_lseek 
+----------
+     2048
+(1 row)
+
+SELECT lowrite(fd, 'write into new page') FROM lotest_stash_values;
+ lowrite 
+---------
+      19
+(1 row)
+
+END;
+SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'include-xids', '0', 'skip-empty-xacts', '1');
+                                   data                                   
+--------------------------------------------------------------------------
+ BEGIN
+ table public.lotest_stash_values: UPDATE: loid[oid]:16970 fd[integer]:0
+ LO_WRITE: loid: 16970 offset: 2048 datalen: 19 data: write into new page
+ COMMIT
+(4 rows)
+
+BEGIN;
+UPDATE lotest_stash_values SET fd = lo_open(loid, CAST(x'20000' | x'40000' AS integer));
+SELECT lowrite(fd, '
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+test large data more in 2048 test large data more in 2048 test large data more in 2048
+') FROM lotest_stash_values;
+ lowrite 
+---------
+    3829
+(1 row)
+
+SELECT lo_close(fd) FROM lotest_stash_values;
+ lo_close 
+----------
+        0
+(1 row)
+
+END;
+SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'include-xids', '0', 'skip-empty-xacts', '1');
+                                              data                                               
+-------------------------------------------------------------------------------------------------
+ BEGIN
+ table public.lotest_stash_values: UPDATE: loid[oid]:16970 fd[integer]:0
+ LO_WRITE: loid: 16970 offset: 0 datalen: 2048 data:                                            +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data m
+ LO_WRITE: loid: 16970 offset: 2048 datalen: 1781 data: ore in 2048 test large data more in 2048+
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ test large data more in 2048 test large data more in 2048 test large data more in 2048         +
+ 
+ COMMIT
+(5 rows)
+
+-- Clean up the slot
+SELECT pg_drop_replication_slot('regression_slot');
+ pg_drop_replication_slot 
+--------------------------
+ 
+(1 row)
+

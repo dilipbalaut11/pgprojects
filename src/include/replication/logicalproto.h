@@ -66,6 +66,7 @@ typedef enum LogicalRepMsgType
 	LOGICAL_REP_MSG_RELATION = 'R',
 	LOGICAL_REP_MSG_TYPE = 'Y',
 	LOGICAL_REP_MSG_MESSAGE = 'M',
+	LOGICAL_REP_MSG_LOWRITE = 'W',
 	LOGICAL_REP_MSG_BEGIN_PREPARE = 'b',
 	LOGICAL_REP_MSG_PREPARE = 'P',
 	LOGICAL_REP_MSG_COMMIT_PREPARED = 'K',
@@ -214,6 +215,10 @@ extern void logicalrep_write_rollback_prepared(StringInfo out, ReorderBufferTXN 
 											   TimestampTz prepare_time);
 extern void logicalrep_read_rollback_prepared(StringInfo in,
 											  LogicalRepRollbackPreparedTxnData *rollback_data);
+extern void logicalrep_write_lo_write(StringInfo out, TransactionId xid, Oid loid,
+									  int64 offset, Size datalen, const char *data);
+extern void logicalrep_read_lo_write(StringInfo s, Oid *loid, int64 *offset, Size *datalen,
+									 char **data);
 extern void logicalrep_write_stream_prepare(StringInfo out, ReorderBufferTXN *txn,
 											XLogRecPtr prepare_lsn);
 extern void logicalrep_read_stream_prepare(StringInfo in,

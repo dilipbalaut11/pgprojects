@@ -346,6 +346,45 @@ logicalrep_read_rollback_prepared(StringInfo in,
 	strlcpy(rollback_data->gid, pq_getmsgstring(in), sizeof(rollback_data->gid));
 }
 
+void
+logicalrep_write_lo_write(StringInfo out, TransactionId xid, Oid loid,
+						  int64 offset, Size datalen, const char *data)
+{
+	pq_sendbyte(out, LOGICAL_REP_MSG_LOWRITE);
+
+	/* Write LO ID, offset, and data length */
+	pq_sendint32(out, loid);
+	pq_sendint64(out, offset);
+	pq_sendint32(out, datalen);
+
+	/* Write the data chunk */
+	pq_sendbytes(out, data, datalen);
+}
+
+void
+logicalrep_read_lo_write(StringInfo s, Oid *loid, int64 *offset, Size *datalen,
+						 char **data)
+{
+	/* Read fields, incorporating validation */
+	*loid = pq_getmsgint(s, 4);
+	if (!OidIsValid(*loid))
+		elog(ERROR, "large object ID is not set in LO write message");
+
+	*offset = pq_getmsgint64(s);
+	if (*offset < 0)
+		elog(ERROR, "invalid offset " INT64_FORMAT " in LO write message", *offset);
+
+	*datalen = pq_getmsgint(s, 4);
+	if (*datalen < 0)
+		elog(ERROR, "invalid data length %zu in LO write message", *datalen);
+
+	/* Allocate memory for the data payload */
+	*data = palloc(*datalen);
+
+	/* Read the data payload directly into the new buffer */
+	pq_copymsgbytes(s, *data, *datalen);
+}
+
 /*
  * Write STREAM PREPARE to the output stream.
  */
@@ -1235,6 +1274,8 @@ logicalrep_message_type(LogicalRepMsgType action)
 			return "TYPE";
 		case LOGICAL_REP_MSG_MESSAGE:
 			return "MESSAGE";
+		case LOGICAL_REP_MSG_LOWRITE:
+			return "LOWRITE";
 		case LOGICAL_REP_MSG_BEGIN_PREPARE:
 			return "BEGIN PREPARE";
 		case LOGICAL_REP_MSG_PREPARE:

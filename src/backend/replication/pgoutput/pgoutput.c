@@ -1491,6 +1491,29 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	TupleTableSlot *old_slot = NULL;
 	TupleTableSlot *new_slot = NULL;
 
+	if (change->action == REORDER_BUFFER_CHANGE_LOWRITE)
+	{
+		if (txndata && !txndata->sent_begin_txn)
+			pgoutput_send_begin(ctx, txn);
+
+		/* Remember the xid for the change in streaming mode. */
+		if (data->in_streaming)
+			xid = change->txn->xid;
+
+		OutputPluginPrepareWrite(ctx, true);
+
+		/* Use the new helper to serialize the LO payload */
+		logicalrep_write_lo_write(ctx->out, xid,
+								  change->data.lo_write.loid,
+								  change->data.lo_write.offset,
+								  change->data.lo_write.datalen,
+								  change->data.lo_write.data);
+
+		OutputPluginWrite(ctx, true);
+
+		return;
+	}
+
 	if (!is_publishable_relation(relation))
 		return;
 

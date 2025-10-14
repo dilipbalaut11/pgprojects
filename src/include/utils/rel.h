@@ -19,6 +19,7 @@
 #include "catalog/catalog.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_index.h"
+#include "catalog/pg_largeobject.h"
 #include "catalog/pg_publication.h"
 #include "nodes/bitmapset.h"
 #include "partitioning/partdefs.h"
@@ -707,12 +708,15 @@ RelationCloseSmgr(Relation relation)
  * it would complicate decoding slightly for little gain). Note that we *do*
  * log information for user defined catalog tables since they presumably are
  * interesting to the user...
+ *
+ * TODO: Logically log pg_largeobject rows with a configuration parameter
+ * instead of doing it unconditionally.
  */
 #define RelationIsLogicallyLogged(relation) \
 	(XLogLogicalInfoActive() && \
 	 RelationNeedsWAL(relation) && \
 	 (relation)->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&	\
-	 !IsCatalogRelation(relation))
+	 !(IsCatalogRelation(relation) && RelationGetRelid(relation) != LargeObjectRelationId))
 
 /* routines in utils/cache/relcache.c */
 extern void RelationIncrementReferenceCount(Relation rel);

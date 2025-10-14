@@ -61,6 +61,7 @@ typedef enum ReorderBufferChangeType
 	REORDER_BUFFER_CHANGE_INTERNAL_SPEC_CONFIRM,
 	REORDER_BUFFER_CHANGE_INTERNAL_SPEC_ABORT,
 	REORDER_BUFFER_CHANGE_TRUNCATE,
+	REORDER_BUFFER_CHANGE_LOWRITE,
 } ReorderBufferChangeType;
 
 /* forward declaration */
@@ -154,6 +155,16 @@ typedef struct ReorderBufferChange
 			uint32		ninvalidations; /* Number of messages */
 			SharedInvalidationMessage *invalidations;	/* invalidation message */
 		}			inval;
+
+		/* Lo write */
+		struct
+		{
+			Oid		loid;
+			int64	offset;
+			Size	datalen;
+			char   *data;
+		}			lo_write;
+
 	}			data;
 
 	/*

@@ -579,6 +579,13 @@ ReorderBufferFreeChange(ReorderBuffer *rb, ReorderBufferChange *change,
 		case REORDER_BUFFER_CHANGE_INTERNAL_COMMAND_ID:
 		case REORDER_BUFFER_CHANGE_INTERNAL_TUPLECID:
 			break;
+		case REORDER_BUFFER_CHANGE_LOWRITE:
+			if (change->data.lo_write.data != NULL)
+			{
+				pfree(change->data.lo_write.data);
+				change->data.lo_write.data = NULL;
+			}
+			break;
 	}
 
 	pfree(change);
@@ -928,6 +935,19 @@ ReorderBufferQueueMessage(ReorderBuffer *rb, TransactionId xid,
 		}
 		PG_END_TRY();
 	}
+}
+
+/*
+ * Allocate a raw memory from reorder buffer.
+ */
+void *
+ReorderBufferAllocRawBuffer(ReorderBuffer *rb, Size alloc_len)
+{
+	void *buffer;
+
+	buffer = (char *) MemoryContextAlloc(rb->tup_context, alloc_len);
+
+	return buffer;
 }
 
 /*
@@ -2584,6 +2604,10 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 				case REORDER_BUFFER_CHANGE_INTERNAL_TUPLECID:
 					elog(ERROR, "tuplecid value in changequeue");
+					break;
+
+				case REORDER_BUFFER_CHANGE_LOWRITE:
+					ReorderBufferApplyChange(rb, txn, NULL, change, streaming);
 					break;
 			}
 
@@ -4270,6 +4294,26 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 		case REORDER_BUFFER_CHANGE_INTERNAL_TUPLECID:
 			/* ReorderBufferChange contains everything important */
 			break;
+		case REORDER_BUFFER_CHANGE_LOWRITE:
+			{
+				char   *data;
+				Size	datalen = change->data.lo_write.datalen;
+
+				sz += datalen;
+
+				/* make sure we have enough space */
+				ReorderBufferSerializeReserve(rb, sz);
+
+				data = ((char *) rb->outbuf) + sizeof(ReorderBufferDiskChange);
+
+				/* might have been reallocated above */
+				ondisk = (ReorderBufferDiskChange *) rb->outbuf;
+
+				/* Copy the LO_WRITE struct and the data payload immediately following it */
+				memcpy(data, &change->data.lo_write.data, datalen);
+
+				break;
+			}
 	}
 
 	ondisk->size = sz;
@@ -4534,6 +4578,11 @@ ReorderBufferChangeSize(ReorderBufferChange *change)
 		case REORDER_BUFFER_CHANGE_INTERNAL_TUPLECID:
 			/* ReorderBufferChange contains everything important */
 			break;
+		case REORDER_BUFFER_CHANGE_LOWRITE:
+			{
+				sz += change->data.lo_write.datalen;
+				break;
+			}
 	}
 
 	return sz;
@@ -4833,6 +4882,18 @@ ReorderBufferRestoreChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 		case REORDER_BUFFER_CHANGE_INTERNAL_COMMAND_ID:
 		case REORDER_BUFFER_CHANGE_INTERNAL_TUPLECID:
 			break;
+		case REORDER_BUFFER_CHANGE_LOWRITE:
+			{
+				Size        datalen = change->data.lo_write.datalen;
+
+				/* Allocate memory for the data payload */
+				change->data.lo_write.data = MemoryContextAlloc(rb->context, datalen);
+
+				/* Copy the data payload */
+				memcpy(change->data.lo_write.data, data, datalen);
+
+				break;
+			}
 	}
 
 	dlist_push_tail(&txn->changes, &change->node);

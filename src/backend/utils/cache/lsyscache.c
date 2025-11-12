@@ -3879,3 +3879,41 @@ get_subscription_name(Oid subid, bool missing_ok)
 
 	return subname;
 }
+
+/*
+ * get_subscription_conflict_log_table
+ *
+ * Get conflict log table name and namespace id from subscription.
+ */
+char *
+get_subscription_conflict_log_table(Oid subid, Oid *nspid)
+{
+	HeapTuple	tup;
+	Datum		datum;
+	bool		isnull;
+	char	   *relname = NULL;
+	Form_pg_subscription subform;
+
+	*nspid = InvalidOid;
+
+	tup = SearchSysCache1(SUBSCRIPTIONOID, ObjectIdGetDatum(subid));
+
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "cache lookup failed for subscription %u", subid);
+
+	subform = (Form_pg_subscription) GETSTRUCT(tup);
+
+	/* Get conflict log table name. */
+	datum = SysCacheGetAttr(SUBSCRIPTIONOID,
+							tup,
+							Anum_pg_subscription_subconflictlogtable,
+							&isnull);
+	if (!isnull)
+	{
+		*nspid = subform->subconflictlognspid;
+		relname = pstrdup(TextDatumGetCString(datum));
+	}
+
+	ReleaseSysCache(tup);
+	return relname;
+}

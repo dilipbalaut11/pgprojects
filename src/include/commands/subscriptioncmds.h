@@ -36,4 +36,6 @@ extern void CheckSubDeadTupleRetention(bool check_guc, bool sub_disabled,
 									   bool retention_active,
 									   bool max_retention_set);
 
+extern bool IsConflictLogRelid(Oid relid);
+
 #endif							/* SUBSCRIPTIONCMDS_H */

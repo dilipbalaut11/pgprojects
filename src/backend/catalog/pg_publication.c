@@ -31,6 +31,7 @@
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_type.h"
 #include "commands/publicationcmds.h"
+#include "commands/subscriptioncmds.h"
 #include "funcapi.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -71,6 +72,14 @@ check_publication_add_relation(Relation targetrel)
 				 errmsg("cannot add relation \"%s\" to publication",
 						RelationGetRelationName(targetrel)),
 				 errdetail("This operation is not supported for system tables.")));
+
+	/* Can't be created as conflict log table */
+	if (IsConflictLogRelid(RelationGetRelid(targetrel)))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("cannot add relation \"%s\" to publication",
+						RelationGetRelationName(targetrel)),
+				 errdetail("This operation is not supported for conflict log tables.")));
 
 	/* UNLOGGED and TEMP relations cannot be part of publication. */
 	if (targetrel->rd_rel->relpersistence == RELPERSISTENCE_TEMP)
@@ -153,7 +162,7 @@ is_publishable_relation(Relation rel)
 }
 
 /*
- * SQL-callable variant of the above
+ * SQL-callable variant of the above and this should not be a conflict log rel
  *
  * This returns null when the relation does not exist.  This is intended to be
  * used for example in psql to avoid gratuitous errors when there are
@@ -169,7 +178,8 @@ pg_relation_is_publishable(PG_FUNCTION_ARGS)
 	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tuple))
 		PG_RETURN_NULL();
-	result = is_publishable_class(relid, (Form_pg_class) GETSTRUCT(tuple));
+	result = is_publishable_class(relid, (Form_pg_class) GETSTRUCT(tuple)) &&
+			 !IsConflictLogRelid(relid);
 	ReleaseSysCache(tuple);
 	PG_RETURN_BOOL(result);
 }
@@ -890,7 +900,9 @@ GetAllPublicationRelations(char relkind, bool pubviaroot)
 		Form_pg_class relForm = (Form_pg_class) GETSTRUCT(tuple);
 		Oid			relid = relForm->oid;
 
+		/* conflict history tables are not published. */
 		if (is_publishable_class(relid, relForm) &&
+			!IsConflictLogRelid(relid) &&
 			!(relForm->relispartition && pubviaroot))
 			result = lappend_oid(result, relid);
 	}

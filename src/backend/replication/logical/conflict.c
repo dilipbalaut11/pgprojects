@@ -15,13 +15,23 @@
 #include "postgres.h"
 
 #include "access/commit_ts.h"
+#include "access/heapam.h"
 #include "access/tableam.h"
+#include "access/table.h"
+#include "catalog/indexing.h"
+#include "catalog/namespace.h"
+#include "catalog/pg_namespace_d.h"
+#include "catalog/pg_type.h"
 #include "executor/executor.h"
+#include "executor/spi.h"
 #include "pgstat.h"
 #include "replication/conflict.h"
 #include "replication/worker_internal.h"
 #include "storage/lmgr.h"
+#include "utils/builtins.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_lsn.h"
 
 static const char *const ConflictTypeNames[] = {
 	[CT_INSERT_EXISTS] = "insert_exists",
@@ -52,6 +62,16 @@ static char *build_tuple_value_details(EState *estate, ResultRelInfo *relinfo,
 									   Oid indexoid);
 static char *build_index_value_desc(EState *estate, Relation localrel,
 									TupleTableSlot *slot, Oid indexoid);
+static Datum TupleTableSlotToJsonDatum(TupleTableSlot *slot);
+
+static void InsertConflictLog(Relation rel,
+							  TransactionId local_xid,
+							  TimestampTz local_ts,
+							  ConflictType conflict_type,
+							  RepOriginId origin_id,
+							  TupleTableSlot *searchslot,
+							  TupleTableSlot *localslot,
+							  TupleTableSlot *remoteslot);
 
 /*
  * Get the xmin and commit timestamp data (origin and timestamp) associated
@@ -112,6 +132,7 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 
 	/* Form errdetail message by combining conflicting tuples information. */
 	foreach_ptr(ConflictTupleInfo, conflicttuple, conflicttuples)
+	{
 		errdetail_apply_conflict(estate, relinfo, type, searchslot,
 								 conflicttuple->slot, remoteslot,
 								 conflicttuple->indexoid,
@@ -119,6 +140,15 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 								 conflicttuple->origin,
 								 conflicttuple->ts,
 								 &err_detail);
+
+		/* Insert conflict details to log history table. */
+		InsertConflictLog(relinfo->ri_RelationDesc,
+						  conflicttuple->xmin,
+						  conflicttuple->ts, type,
+						  conflicttuple->origin,
+						  searchslot, conflicttuple->slot,
+						  remoteslot);
+	}
 
 	pgstat_report_subscription_conflict(MySubscription->oid, type);
 
@@ -524,4 +554,152 @@ build_index_value_desc(EState *estate, Relation localrel, TupleTableSlot *slot,
 	index_close(indexDesc, NoLock);
 
 	return index_value;
+}
+
+/*
+ * Helper function to convert a TupleTableSlot to Jsonb
+ *
+ * This would be a new internal helper function for logical replication
+ * Needs to handle various data types and potentially TOASTed data
+ */
+static Datum
+TupleTableSlotToJsonDatum(TupleTableSlot *slot)
+{
+	HeapTuple	tuple = ExecCopySlotHeapTuple(slot);
+	Datum		datum = heap_copy_tuple_as_datum(tuple, slot->tts_tupleDescriptor);
+	Datum		json;
+
+	if (TupIsNull(slot))
+		return 0;
+
+	json = DirectFunctionCall1(row_to_json, datum);
+	heap_freetuple(tuple);
+
+	return json;
+}
+
+/*
+ * InsertConflictLog
+ *
+ * Insert details about a logical replication conflict to a conflict history
+ * table.
+ */
+static void
+InsertConflictLog(Relation rel, TransactionId local_xid, TimestampTz local_ts,
+				  ConflictType conflict_type, RepOriginId origin_id,
+				  TupleTableSlot *searchslot, TupleTableSlot *localslot,
+				  TupleTableSlot *remoteslot)
+{
+	Datum		values[MAX_CONFLICT_ATTR_NUM];
+	bool		nulls[MAX_CONFLICT_ATTR_NUM];
+	Oid			nspid;
+	Oid			relid;
+	Relation	conflictrel;
+	int			attno;
+	int			options = HEAP_INSERT_NO_LOGICAL;
+	char	   *relname;
+	char	   *origin = NULL;
+	char	   *remote_origin = NULL;
+	HeapTuple	tup;
+
+	/* If conflict history is not enabled for the subscription just return. */
+	relname = get_subscription_conflictrel(MyLogicalRepWorker->subid, &nspid);
+	if (relname == NULL)
+		return;
+
+	/* TODO: proper error code */
+	relid = get_relname_relid(relname, nspid);
+	if (!OidIsValid(relid))
+		elog(ERROR, "conflict log history table does not exists");
+	conflictrel = table_open(relid, RowExclusiveLock);
+	if (conflictrel == NULL)
+		elog(ERROR, "could not open conflict log history table");
+
+
+	/* Initialize values and nulls arrays */
+	memset(values, 0, sizeof(Datum) * MAX_CONFLICT_ATTR_NUM);
+	memset(nulls, 0, sizeof(bool) * MAX_CONFLICT_ATTR_NUM);
+
+	/* Populate the values and nulls arrays */
+	attno = 0;
+	values[attno] = ObjectIdGetDatum(RelationGetRelid(rel));
+	attno++;
+
+	if (TransactionIdIsValid(local_xid))
+		values[attno] = TransactionIdGetDatum(local_xid);
+	else
+		nulls[attno] = true;
+	attno++;
+
+	if (TransactionIdIsValid(remote_xid))
+		values[attno] = TransactionIdGetDatum(remote_xid);
+	else
+		nulls[attno] = true;
+	attno++;
+
+	values[attno] = LSNGetDatum(remote_final_lsn);
+	attno++;
+
+	if (local_ts > 0)
+		values[attno] = TimestampTzGetDatum(local_ts);
+	else
+		nulls[attno] = true;
+	attno++;
+
+	if (remote_commit_ts > 0)
+		values[attno] = TimestampTzGetDatum(remote_commit_ts);
+	else
+		nulls[attno] = true;
+	attno++;
+
+	values[attno] =
+			CStringGetTextDatum(get_namespace_name(RelationGetNamespace(rel)));
+	attno++;
+
+	values[attno] = CStringGetTextDatum(RelationGetRelationName(rel));
+	attno++;
+
+	values[attno] = CStringGetTextDatum(ConflictTypeNames[conflict_type]);
+	attno++;
+
+	if (origin_id != InvalidRepOriginId)
+		replorigin_by_oid(origin_id, true, &origin);
+
+	if (origin != NULL)
+		values[attno] = CStringGetTextDatum(origin);
+	else
+		nulls[attno] = true;
+	attno++;
+
+	if (replorigin_session_origin != InvalidRepOriginId)
+		replorigin_by_oid(replorigin_session_origin, true, &remote_origin);
+
+	if (remote_origin != NULL)
+		values[attno] = CStringGetTextDatum(remote_origin);
+	else
+		nulls[attno] = true;
+	attno++;
+
+	if (searchslot != NULL)
+		values[attno] = TupleTableSlotToJsonDatum(searchslot);
+	else
+		nulls[attno] = true;
+	attno++;
+
+	if (localslot != NULL)
+		values[attno] = TupleTableSlotToJsonDatum(localslot);
+	else
+		nulls[attno] = true;
+	attno++;
+
+	if (remoteslot != NULL)
+		values[attno] = TupleTableSlotToJsonDatum(remoteslot);
+	else
+		nulls[attno] = true;
+
+	tup = heap_form_tuple(RelationGetDescr(conflictrel), values, nulls);
+	heap_insert(conflictrel, tup, GetCurrentCommandId(true), options, NULL);
+	table_close(conflictrel, RowExclusiveLock);
+
+	pfree(relname);
 }

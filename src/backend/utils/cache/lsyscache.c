@@ -3881,3 +3881,43 @@ get_subscription_name(Oid subid, bool missing_ok)
 
 	return subname;
 }
+
+/*
+ * get_subscription_conflictrel
+ *
+ * Get conflict relation name and namespace id from subscription.
+ */
+char *
+get_subscription_conflictrel(Oid subid, Oid *nspid)
+{
+	HeapTuple	tup;
+	Datum		datum;
+	bool		isnull;
+	char	   *relname;
+	Form_pg_subscription subform;
+
+	tup = SearchSysCache1(SUBSCRIPTIONOID, ObjectIdGetDatum(subid));
+
+	if (!HeapTupleIsValid(tup))
+		return NULL;
+
+	subform = (Form_pg_subscription) GETSTRUCT(tup);
+
+	/* Get conflict table name */
+	datum = SysCacheGetAttr(SUBSCRIPTIONOID,
+							tup,
+							Anum_pg_subscription_subconflicttable,
+							&isnull);
+	if (isnull)
+	{
+		ReleaseSysCache(tup);
+		return NULL;
+	}
+
+	*nspid = subform->subconflictnspid;
+	relname = pstrdup(TextDatumGetCString(datum));
+
+	ReleaseSysCache(tup);
+
+	return relname;
+}

@@ -62,6 +62,7 @@ typedef enum
 } ConflictType;
 
 #define CONFLICT_NUM_TYPES (CT_MULTIPLE_UNIQUE_CONFLICTS + 1)
+#define	MAX_CONFLICT_ATTR_NUM	15
 
 /*
  * Information for the existing local row that caused the conflict.
@@ -89,4 +90,5 @@ extern void ReportApplyConflict(EState *estate, ResultRelInfo *relinfo,
 								TupleTableSlot *remoteslot,
 								List *conflicttuples);
 extern void InitConflictIndexes(ResultRelInfo *relInfo);
+
 #endif

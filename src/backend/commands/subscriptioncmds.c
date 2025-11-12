@@ -34,6 +34,7 @@
 #include "commands/event_trigger.h"
 #include "commands/subscriptioncmds.h"
 #include "executor/executor.h"
+#include "executor/spi.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "pgstat.h"
@@ -47,10 +48,12 @@
 #include "storage/lmgr.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/fmgroids.h"
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_lsn.h"
+#include "utils/regproc.h"
 #include "utils/syscache.h"
 
 /*
@@ -75,6 +78,7 @@
 #define SUBOPT_MAX_RETENTION_DURATION	0x00008000
 #define SUBOPT_LSN					0x00010000
 #define SUBOPT_ORIGIN				0x00020000
+#define SUBOPT_CONFLICT_TABLE		0x00030000
 
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
@@ -103,6 +107,7 @@ typedef struct SubOpts
 	bool		retaindeadtuples;
 	int32		maxretention;
 	char	   *origin;
+	char	   *conflicttable;
 	XLogRecPtr	lsn;
 } SubOpts;
 
@@ -135,7 +140,8 @@ static List *merge_publications(List *oldpublist, List *newpublist, bool addpub,
 static void ReportSlotConnectionError(List *rstates, Oid subid, char *slotname, char *err);
 static void CheckAlterSubOption(Subscription *sub, const char *option,
 								bool slot_needs_update, bool isTopLevel);
-
+static void CreateConflictLogTable(Oid namespaceId, char *conflictrel);
+static void DropConflictLogTable(Oid namespaceId, char *conflictrel);
 
 /*
  * Common option parsing function for CREATE and ALTER SUBSCRIPTION commands.
@@ -191,6 +197,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 		opts->maxretention = 0;
 	if (IsSet(supported_opts, SUBOPT_ORIGIN))
 		opts->origin = pstrdup(LOGICALREP_ORIGIN_ANY);
+	if (IsSet(supported_opts, SUBOPT_CONFLICT_TABLE))
+		opts->conflicttable = NULL;
 
 	/* Parse options */
 	foreach(lc, stmt_options)
@@ -402,6 +410,15 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 			opts->specified_opts |= SUBOPT_LSN;
 			opts->lsn = lsn;
 		}
+		else if (IsSet(supported_opts, SUBOPT_CONFLICT_TABLE) &&
+				 strcmp(defel->defname, "conflict_log_table") == 0)
+		{
+			if (IsSet(opts->specified_opts, SUBOPT_CONFLICT_TABLE))
+				errorConflictingDefElem(defel, pstate);
+
+			opts->specified_opts |= SUBOPT_CONFLICT_TABLE;
+			opts->conflicttable = defGetString(defel);
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -599,6 +616,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	bits32		supported_opts;
 	SubOpts		opts = {0};
 	AclResult	aclresult;
+	Oid			conflict_table_nspid;
+	char	   *conflict_table;
 
 	/*
 	 * Parse and check options.
@@ -612,7 +631,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					  SUBOPT_DISABLE_ON_ERR | SUBOPT_PASSWORD_REQUIRED |
 					  SUBOPT_RUN_AS_OWNER | SUBOPT_FAILOVER |
 					  SUBOPT_RETAIN_DEAD_TUPLES |
-					  SUBOPT_MAX_RETENTION_DURATION | SUBOPT_ORIGIN);
+					  SUBOPT_MAX_RETENTION_DURATION | SUBOPT_ORIGIN |
+					  SUBOPT_CONFLICT_TABLE);
 	parse_subscription_options(pstate, stmt->options, supported_opts, &opts);
 
 	/*
@@ -747,6 +767,25 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	values[Anum_pg_subscription_suborigin - 1] =
 		CStringGetTextDatum(opts.origin);
 
+	/*
+	 * If a conflict log table name is specified, parse the schema and table
+	 * name from the string. Store the namespace OID and the table name in
+	 * the pg_subscription catalog tuple.
+	 */
+	if (opts.conflicttable)
+	{
+		List   *names = stringToQualifiedNameList(opts.conflicttable, NULL);
+
+		conflict_table_nspid =
+				QualifiedNameGetCreationNamespace(names, &conflict_table);
+		values[Anum_pg_subscription_subconflictnspid - 1] =
+					ObjectIdGetDatum(conflict_table_nspid);
+		values[Anum_pg_subscription_subconflicttable - 1] =
+					CStringGetTextDatum(conflict_table);
+	}
+	else
+		nulls[Anum_pg_subscription_subconflicttable - 1] = true;
+
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
 	/* Insert tuple into catalog. */
@@ -767,6 +806,10 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	 */
 	ReplicationOriginNameForLogicalRep(subid, InvalidOid, originname, sizeof(originname));
 	replorigin_create(originname);
+
+	/* If conflict log table name is given than create the table. */
+	if (opts.conflicttable)
+		CreateConflictLogTable(conflict_table_nspid, conflict_table);
 
 	/*
 	 * Connect to remote side to execute requested commands and fetch table
@@ -1410,7 +1453,8 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 								  SUBOPT_RUN_AS_OWNER | SUBOPT_FAILOVER |
 								  SUBOPT_RETAIN_DEAD_TUPLES |
 								  SUBOPT_MAX_RETENTION_DURATION |
-								  SUBOPT_ORIGIN);
+								  SUBOPT_ORIGIN |
+								  SUBOPT_CONFLICT_TABLE);
 
 				parse_subscription_options(pstate, stmt->options,
 										   supported_opts, &opts);
@@ -1663,6 +1707,25 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 						pg_strcasecmp(opts.origin, LOGICALREP_ORIGIN_ANY) == 0;
 
 					origin = opts.origin;
+				}
+
+				if (IsSet(opts.specified_opts, SUBOPT_CONFLICT_TABLE))
+				{
+					Oid		nspid;
+					char   *relname = NULL;
+					List   *names =
+						stringToQualifiedNameList(opts.conflicttable, NULL);
+
+					nspid = QualifiedNameGetCreationNamespace(names, &relname);
+					values[Anum_pg_subscription_subconflictnspid - 1] =
+								ObjectIdGetDatum(nspid);
+					values[Anum_pg_subscription_subconflicttable - 1] =
+						CStringGetTextDatum(relname);
+
+					replaces[Anum_pg_subscription_subconflictnspid - 1] = true;
+					replaces[Anum_pg_subscription_subconflicttable - 1] = true;
+
+					CreateConflictLogTable(nspid, relname);
 				}
 
 				update_tuple = true;
@@ -2027,6 +2090,8 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	Form_pg_subscription form;
 	List	   *rstates;
 	bool		must_use_password;
+	Oid			conflict_table_nsp = InvalidOid;
+	char	   *conflict_table = NULL;
 
 	/*
 	 * The launcher may concurrently start a new worker for this subscription.
@@ -2109,6 +2174,19 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 
 	ObjectAddressSet(myself, SubscriptionRelationId, subid);
 	EventTriggerSQLDropAddObject(&myself, true, true);
+
+	/* Fetch the conflict log table information. */
+	conflict_table = get_subscription_conflictrel(subid, &conflict_table_nsp);
+
+	/*
+	 * If the subscription had a conflict log table, drop it now.  This happens
+	 * before deleting the subscription tuple.
+	 */
+	if (conflict_table)
+	{
+		DropConflictLogTable(conflict_table_nsp, conflict_table);
+		pfree(conflict_table);
+	}
 
 	/* Remove the tuple from catalog. */
 	CatalogTupleDelete(rel, &tup->t_self);
@@ -3187,4 +3265,95 @@ defGetStreamingMode(DefElem *def)
 			 errmsg("%s requires a Boolean value or \"parallel\"",
 					def->defname)));
 	return LOGICALREP_STREAM_OFF;	/* keep compiler quiet */
+}
+
+/*
+ * Create conflict log table.
+ *
+ * The subscription owner becomes the owner of this table and has all
+ * privileges on it.
+ */
+static void
+CreateConflictLogTable(Oid namespaceId, char *conflictrel)
+{
+	StringInfoData 	querybuf;
+
+	/*
+	 * Check if table with same name already present, if so report an error
+	 * as currently we do not support user created table as conflict log
+	 * table.
+	 */
+	if (OidIsValid(get_relname_relid(conflictrel, namespaceId)))
+		ereport(ERROR,
+				(errcode(ERRCODE_DUPLICATE_TABLE),
+				 errmsg("cannot create conflict log table \"%s.%s\" because a table with that name already exists",
+						get_namespace_name(namespaceId), conflictrel),
+				 errhint("Use a different name for the conflict log table or drop the existing table.")));
+
+	initStringInfo(&querybuf);
+
+	/* build and execute the CREATE TABLE query. */
+	appendStringInfo(&querybuf,
+					 "CREATE TABLE %s.%s ("
+					 "relid	Oid,"
+					 "local_xid xid,"
+					 "remote_xid xid,"
+					 "remote_commit_lsn pg_lsn,"
+					 "local_commit_ts TIMESTAMPTZ,"
+					 "remote_commit_ts TIMESTAMPTZ,"
+					 "table_schema	TEXT,"
+					 "table_name	TEXT,"
+					 "conflict_type TEXT,"
+					 "local_origin	TEXT,"
+					 "remote_origin	TEXT,"
+					 "key_tuple		JSON,"
+					 "local_tuple	JSON,"
+					 "remote_tuple	JSON)",
+					 quote_identifier(get_namespace_name(namespaceId)),
+					 quote_identifier(conflictrel));
+
+	if (SPI_connect() != SPI_OK_CONNECT)
+		elog(ERROR, "SPI_connect failed");
+
+	if (SPI_execute(querybuf.data, false, 0) != SPI_OK_UTILITY)
+		elog(ERROR, "SPI_exec failed: %s", querybuf.data);
+
+	if (SPI_finish() != SPI_OK_FINISH)
+		elog(ERROR, "SPI_finish failed");
+
+	pfree(querybuf.data);
+}
+
+/*
+ * Drop the conflict log table.
+ *
+ * This function uses SPI to execute DROP TABLE IF EXISTS.
+ * We use IF EXISTS to avoid errors if the user manually dropped it first.
+ */
+static void
+DropConflictLogTable(Oid namespaceId, char *conflictrel)
+{
+	StringInfoData 	querybuf;
+
+	initStringInfo(&querybuf);
+
+	/*
+	 * Drop conflict log table if exist, use if exists ensures the command
+	 * won't error if the table is already gone.
+	 */
+	appendStringInfo(&querybuf,
+					 "DROP TABLE IF EXISTS %s.%s",
+					 quote_identifier(get_namespace_name(namespaceId)),
+					 quote_identifier(conflictrel));
+
+	if (SPI_connect() != SPI_OK_CONNECT)
+		elog(ERROR, "SPI_connect failed");
+
+	if (SPI_execute(querybuf.data, false, 0) != SPI_OK_UTILITY)
+		elog(ERROR, "SPI_exec failed: %s", querybuf.data);
+
+	if (SPI_finish() != SPI_OK_FINISH)
+		elog(ERROR, "SPI_finish failed");
+
+	pfree(querybuf.data);
 }

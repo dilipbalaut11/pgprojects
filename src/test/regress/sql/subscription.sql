@@ -365,6 +365,61 @@ COMMIT;
 ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
 DROP SUBSCRIPTION regress_testsub;
 
+--
+-- CONFLICT LOG HISTORY TABLE TESTS
+--
+
+SET SESSION AUTHORIZATION 'regress_subscription_user';
+
+-- fail - conflict_log_table specified when table already exists
+CREATE TABLE public.regress_conflict_log_temp (id int);
+CREATE SUBSCRIPTION regress_conflict_fail CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_table = 'public.regress_conflict_log_temp');
+DROP TABLE public.regress_conflict_log_temp;
+
+-- ok - conflict_log_table creation with CREATE SUBSCRIPTION
+CREATE SUBSCRIPTION regress_conflict_test1 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_table = 'public.regress_conflict_log1');
+
+-- check metadata in pg_subscription
+SELECT subname, subconflicttable, subconflictnspid = (SELECT oid FROM pg_namespace WHERE nspname = 'public') AS is_public_schema
+FROM pg_subscription WHERE subname = 'regress_conflict_test1';
+
+-- check if the table exists and has the correct schema (15 columns)
+SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.regress_conflict_log1'::regclass AND attnum > 0;
+
+-- check a specific column type (e.g., key_tuple should be JSON)
+SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.regress_conflict_log1'::regclass AND attname = 'key_tuple';
+
+-- ok - adding conflict_log_table with ALTER SUBSCRIPTION
+CREATE SUBSCRIPTION regress_conflict_test2 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false);
+ALTER SUBSCRIPTION regress_conflict_test2 SET (conflict_log_table = 'public.regress_conflict_log2');
+
+-- check metadata after ALTER
+SELECT subname, subconflicttable, subconflictnspid = (SELECT oid FROM pg_namespace WHERE nspname = 'public') AS is_public_schema
+FROM pg_subscription WHERE subname = 'regress_conflict_test2';
+
+-- ok - dropping subscription also drops the log table
+ALTER SUBSCRIPTION regress_conflict_test1 DISABLE;
+ALTER SUBSCRIPTION regress_conflict_test1 SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_conflict_test1;
+
+-- should return NULL, meaning the table was dropped
+SELECT to_regclass('public.regress_conflict_log1');
+
+-- ok - dropping subscription when the log table was manually dropped first
+CREATE SUBSCRIPTION regress_conflict_test1 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_table = 'public.regress_conflict_log1');
+DROP TABLE public.regress_conflict_log1;
+ALTER SUBSCRIPTION regress_conflict_test1 DISABLE;
+ALTER SUBSCRIPTION regress_conflict_test1 SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_conflict_test1;
+
+-- should return NULL, meaning the subscription was dropped successfully
+SELECT subname FROM pg_subscription WHERE subname = 'regress_conflict_test1';
+
+-- Clean up remaining test subscription
+ALTER SUBSCRIPTION regress_conflict_test2 DISABLE;
+ALTER SUBSCRIPTION regress_conflict_test2 SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_conflict_test2;
+
 RESET SESSION AUTHORIZATION;
 DROP ROLE regress_subscription_user;
 DROP ROLE regress_subscription_user2;

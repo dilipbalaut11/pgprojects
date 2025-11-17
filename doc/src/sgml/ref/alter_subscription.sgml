@@ -265,8 +265,9 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
       <link linkend="sql-createsubscription-params-with-origin"><literal>origin</literal></link>,
       <link linkend="sql-createsubscription-params-with-failover"><literal>failover</literal></link>,
       <link linkend="sql-createsubscription-params-with-two-phase"><literal>two_phase</literal></link>,
-      <link linkend="sql-createsubscription-params-with-retain-dead-tuples"><literal>retain_dead_tuples</literal></link>, and
-      <link linkend="sql-createsubscription-params-with-max-retention-duration"><literal>max_retention_duration</literal></link>.
+      <link linkend="sql-createsubscription-params-with-retain-dead-tuples"><literal>retain_dead_tuples</literal></link>,
+      <link linkend="sql-createsubscription-params-with-max-retention-duration"><literal>max_retention_duration</literal></link> and,
+      <link linkend="sql-createsubscription-params-with-conflict-log-table"><literal>conflict_log_table</literal></link>.
       Only a superuser can set <literal>password_required = false</literal>.
      </para>
 
@@ -323,6 +324,12 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
       has this option enabled, the replication slot named
       <quote><literal>pg_conflict_detection</literal></quote>, created to retain
       dead tuples for conflict detection, will be dropped.
+     </para>
+
+     <para>
+      When altering the <link linkend="sql-createsubscription-params-with-conflict-log-table"><literal>conflict_log_table</literal></link>, the target table must not
+      exist in the specified schema; attempting to set the parameter to an
+      existing table name will result in an error.
      </para>
     </listitem>
    </varlistentry>

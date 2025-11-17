@@ -268,6 +268,25 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         </listitem>
        </varlistentry>
 
+       <varlistentry id="sql-createsubscription-params-with-conflict-log-table">
+        <term><literal>conflict_log_table</literal> (<type>string</type>)</term>
+        <listitem>
+         <para>
+          Specifies the qualified table name where detailed logical replication
+          conflict information will be recorded.  The table specified by this option
+          must not exist when the subscription is created; if it does, an error will
+          be raised.  This table is automatically created by the system, and it is
+          owned by the subscription owner.  The table's predefined schema includes
+          fields for transaction details, LSNs, and JSON columns for the conflicting
+          local and remote tuples etc.
+         </para>
+         <para>
+          If this option is used, the table is automatically dropped when the subscription
+          is dropped.
+         </para>
+        </listitem>
+       </varlistentry>
+
        <varlistentry id="sql-createsubscription-params-with-streaming">
         <term><literal>streaming</literal> (<type>enum</type>)</term>
         <listitem>

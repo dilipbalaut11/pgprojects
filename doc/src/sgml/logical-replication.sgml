@@ -248,7 +248,9 @@
    The subscription is added using <link linkend="sql-createsubscription"><command>CREATE SUBSCRIPTION</command></link> and
    can be stopped/resumed at any time using the
    <link linkend="sql-altersubscription"><command>ALTER SUBSCRIPTION</command></link> command and removed using
-   <link linkend="sql-dropsubscription"><command>DROP SUBSCRIPTION</command></link>.
+   <link linkend="sql-dropsubscription"><command>DROP SUBSCRIPTION</command></link>. If a
+   <literal>conflict_log_table</literal> was specified for the subscription, that internally
+   managed table is automatically dropped along with the subscription.
   </para>
 
   <para>
@@ -282,6 +284,18 @@
    restrictive. See the
    <link linkend="sql-createsubscription-params-with-binary"><literal>binary</literal></link>
    option of <command>CREATE SUBSCRIPTION</command> for details.
+  </para>
+
+  <para>
+   Conflicts that occur during replication are typically logged as plain text
+   in the server log, which can be difficult for automated monitoring and
+   analysis. The <command>CREATE SUBSCRIPTION</command> command provides the
+   <link linkend="sql-createsubscription-params-with-conflict-log-table"><literal>conflict_log_table</literal></link>
+   option to specify a table name where detailed conflict information
+   is recorded in a structured, queryable format, significantly improving
+   post-mortem analysis and operational visibility of the replication setup.
+   This table is created and managed internally by the system and is owned
+   by the subscription owner.
   </para>
 
   <sect2 id="logical-replication-subscription-slot">
@@ -1762,7 +1776,9 @@ Publications:
   <para>
    Additional logging is triggered, and the conflict statistics are collected (displayed in the
    <link linkend="monitoring-pg-stat-subscription-stats"><structname>pg_stat_subscription_stats</structname></link> view)
-   in the following <firstterm>conflict</firstterm> cases:
+   in the following <firstterm>conflict</firstterm> cases (If the subscription was created with the
+   <literal>conflict_log_table</literal> option, detailed conflict information is also inserted
+   into the specified table, providing a structured record of all conflicts).
    <variablelist>
     <varlistentry id="conflict-insert-exists" xreflabel="insert_exists">
      <term><literal>insert_exists</literal></term>
@@ -1869,6 +1885,104 @@ Publications:
     Note that there are other conflict scenarios, such as exclusion constraint
     violations. Currently, we do not provide additional details for them in the
     log.
+  </para>
+
+  <para>
+   When the <literal>conflict_log_table</literal> option is enabled, the system automatically creates
+   a new table with a predefined schema to log conflict details. This table is created in the
+   specified schema, is **owned by the subscription owner**, and logs system fields. The schema of this table is
+   detailed in <xref linkend="logical-replication-conflict-log-schema"/>.
+  </para>
+
+  <table id="logical-replication-conflict-log-schema">
+   <title>Conflict Log History Table Schema</title>
+   <tgroup cols="3">
+    <thead>
+     <row>
+      <entry>Column</entry>
+      <entry>Type</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry><literal>relid</literal></entry>
+      <entry><type>oid</type></entry>
+      <entry>The OID of the local table where the conflict occurred.</entry>
+     </row>
+     <row>
+      <entry><literal>local_xid</literal></entry>
+      <entry><type>xid</type></entry>
+      <entry>The local transaction ID involved in the conflict (NULL if local tuple missing).</entry>
+     </row>
+     <row>
+      <entry><literal>remote_xid</literal></entry>
+      <entry><type>xid</type></entry>
+      <entry>The remote transaction ID that caused the conflict.</entry>
+     </row>
+     <row>
+      <entry><literal>remote_commit_lsn</literal></entry>
+      <entry><type>pg_lsn</type></entry>
+      <entry>The final LSN of the remote transaction.</entry>
+     </row>
+     <row>
+      <entry><literal>local_commit_ts</literal></entry>
+      <entry><type>timestamptz</type></entry>
+      <entry>The local commit timestamp of the local conflicting row (NULL if local tuple missing).</entry>
+     </row>
+     <row>
+      <entry><literal>remote_commit_ts</literal></entry>
+      <entry><type>timestamptz</type></entry>
+      <entry>The remote commit timestamp of the remote transaction.</entry>
+     </row>
+     <row>
+      <entry><literal>table_schema</literal></entry>
+      <entry><type>text</type></entry>
+      <entry>The schema name of the conflicting table.</entry>
+     </row>
+     <row>
+      <entry><literal>table_name</literal></entry>
+      <entry><type>text</type></entry>
+      <entry>The name of the conflicting table.</entry>
+     </row>
+     <row>
+      <entry><literal>conflict_type</literal></entry>
+      <entry><type>text</type></entry>
+      <entry>The type of conflict that occurred (e.g., <literal>insert_exists</literal>).</entry>
+     </row>
+     <row>
+      <entry><literal>local_origin</literal></entry>
+      <entry><type>text</type></entry>
+      <entry>The origin of the local transaction (if applicable).</entry>
+     </row>
+     <row>
+      <entry><literal>remote_origin</literal></entry>
+      <entry><type>text</type></entry>
+      <entry>The origin of the remote transaction.</entry>
+     </row>
+     <row>
+      <entry><literal>key_tuple</literal></entry>
+      <entry><type>json</type></entry>
+      <entry>The JSON representation of the replica identity or primary key tuple involved.</entry>
+     </row>
+     <row>
+      <entry><literal>local_tuple</literal></entry>
+      <entry><type>json</type></entry>
+      <entry>The JSON representation of the local row before the conflict (NULL if missing).</entry>
+     </row>
+     <row>
+      <entry><literal>remote_tuple</literal></entry>
+      <entry><type>json</type></entry>
+      <entry>The JSON representation of the incoming remote row that caused the conflict.</entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   The conflicting row data, including the original local tuple and
+   the remote tuple, is stored in <type>JSON</type> columns (<literal>local_tuple</literal>
+   and <literal>remote_tuple</literal>) for flexible querying and analysis.
   </para>
 
   <para>
@@ -2161,6 +2275,14 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
      that do not have a default operator class for B-tree or Hash. However,
      this limitation can be overcome by ensuring that the table has a primary
      key or replica identity defined for it.
+    </para>
+   </listitem>
+
+   <listitem>
+    <para>
+     The conflict log history table created using the <literal>conflict_log_table</literal>
+     option on a subscription is not published even if the publication is defined with
+     <literal>FOR ALL TABLES</literal>.
     </para>
    </listitem>
   </itemizedlist>

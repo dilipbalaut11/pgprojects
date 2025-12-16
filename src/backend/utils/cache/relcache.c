@@ -5804,7 +5804,7 @@ RelationBuildPublicationDesc(Relation relation, PublicationDesc *pubdesc)
 	 * If not publishable, it publishes no actions.  (pgoutput_change() will
 	 * ignore it.)
 	 */
-	if (!is_publishable_relation(relation))
+	if (!relation->rd_rel->relispublishable)
 	{
 		memset(pubdesc, 0, sizeof(PublicationDesc));
 		pubdesc->rf_valid_for_update = true;

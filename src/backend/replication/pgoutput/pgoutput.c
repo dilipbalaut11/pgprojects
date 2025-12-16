@@ -1491,7 +1491,7 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	TupleTableSlot *old_slot = NULL;
 	TupleTableSlot *new_slot = NULL;
 
-	if (!is_publishable_relation(relation))
+	if (!relation->rd_rel->relispublishable)
 		return;
 
 	/*
@@ -1675,7 +1675,7 @@ pgoutput_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 		Relation	relation = relations[i];
 		Oid			relid = RelationGetRelid(relation);
 
-		if (!is_publishable_relation(relation))
+		if (!relation->rd_rel->relispublishable)
 			continue;
 
 		relentry = get_rel_sync_entry(data, relation);

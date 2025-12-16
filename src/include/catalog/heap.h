@@ -83,6 +83,7 @@ extern Oid	heap_create_with_catalog(const char *relname,
 									 bool use_user_acl,
 									 bool allow_system_table_mods,
 									 bool is_internal,
+									 bool ispublishable,
 									 Oid relrewrite,
 									 ObjectAddress *typaddress);
 

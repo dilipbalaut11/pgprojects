@@ -790,6 +790,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	ObjectAddress address;
 	LOCKMODE	parentLockmode;
 	Oid			accessMethodId = InvalidOid;
+	bool		ispublishable;
 
 	/*
 	 * Truncate relname to appropriate length (probably a waste of time, as
@@ -1052,6 +1053,18 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	}
 
 	/*
+	 * Determine if the relation is eligible for logical replication.
+	 *
+	 * To be publishable, the relation must be a regular table, a partitioned
+	 * table, or a sequence.  Additionally, it must be a permanent relation
+	 * created during normal processing to exclude system catalogs.
+	 */
+	ispublishable = ((relkind == RELKIND_RELATION ||
+					 relkind == RELKIND_PARTITIONED_TABLE ||
+					 relkind == RELKIND_SEQUENCE) &&
+					 stmt->relation->relpersistence == RELPERSISTENCE_PERMANENT);
+
+	/*
 	 * Create the relation.  Inherited defaults and CHECK constraints are
 	 * passed in for immediate handling --- since they don't need parsing,
 	 * they can be stored immediately.
@@ -1076,6 +1089,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 										  true,
 										  allowSystemTableMods,
 										  false,
+										  ispublishable,
 										  InvalidOid,
 										  typaddress);
 
@@ -22529,6 +22543,7 @@ createPartitionTable(List **wqueue, RangeVar *newPartName,
 										true,
 										allowSystemTableMods,
 										true,
+										parent_rel->rd_rel->relispublishable,
 										InvalidOid,
 										NULL);
 

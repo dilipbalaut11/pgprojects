@@ -112,47 +112,6 @@ check_publication_add_schema(Oid schemaid)
 }
 
 /*
- * Returns if relation represented by oid and Form_pg_class entry
- * is publishable.
- *
- * Does same checks as check_publication_add_relation() above except for
- * RELKIND_SEQUENCE, but does not need relation to be opened and also does
- * not throw errors. Here, the additional check is to support ALL SEQUENCES
- * publication.
- *
- * XXX  This also excludes all tables with relid < FirstNormalObjectId,
- * ie all tables created during initdb.  This mainly affects the preinstalled
- * information_schema.  IsCatalogRelationOid() only excludes tables with
- * relid < FirstUnpinnedObjectId, making that test rather redundant,
- * but really we should get rid of the FirstNormalObjectId test not
- * IsCatalogRelationOid.  We can't do so today because we don't want
- * information_schema tables to be considered publishable; but this test
- * is really inadequate for that, since the information_schema could be
- * dropped and reloaded and then it'll be considered publishable.  The best
- * long-term solution may be to add a "relispublishable" bool to pg_class,
- * and depend on that instead of OID checks.
- */
-static bool
-is_publishable_class(Oid relid, Form_pg_class reltuple)
-{
-	return (reltuple->relkind == RELKIND_RELATION ||
-			reltuple->relkind == RELKIND_PARTITIONED_TABLE ||
-			reltuple->relkind == RELKIND_SEQUENCE) &&
-		!IsCatalogRelationOid(relid) &&
-		reltuple->relpersistence == RELPERSISTENCE_PERMANENT &&
-		relid >= FirstNormalObjectId;
-}
-
-/*
- * Another variant of is_publishable_class(), taking a Relation.
- */
-bool
-is_publishable_relation(Relation rel)
-{
-	return is_publishable_class(RelationGetRelid(rel), rel->rd_rel);
-}
-
-/*
  * SQL-callable variant of the above
  *
  * This returns null when the relation does not exist.  This is intended to be
@@ -169,7 +128,7 @@ pg_relation_is_publishable(PG_FUNCTION_ARGS)
 	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tuple))
 		PG_RETURN_NULL();
-	result = is_publishable_class(relid, (Form_pg_class) GETSTRUCT(tuple));
+	result = ((Form_pg_class) GETSTRUCT(tuple))->relispublishable;
 	ReleaseSysCache(tuple);
 	PG_RETURN_BOOL(result);
 }
@@ -890,7 +849,7 @@ GetAllPublicationRelations(char relkind, bool pubviaroot)
 		Form_pg_class relForm = (Form_pg_class) GETSTRUCT(tuple);
 		Oid			relid = relForm->oid;
 
-		if (is_publishable_class(relid, relForm) &&
+		if (relForm->relispublishable &&
 			!(relForm->relispartition && pubviaroot))
 			result = lappend_oid(result, relid);
 	}
@@ -911,7 +870,7 @@ GetAllPublicationRelations(char relkind, bool pubviaroot)
 			Form_pg_class relForm = (Form_pg_class) GETSTRUCT(tuple);
 			Oid			relid = relForm->oid;
 
-			if (is_publishable_class(relid, relForm) &&
+			if (relForm->relispublishable &&
 				!relForm->relispartition)
 				result = lappend_oid(result, relid);
 		}
@@ -1018,7 +977,7 @@ GetSchemaPublicationRelations(Oid schemaid, PublicationPartOpt pub_partopt)
 		Oid			relid = relForm->oid;
 		char		relkind;
 
-		if (!is_publishable_class(relid, relForm))
+		if (!relForm->relispublishable)
 			continue;
 
 		relkind = get_rel_relkind(relid);

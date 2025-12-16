@@ -183,7 +183,6 @@ extern List *GetPubPartitionOptionRelations(List *result,
 extern Oid	GetTopMostAncestorInPublication(Oid puboid, List *ancestors,
 											int *ancestor_level);
 
-extern bool is_publishable_relation(Relation rel);
 extern bool is_schema_publication(Oid pubid);
 extern bool check_and_fetch_column_list(Publication *pub, Oid relid,
 										MemoryContext mcxt, Bitmapset **cols);

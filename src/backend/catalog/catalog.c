@@ -86,7 +86,8 @@ bool
 IsSystemClass(Oid relid, Form_pg_class reltuple)
 {
 	/* IsCatalogRelationOid is a bit faster, so test that first */
-	return (IsCatalogRelationOid(relid) || IsToastClass(reltuple));
+	return (IsCatalogRelationOid(relid) || IsToastClass(reltuple)
+			|| IsConflictClass(reltuple));
 }
 
 /*
@@ -228,6 +229,18 @@ IsToastClass(Form_pg_class reltuple)
 	Oid			relnamespace = reltuple->relnamespace;
 
 	return IsToastNamespace(relnamespace);
+}
+
+/*
+ * IsConflictClass - Check if the given pg_class tuple belongs to the conflict
+ *					 namespace.
+ */
+bool
+IsConflictClass(Form_pg_class reltuple)
+{
+	Oid			relnamespace = reltuple->relnamespace;
+
+	return (relnamespace == PG_CONFLICT_NAMESPACE);
 }
 
 /*

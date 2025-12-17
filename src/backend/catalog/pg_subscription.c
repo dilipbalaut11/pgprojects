@@ -106,6 +106,7 @@ GetSubscription(Oid subid, bool missing_ok)
 	sub->retaindeadtuples = subform->subretaindeadtuples;
 	sub->maxretention = subform->submaxretention;
 	sub->retentionactive = subform->subretentionactive;
+	sub->conflictlogrelid = subform->subconflictlogrelid;
 
 	/* Get conninfo */
 	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID,
@@ -140,6 +141,12 @@ GetSubscription(Oid subid, bool missing_ok)
 								   tup,
 								   Anum_pg_subscription_suborigin);
 	sub->origin = TextDatumGetCString(datum);
+
+	/* Get conflict log destination */
+	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID,
+								   tup,
+								   Anum_pg_subscription_subconflictlogdest);
+	sub->conflictlogdest = TextDatumGetCString(datum);
 
 	/* Is the subscription owner a superuser? */
 	sub->ownersuperuser = superuser_arg(sub->owner);

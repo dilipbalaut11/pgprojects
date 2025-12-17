@@ -365,7 +365,125 @@ COMMIT;
 ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
 DROP SUBSCRIPTION regress_testsub;
 
+--
+-- CONFLICT LOG DESTINATION TESTS
+--
+
+SET SESSION AUTHORIZATION 'regress_subscription_user';
+
+-- fail - unrecognized parameter value
+CREATE SUBSCRIPTION regress_conflict_fail CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_destination = 'invalid');
+
+-- verify subconflictlogdest is 'log' and relid is 0 (InvalidOid) for default case
+CREATE SUBSCRIPTION regress_conflict_log_default CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false);
+SELECT subname, subconflictlogdest, subconflictlogrelid
+FROM pg_subscription WHERE subname = 'regress_conflict_log_default';
+
+-- verify empty string defaults to 'log'
+CREATE SUBSCRIPTION regress_conflict_empty_str CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_destination = '');
+SELECT subname, subconflictlogdest, subconflictlogrelid
+FROM pg_subscription WHERE subname = 'regress_conflict_empty_str';
+
+-- this should generate an internal table named conflict_log_table_$subid$
+CREATE SUBSCRIPTION regress_conflict_test1 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_destination = 'table');
+
+-- check metadata in pg_subscription: destination should be 'table' and relid valid
+SELECT subname, subconflictlogdest, subconflictlogrelid > 0 AS has_relid
+FROM pg_subscription WHERE subname = 'regress_conflict_test1';
+
+-- verify the physical table exists and its OID matches subconflictlogrelid
+SELECT count(*)
+FROM pg_class c
+JOIN pg_subscription s ON c.relname = 'conflict_log_table_' || s.oid
+WHERE s.subname = 'regress_conflict_test1' AND c.oid = s.subconflictlogrelid;
+
+-- check if the internal table has the correct schema (11 columns)
+SELECT count(*)
+FROM pg_attribute a
+JOIN pg_class c ON a.attrelid = c.oid
+JOIN pg_subscription s ON c.relname = 'conflict_log_table_' || s.oid
+WHERE s.subname = 'regress_conflict_test1' AND a.attnum > 0;
+
+--
+-- ALTER SUBSCRIPTION - conflict_log_destination state transitions
+--
+-- These tests verify the transition logic between different logging
+-- destinations, ensuring internal tables are created or dropped as expected.
+--
+
+-- transition from 'log' to 'all'
+-- a new internal conflict log table should be created
+CREATE SUBSCRIPTION regress_conflict_test2 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, conflict_log_destination = 'log');
+ALTER SUBSCRIPTION regress_conflict_test2 SET (conflict_log_destination = 'all');
+
+-- verify metadata after ALTER (destination should be 'all')
+SELECT subname, subconflictlogdest, subconflictlogrelid > 0 AS has_relid
+FROM pg_subscription WHERE subname = 'regress_conflict_test2';
+
+-- transition from 'all' to 'table'
+-- should NOT drop the table, only change destination string
+SELECT subconflictlogrelid AS old_relid FROM pg_subscription WHERE subname = 'regress_conflict_test2' \gset
+ALTER SUBSCRIPTION regress_conflict_test2 SET (conflict_log_destination = 'table');
+SELECT subconflictlogdest, subconflictlogrelid = :old_relid AS relid_unchanged
+FROM pg_subscription WHERE subname = 'regress_conflict_test2';
+
+-- transition from 'table' to 'log'
+-- should drop the table and clear relid
+ALTER SUBSCRIPTION regress_conflict_test2 SET (conflict_log_destination = 'log');
+SELECT subconflictlogdest, subconflictlogrelid
+FROM pg_subscription WHERE subname = 'regress_conflict_test2';
+
+-- verify the physical table is gone
+SELECT count(*)
+FROM pg_class c
+JOIN pg_subscription s ON c.relname = 'conflict_log_table_' || s.oid
+WHERE s.subname = 'regress_conflict_test2';
+
+-- ensure drop table not allowed and DROP SUBSCRIPTION reaps the table
+-- re-enable table logging for verification
+ALTER SUBSCRIPTION regress_conflict_test1 SET (conflict_log_destination = 'table');
+
+-- fail - drop table not allowed due to internal dependency
+-- use DO block to hide OID in error message
+DO $$
+BEGIN
+    EXECUTE 'DROP TABLE ' || (SELECT 'pg_conflict.conflict_log_table_' || oid FROM pg_subscription WHERE subname = 'regress_conflict_test1');
+EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'captured expected error: insufficient_privilege';
+END $$;
+
+-- PUBLICATION: Verify internal tables are not publishable
+-- pg_relation_is_publishable should return false for internal conflict log tables
+SELECT pg_relation_is_publishable(subconflictlogrelid)
+FROM pg_subscription WHERE subname = 'regress_conflict_test1';
+
+-- CLEANUP: Proper drop reaps the table
+ALTER SUBSCRIPTION regress_conflict_test1 DISABLE;
+ALTER SUBSCRIPTION regress_conflict_test1 SET (slot_name = NONE);
+
+-- Verify the table OID for reap check
+SELECT 'conflict_log_table_' || oid AS internal_tablename FROM pg_subscription WHERE subname = 'regress_conflict_test1' \gset
+
+DROP SUBSCRIPTION regress_conflict_test1;
+
+-- should return NULL, meaning the internal table was reaped via dependency
+SELECT to_regclass(:'internal_tablename');
+
+-- Clean up remaining test subscription
+ALTER SUBSCRIPTION regress_conflict_log_default DISABLE;
+ALTER SUBSCRIPTION regress_conflict_log_default SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_conflict_log_default;
+
+ALTER SUBSCRIPTION regress_conflict_empty_str DISABLE;
+ALTER SUBSCRIPTION regress_conflict_empty_str SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_conflict_empty_str;
+
+ALTER SUBSCRIPTION regress_conflict_test2 DISABLE;
+ALTER SUBSCRIPTION regress_conflict_test2 SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_conflict_test2;
+
 RESET SESSION AUTHORIZATION;
+DROP SCHEMA clt;
 DROP ROLE regress_subscription_user;
 DROP ROLE regress_subscription_user2;
 DROP ROLE regress_subscription_user3;

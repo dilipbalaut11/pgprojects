@@ -80,6 +80,8 @@ CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROW
 
 	bool		subretaindeadtuples;	/* True if dead tuples useful for
 										 * conflict detection are retained */
+	Oid			subconflictlognspid;	/* Namespace Oid in which the conflict
+										 * log table is created. */
 
 	int32		submaxretention;	/* The maximum duration (in milliseconds)
 									 * for which information useful for
@@ -105,6 +107,9 @@ CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROW
 
 	/* Only publish data originating from the specified origin */
 	text		suborigin BKI_DEFAULT(LOGICALREP_ORIGIN_ANY);
+
+	/* Conflict log table name if specified */
+	text		subconflictlogtable;
 #endif
 } FormData_pg_subscription;
 

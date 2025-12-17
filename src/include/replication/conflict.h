@@ -9,9 +9,12 @@
 #ifndef CONFLICT_H
 #define CONFLICT_H
 
+#include "access/htup.h"
 #include "access/xlogdefs.h"
+#include "catalog/pg_type.h"
 #include "nodes/pg_list.h"
 #include "utils/timestamp.h"
+#include "utils/relcache.h"
 
 /* Avoid including execnodes.h here */
 typedef struct EState EState;
@@ -79,6 +82,32 @@ typedef struct ConflictTupleInfo
 								 * conflicting local row occurred */
 } ConflictTupleInfo;
 
+/* Structure to hold metadata for one column of the conflict log table */
+typedef struct ConflictLogColumnDef
+{
+	const char *attname;    /* Column name */
+	Oid         atttypid;   /* Data type OID */
+} ConflictLogColumnDef;
+
+/* The single source of truth for the conflict log table schema */
+static const ConflictLogColumnDef ConflictLogSchema[] =
+{
+	{ .attname = "relid",            .atttypid = OIDOID },
+	{ .attname = "schemaname",       .atttypid = TEXTOID },
+	{ .attname = "relname",          .atttypid = TEXTOID },
+	{ .attname = "conflict_type",    .atttypid = TEXTOID },
+	{ .attname = "remote_xid",       .atttypid = XIDOID },
+	{ .attname = "remote_commit_lsn",.atttypid = LSNOID },
+	{ .attname = "remote_commit_ts", .atttypid = TIMESTAMPTZOID },
+	{ .attname = "remote_origin",    .atttypid = TEXTOID },
+	{ .attname = "replica_identity", .atttypid = JSONOID },
+	{ .attname = "remote_tuple",     .atttypid = JSONOID },
+	{ .attname = "local_conflicts",  .atttypid = JSONARRAYOID }
+};
+
+/* Define the count using the array size */
+#define MAX_CONFLICT_ATTR_NUM (sizeof(ConflictLogSchema) / sizeof(ConflictLogSchema[0]))
+
 extern bool GetTupleTransactionInfo(TupleTableSlot *localslot,
 									TransactionId *xmin,
 									RepOriginId *localorigin,
@@ -89,4 +118,7 @@ extern void ReportApplyConflict(EState *estate, ResultRelInfo *relinfo,
 								TupleTableSlot *remoteslot,
 								List *conflicttuples);
 extern void InitConflictIndexes(ResultRelInfo *relInfo);
+extern Relation GetConflictLogTableRel(void);
+extern void InsertConflictLogTuple(Relation conflictlogrel);
+extern bool ValidateConflictLogTable(Relation rel);
 #endif

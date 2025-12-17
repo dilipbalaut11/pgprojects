@@ -500,6 +500,7 @@ ConditionVariableMinimallyPadded
 ConditionalStack
 ConfigData
 ConfigVariable
+ConflictLogColumnDef
 ConflictTupleInfo
 ConflictType
 ConnCacheEntry

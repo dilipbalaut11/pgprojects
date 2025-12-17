@@ -31,6 +31,7 @@
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_type.h"
 #include "commands/publicationcmds.h"
+#include "commands/subscriptioncmds.h"
 #include "funcapi.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -85,6 +86,15 @@ check_publication_add_relation(Relation targetrel)
 				 errmsg("cannot add relation \"%s\" to publication",
 						RelationGetRelationName(targetrel)),
 				 errdetail("This operation is not supported for unlogged tables.")));
+
+	/* Can't be conflict log table */
+	if (IsConflictNamespace(RelationGetNamespace(targetrel)))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("cannot add relation \"%s.%s\" to publication",
+						get_namespace_name(RelationGetNamespace(targetrel)),
+						RelationGetRelationName(targetrel)),
+				 errdetail("This operation is not supported for conflict log tables.")));
 }
 
 /*
@@ -95,7 +105,8 @@ static void
 check_publication_add_schema(Oid schemaid)
 {
 	/* Can't be system namespace */
-	if (IsCatalogNamespace(schemaid) || IsToastNamespace(schemaid))
+	if (IsCatalogNamespace(schemaid) || IsToastNamespace(schemaid) ||
+		IsConflictNamespace(schemaid))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("cannot add schema \"%s\" to publication",
@@ -139,12 +150,20 @@ is_publishable_class(Oid relid, Form_pg_class reltuple)
 			reltuple->relkind == RELKIND_PARTITIONED_TABLE ||
 			reltuple->relkind == RELKIND_SEQUENCE) &&
 		!IsCatalogRelationOid(relid) &&
+		!IsConflictClass(reltuple) &&
 		reltuple->relpersistence == RELPERSISTENCE_PERMANENT &&
 		relid >= FirstNormalObjectId;
 }
 
 /*
  * Another variant of is_publishable_class(), taking a Relation.
+ *
+ * Note: Conflict log tables are not publishable.  However, we intentionally
+ * skip this check here because this function is called for every change and
+ * performing this check during every change publication is costly.  To ensure
+ * unpublishable entries are ignored without incurring performance overhead,
+ * tuples inserted into the conflict log table uses the HEAP_INSERT_NO_LOGICAL
+ * flag.  This allows the decoding layer to bypass these entries automatically.
  */
 bool
 is_publishable_relation(Relation rel)
@@ -169,6 +188,8 @@ pg_relation_is_publishable(PG_FUNCTION_ARGS)
 	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tuple))
 		PG_RETURN_NULL();
+
+	/* Subscription conflict log tables are not published */
 	result = is_publishable_class(relid, (Form_pg_class) GETSTRUCT(tuple));
 	ReleaseSysCache(tuple);
 	PG_RETURN_BOOL(result);
@@ -890,6 +911,7 @@ GetAllPublicationRelations(char relkind, bool pubviaroot)
 		Form_pg_class relForm = (Form_pg_class) GETSTRUCT(tuple);
 		Oid			relid = relForm->oid;
 
+		/* Subscription conflict log tables are not published */
 		if (is_publishable_class(relid, relForm) &&
 			!(relForm->relispartition && pubviaroot))
 			result = lappend_oid(result, relid);

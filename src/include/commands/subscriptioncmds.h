@@ -17,6 +17,7 @@
 
 #include "catalog/objectaddress.h"
 #include "parser/parse_node.h"
+#include "replication/conflict.h"
 
 extern ObjectAddress CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 										bool isTopLevel);
@@ -35,5 +36,8 @@ extern void CheckSubDeadTupleRetention(bool check_guc, bool sub_disabled,
 									   bool retain_dead_tuples,
 									   bool retention_active,
 									   bool max_retention_set);
+
+extern ConflictLogDest GetLogDestination(const char *dest);
+extern bool IsConflictLogTable(Oid relid);
 
 #endif							/* SUBSCRIPTIONCMDS_H */

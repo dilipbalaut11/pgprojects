@@ -3539,6 +3539,12 @@ CheckSetNamespace(Oid oldNspOid, Oid nspOid)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot move objects into or out of TOAST schema")));
+
+	/* similarly for CONFLICT schema */
+	if (nspOid == PG_CONFLICT_NAMESPACE || oldNspOid == PG_CONFLICT_NAMESPACE)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot move objects into or out of CONFLICT schema")));
 }
 
 /*

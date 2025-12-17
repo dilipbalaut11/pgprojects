@@ -10,6 +10,7 @@
 #define CONFLICT_H
 
 #include "access/xlogdefs.h"
+#include "catalog/pg_type.h"
 #include "nodes/pg_list.h"
 #include "utils/timestamp.h"
 
@@ -78,6 +79,60 @@ typedef struct ConflictTupleInfo
 	TimestampTz ts;				/* timestamp of when the modification on the
 								 * conflicting local row occurred */
 } ConflictTupleInfo;
+
+/*
+ * Conflict log destination types.
+ *
+ * These values are defined as bitmask flags to allow for multiple simultaneous
+ * logging destinations (e.g., logging to both system logs and a table).
+ * Internally, we use these for bitwise comparisons (IsSet), but the string
+ * representation is stored in pg_subscription.subconflictlogdest.
+ */
+typedef enum ConflictLogDest
+{
+	/* Log conflicts to the server logs */
+	CONFLICT_LOG_DEST_LOG   = 1 << 0,   /* 0x01 */
+
+	/* Log conflicts to an internally managed conflict log table */
+	CONFLICT_LOG_DEST_TABLE = 1 << 1,   /* 0x02 */
+
+	/* Convenience bitmask for all supported destinations */
+	CONFLICT_LOG_DEST_ALL   = (CONFLICT_LOG_DEST_LOG | CONFLICT_LOG_DEST_TABLE)
+} ConflictLogDest;
+
+/*
+ * Array mapping for converting internal enum to string.
+ */
+static const char *const ConflictLogDestNames[] = {
+	[CONFLICT_LOG_DEST_LOG] = "log",
+	[CONFLICT_LOG_DEST_TABLE] = "table",
+	[CONFLICT_LOG_DEST_ALL] = "all"
+};
+
+/* Structure to hold metadata for one column of the conflict log table */
+typedef struct ConflictLogColumnDef
+{
+	const char *attname;    /* Column name */
+	Oid         atttypid;   /* Data type OID */
+} ConflictLogColumnDef;
+
+/* The single source of truth for the conflict log table schema */
+static const ConflictLogColumnDef ConflictLogSchema[] =
+{
+	{ .attname = "relid",            .atttypid = OIDOID },
+	{ .attname = "nspname",          .atttypid = TEXTOID },
+	{ .attname = "relname",          .atttypid = TEXTOID },
+	{ .attname = "conflict_type",    .atttypid = TEXTOID },
+	{ .attname = "remote_xid",       .atttypid = XIDOID },
+	{ .attname = "remote_commit_lsn",.atttypid = LSNOID },
+	{ .attname = "remote_commit_ts", .atttypid = TIMESTAMPTZOID },
+	{ .attname = "remote_origin",    .atttypid = TEXTOID },
+	{ .attname = "replica_identity", .atttypid = JSONOID },
+	{ .attname = "remote_tuple",     .atttypid = JSONOID },
+	{ .attname = "local_conflicts",  .atttypid = JSONARRAYOID }
+};
+
+#define MAX_CONFLICT_ATTR_NUM lengthof(ConflictLogSchema)
 
 extern bool GetTupleTransactionInfo(TupleTableSlot *localslot,
 									TransactionId *xmin,

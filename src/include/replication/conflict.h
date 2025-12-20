@@ -126,7 +126,6 @@ static const ConflictLogColumnDef ConflictLogSchema[] =
 	{ .attname = "local_conflicts",  .atttypid = JSONARRAYOID }
 };
 
-/* Define the count using the array size */
 #define MAX_CONFLICT_ATTR_NUM (sizeof(ConflictLogSchema) / sizeof(ConflictLogSchema[0]))
 
 extern bool GetTupleTransactionInfo(TupleTableSlot *localslot,
@@ -139,4 +138,7 @@ extern void ReportApplyConflict(EState *estate, ResultRelInfo *relinfo,
 								TupleTableSlot *remoteslot,
 								List *conflicttuples);
 extern void InitConflictIndexes(ResultRelInfo *relInfo);
+extern Relation GetConflictLogTableInfo(ConflictLogDest *log_dest);
+extern void InsertConflictLogTuple(Relation conflictlogrel);
+extern bool ValidateConflictLogTable(Relation rel);
 #endif

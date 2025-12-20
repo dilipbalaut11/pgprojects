@@ -15,13 +15,20 @@
 #include "postgres.h"
 
 #include "access/commit_ts.h"
+#include "access/heapam.h"
 #include "access/tableam.h"
+#include "commands/subscriptioncmds.h"
 #include "executor/executor.h"
+#include "funcapi.h"
 #include "pgstat.h"
 #include "replication/conflict.h"
 #include "replication/worker_internal.h"
 #include "storage/lmgr.h"
+#include "utils/builtins.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_lsn.h"
+#include "utils/jsonb.h"
 
 static const char *const ConflictTypeNames[] = {
 	[CT_INSERT_EXISTS] = "insert_exists",
@@ -33,6 +40,19 @@ static const char *const ConflictTypeNames[] = {
 	[CT_DELETE_MISSING] = "delete_missing",
 	[CT_MULTIPLE_UNIQUE_CONFLICTS] = "multiple_unique_conflicts"
 };
+
+/* Schema for the elements within the 'local_conflicts' JSON array */
+static const ConflictLogColumnDef LocalConflictSchema[] =
+{
+	{ .attname = "xid",       .atttypid = XIDOID },
+	{ .attname = "commit_ts", .atttypid = TIMESTAMPTZOID },
+	{ .attname = "origin",    .atttypid = TEXTOID },
+	{ .attname = "key",       .atttypid = JSONOID },
+	{ .attname = "tuple",     .atttypid = JSONOID }
+};
+
+#define MAX_LOCAL_CONFLICT_INFO_ATTRS \
+	(sizeof(LocalConflictSchema) / sizeof(LocalConflictSchema[0]))
 
 static int	errcode_apply_conflict(ConflictType type);
 static void errdetail_apply_conflict(EState *estate,
@@ -50,8 +70,27 @@ static char *build_tuple_value_details(EState *estate, ResultRelInfo *relinfo,
 									   TupleTableSlot *localslot,
 									   TupleTableSlot *remoteslot,
 									   Oid indexoid);
+static void build_index_datums_from_slot(EState *estate, Relation localrel,
+										 TupleTableSlot *slot,
+										 Relation indexDesc, Datum *values,
+										 bool *isnull);
 static char *build_index_value_desc(EState *estate, Relation localrel,
 									TupleTableSlot *slot, Oid indexoid);
+static Datum tuple_table_slot_to_json_datum(TupleTableSlot *slot);
+static Datum tuple_table_slot_to_indextup_json(EState *estate,
+											   Relation localrel,
+											   Oid replica_index,
+											   TupleTableSlot *slot);
+static TupleDesc build_conflict_tupledesc(void);
+static Datum build_local_conflicts_json_array(EState *estate, Relation rel,
+											  ConflictType conflict_type,
+											  List *conflicttuples);
+static void prepare_conflict_log_tuple(EState *estate, Relation rel,
+									   Relation conflictlogrel,
+									   ConflictType conflict_type,
+									   TupleTableSlot *searchslot,
+									   List *conflicttuples,
+									   TupleTableSlot *remoteslot);
 
 /*
  * Get the xmin and commit timestamp data (origin and timestamp) associated
@@ -105,30 +144,83 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 					ConflictType type, TupleTableSlot *searchslot,
 					TupleTableSlot *remoteslot, List *conflicttuples)
 {
-	Relation	localrel = relinfo->ri_RelationDesc;
-	StringInfoData err_detail;
+	Relation		localrel = relinfo->ri_RelationDesc;
+	ConflictLogDest	dest;
+	Relation		conflictlogrel;
 
-	initStringInfo(&err_detail);
+	/*
+	 * Get both the conflict log destination and the opened conflict log
+	 * relation for insertion.
+	 */
+	conflictlogrel = GetConflictLogTableInfo(&dest);
 
-	/* Form errdetail message by combining conflicting tuples information. */
-	foreach_ptr(ConflictTupleInfo, conflicttuple, conflicttuples)
-		errdetail_apply_conflict(estate, relinfo, type, searchslot,
-								 conflicttuple->slot, remoteslot,
-								 conflicttuple->indexoid,
-								 conflicttuple->xmin,
-								 conflicttuple->origin,
-								 conflicttuple->ts,
-								 &err_detail);
+	/* Insert to table if destination is 'table' or 'all' */
+	if ((dest & CONFLICT_LOG_DEST_TABLE) != 0)
+	{
+		Assert(conflictlogrel != NULL);
+
+		/*
+		 * Prepare the conflict log tuple. If the error level is below ERROR,
+		 * insert it immediately. Otherwise, defer the insertion to a new
+		 * transaction after the current one aborts, ensuring the insertion of
+		 * the log tuple is not rolled back.
+		 */
+		prepare_conflict_log_tuple(estate,
+								   relinfo->ri_RelationDesc,
+								   conflictlogrel,
+								   type,
+								   searchslot,
+								   conflicttuples,
+								   remoteslot);
+		if (elevel < ERROR)
+			InsertConflictLogTuple(conflictlogrel);
+
+		table_close(conflictlogrel, RowExclusiveLock);
+	}
 
 	pgstat_report_subscription_conflict(MySubscription->oid, type);
 
-	ereport(elevel,
-			errcode_apply_conflict(type),
-			errmsg("conflict detected on relation \"%s.%s\": conflict=%s",
-				   get_namespace_name(RelationGetNamespace(localrel)),
-				   RelationGetRelationName(localrel),
-				   ConflictTypeNames[type]),
-			errdetail_internal("%s", err_detail.data));
+	/* Decide what detail to show in server logs. */
+	if ((dest & CONFLICT_LOG_DEST_LOG) != 0)
+	{
+		StringInfoData	err_detail;
+
+		initStringInfo(&err_detail);
+
+		/* Form errdetail message by combining conflicting tuples information. */
+		foreach_ptr(ConflictTupleInfo, conflicttuple, conflicttuples)
+			errdetail_apply_conflict(estate, relinfo, type, searchslot,
+									conflicttuple->slot, remoteslot,
+									conflicttuple->indexoid,
+									conflicttuple->xmin,
+									conflicttuple->origin,
+									conflicttuple->ts,
+									&err_detail);
+
+		/* Standard reporting with full internal details. */
+		ereport(elevel,
+				errcode_apply_conflict(type),
+				errmsg("conflict detected on relation \"%s.%s\": conflict=%s",
+					   get_namespace_name(RelationGetNamespace(localrel)),
+					   RelationGetRelationName(localrel),
+					   ConflictTypeNames[type]),
+				errdetail_internal("%s", err_detail.data));
+	}
+	else
+	{
+		/*
+		 * 'table' only: Report the error msg but omit raw tuple data from
+		 * server logs since it's already captured in the internal table.
+		 */
+		ereport(elevel,
+				errcode_apply_conflict(type),
+				errmsg("conflict detected on relation \"%s.%s\": conflict=%s",
+					   get_namespace_name(RelationGetNamespace(localrel)),
+					   RelationGetRelationName(localrel),
+					   ConflictTypeNames[type]),
+				errdetail("Conflict details logged to internal table with OID %u.",
+						  MySubscription->conflictlogrelid));
+	}
 }
 
 /*
@@ -160,6 +252,67 @@ InitConflictIndexes(ResultRelInfo *relInfo)
 	}
 
 	relInfo->ri_onConflictArbiterIndexes = uniqueIndexes;
+}
+
+/*
+ * GetConflictLogTableInfo
+ *
+ * Fetches conflict logging metadata from the cached MySubscription pointer.
+ * Sets the destination enum in *log_dest and, if applicable, opens and
+ * returns the relation handle for the internal log table.
+ */
+Relation
+GetConflictLogTableInfo(ConflictLogDest *log_dest)
+{
+	Oid			conflictlogrelid;
+	Relation	conflictlogrel = NULL;
+
+	/*
+	 * Convert the text log destination to the internal enum.  MySubscription
+	 * already contains the data from pg_subscription.
+	 */
+	*log_dest = GetLogDestination(MySubscription->conflictlogdest);
+	conflictlogrelid = MySubscription->conflictlogrelid;
+
+	/* If destination is 'log' only, no table to open. */
+	if (*log_dest == CONFLICT_LOG_DEST_LOG)
+		return NULL;
+
+	Assert(OidIsValid(conflictlogrelid));
+
+	conflictlogrel = table_open(conflictlogrelid, RowExclusiveLock);
+
+	/* Conflict log table is dropped or not accessible. */
+	if (conflictlogrel == NULL)
+		ereport(WARNING,
+				(errcode(ERRCODE_UNDEFINED_TABLE),
+				 errmsg("conflict log table with OID %u does not exist",
+						conflictlogrelid)));
+
+	return conflictlogrel;
+}
+
+/*
+ * InsertConflictLogTuple
+ *
+ * Insert conflict log tuple into the conflict log table. It uses
+ * HEAP_INSERT_NO_LOGICAL to explicitly block logical decoding of the tuple
+ * inserted into the conflict log table.
+ */
+void
+InsertConflictLogTuple(Relation conflictlogrel)
+{
+	int			options = HEAP_INSERT_NO_LOGICAL;
+
+	/* A valid tuple must be prepared and stored in MyLogicalRepWorker. */
+	Assert(MyLogicalRepWorker->conflict_log_tuple != NULL);
+
+	heap_insert(conflictlogrel, MyLogicalRepWorker->conflict_log_tuple,
+				GetCurrentCommandId(true), options, NULL);
+
+	/* Free conflict log tuple. */
+	heap_freetuple(MyLogicalRepWorker->conflict_log_tuple);
+	MyLogicalRepWorker->conflict_log_tuple = NULL;
 }
 
 /*
@@ -473,6 +626,40 @@ build_tuple_value_details(EState *estate, ResultRelInfo *relinfo,
 }
 
 /*
+ * Helper function to extract the "raw" index key Datums and their null flags
+ * from a TupleTableSlot, given an already open index descriptor.
+ * This is the reusable core logic.
+ */
+static void
+build_index_datums_from_slot(EState *estate, Relation localrel,
+							 TupleTableSlot *slot,
+							 Relation indexDesc, Datum *values,
+							 bool *isnull)
+{
+	TupleTableSlot *tableslot = slot;
+
+	/*
+	 * If the slot is a virtual slot, copy it into a heap tuple slot as
+	 * FormIndexDatum only works with heap tuple slots.
+	 */
+	if (TTS_IS_VIRTUAL(slot))
+	{
+		/* Slot is created within the EState's tuple table */
+		tableslot = table_slot_create(localrel, &estate->es_tupleTable);
+		tableslot = ExecCopySlot(tableslot, slot);
+	}
+
+	/*
+	 * Initialize ecxt_scantuple for potential use in FormIndexDatum
+	 */
+	GetPerTupleExprContext(estate)->ecxt_scantuple = tableslot;
+
+	/* Form the index datums */
+	FormIndexDatum(BuildIndexInfo(indexDesc), tableslot, estate, values,
+				   isnull);
+}
+
+/*
  * Helper functions to construct a string describing the contents of an index
  * entry. See BuildIndexValueDescription for details.
  *
@@ -487,41 +674,318 @@ build_index_value_desc(EState *estate, Relation localrel, TupleTableSlot *slot,
 	Relation	indexDesc;
 	Datum		values[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
-	TupleTableSlot *tableslot = slot;
 
-	if (!tableslot)
+	if (!slot)
 		return NULL;
 
 	Assert(CheckRelationOidLockedByMe(indexoid, RowExclusiveLock, true));
 
 	indexDesc = index_open(indexoid, NoLock);
 
-	/*
-	 * If the slot is a virtual slot, copy it into a heap tuple slot as
-	 * FormIndexDatum only works with heap tuple slots.
-	 */
-	if (TTS_IS_VIRTUAL(slot))
-	{
-		tableslot = table_slot_create(localrel, &estate->es_tupleTable);
-		tableslot = ExecCopySlot(tableslot, slot);
-	}
-
-	/*
-	 * Initialize ecxt_scantuple for potential use in FormIndexDatum when
-	 * index expressions are present.
-	 */
-	GetPerTupleExprContext(estate)->ecxt_scantuple = tableslot;
-
-	/*
-	 * The values/nulls arrays passed to BuildIndexValueDescription should be
-	 * the results of FormIndexDatum, which are the "raw" input to the index
-	 * AM.
-	 */
-	FormIndexDatum(BuildIndexInfo(indexDesc), tableslot, estate, values, isnull);
+	build_index_datums_from_slot(estate, localrel, slot, indexDesc, values,
+								 isnull);
 
 	index_value = BuildIndexValueDescription(indexDesc, values, isnull);
 
 	index_close(indexDesc, NoLock);
 
 	return index_value;
+}
+
+/*
+ * tuple_table_slot_to_json_datum
+ *
+ * Helper function to convert a TupleTableSlot to Jsonb.
+ */
+static Datum
+tuple_table_slot_to_json_datum(TupleTableSlot *slot)
+{
+	HeapTuple	tuple;
+	Datum		datum;
+	Datum		json;
+
+	Assert(slot != NULL);
+
+	tuple = ExecCopySlotHeapTuple(slot);
+	datum = heap_copy_tuple_as_datum(tuple, slot->tts_tupleDescriptor);
+
+	json = DirectFunctionCall1(row_to_json, datum);
+	heap_freetuple(tuple);
+
+	return json;
+}
+
+/*
+ * tuple_table_slot_to_indextup_json
+ *
+ * Fetch replica identity key from the tuple table slot and convert into a
+ * jsonb datum.
+ */
+static Datum
+tuple_table_slot_to_indextup_json(EState *estate, Relation localrel,
+								  Oid indexid, TupleTableSlot *slot)
+{
+	Relation	indexDesc;
+	Datum		values[INDEX_MAX_KEYS];
+	bool		isnull[INDEX_MAX_KEYS];
+	HeapTuple	tuple;
+	TupleDesc	tupdesc;
+	Datum		datum;
+
+	Assert(slot != NULL);
+
+	Assert(CheckRelationOidLockedByMe(indexid, RowExclusiveLock, true));
+
+	indexDesc = index_open(indexid, NoLock);
+
+	build_index_datums_from_slot(estate, localrel, slot, indexDesc, values,
+								 isnull);
+	tupdesc = RelationGetDescr(indexDesc);
+
+	/* Bless the tupdesc so it can be looked up by row_to_json. */
+	BlessTupleDesc(tupdesc);
+
+	/* Form the replica identity tuple. */
+	tuple = heap_form_tuple(tupdesc, values, isnull);
+	datum = heap_copy_tuple_as_datum(tuple, tupdesc);
+
+	index_close(indexDesc, NoLock);
+
+	/* Convert to a JSONB datum. */
+	return DirectFunctionCall1(row_to_json, datum);
+}
+
+static TupleDesc
+build_conflict_tupledesc(void)
+{
+	TupleDesc   tupdesc;
+
+	tupdesc = CreateTemplateTupleDesc(MAX_LOCAL_CONFLICT_INFO_ATTRS);
+
+	for (int i = 0; i < MAX_LOCAL_CONFLICT_INFO_ATTRS; i++)
+		TupleDescInitEntry(tupdesc, (AttrNumber) (i + 1),
+						   LocalConflictSchema[i].attname,
+						   LocalConflictSchema[i].atttypid,
+						   -1, 0);
+
+	BlessTupleDesc(tupdesc);
+
+	return tupdesc;
+}
+
+/*
+ * Builds the local conflicts JSONB array column from the list of
+ * ConflictTupleInfo objects.
+ *
+ * Example output structure:
+ * [ { "xid": "1001", "commit_ts": "...", "origin": "...", "tuple": {...} }, ... ]
+ */
+static Datum
+build_local_conflicts_json_array(EState *estate, Relation rel,
+								 ConflictType conflict_type,
+								 List *conflicttuples)
+{
+	ListCell   *lc;
+	List	   *json_datums = NIL; /* List to hold the row_to_json results (type json) */
+	Datum	   *json_datum_array;
+	bool	   *json_null_array;
+	Datum		json_array_datum;
+	int			num_conflicts;
+	int			i;
+	int16		typlen;
+	bool		typbyval;
+	char		typalign;
+	TupleDesc	tupdesc;
+
+	/* Build local conflicts tuple descriptor. */
+	tupdesc = build_conflict_tupledesc();
+
+	/* Process local conflict tuple list and prepare an array of JSON. */
+	foreach_ptr(ConflictTupleInfo, conflicttuple, conflicttuples)
+	{
+		Datum		values[MAX_LOCAL_CONFLICT_INFO_ATTRS] = {0};
+		bool		nulls[MAX_LOCAL_CONFLICT_INFO_ATTRS] = {0};
+		char	   *origin_name = NULL;
+		HeapTuple	tuple;
+		Datum		json_datum;
+		int			attno;
+
+		attno = 0;
+		values[attno++] = TransactionIdGetDatum(conflicttuple->xmin);
+
+		if (conflicttuple->ts)
+			values[attno++] = TimestampTzGetDatum(conflicttuple->ts);
+		else
+			nulls[attno++] = true;
+
+		if (conflicttuple->origin != InvalidRepOriginId)
+			replorigin_by_oid(conflicttuple->origin, true, &origin_name);
+
+		/* Store empty string if origin name for the tuple is NULL. */
+		if (origin_name != NULL)
+			values[attno++] = CStringGetTextDatum(origin_name);
+		else
+			nulls[attno++] = true;
+
+		/*
+		 * Add the conflicting key values in the case of a unique constraint
+		 * violation.
+		 */
+		if (conflict_type == CT_INSERT_EXISTS ||
+			conflict_type == CT_UPDATE_EXISTS ||
+			conflict_type == CT_MULTIPLE_UNIQUE_CONFLICTS)
+		{
+			Oid	indexoid = conflicttuple->indexoid;
+
+			Assert(OidIsValid(indexoid) && conflicttuple->slot &&
+				   CheckRelationOidLockedByMe(indexoid, RowExclusiveLock,
+											  true));
+			values[attno++] =
+					tuple_table_slot_to_indextup_json(estate, rel,
+													  indexoid,
+													  conflicttuple->slot);
+		}
+		else
+			nulls[attno++] = true;
+
+		/* Convert conflicting tuple to JSON datum. */
+		if (conflicttuple->slot)
+			values[attno] = tuple_table_slot_to_json_datum(conflicttuple->slot);
+		else
+			nulls[attno] = true;
+
+		Assert(attno + 1 == MAX_LOCAL_CONFLICT_INFO_ATTRS);
+
+		tuple = heap_form_tuple(tupdesc, values, nulls);
+
+		json_datum = heap_copy_tuple_as_datum(tuple, tupdesc);
+
+		/*
+		 * Build the higher level JSON datum in format described in function
+		 * header.
+		 */
+		json_datum = DirectFunctionCall1(row_to_json, json_datum);
+
+		/* Done with the temporary tuple. */
+		heap_freetuple(tuple);
+
+		/* Add to the array element. */
+		json_datums = lappend(json_datums, (void *) json_datum);
+	}
+
+	num_conflicts = list_length(json_datums);
+
+	json_datum_array = (Datum *) palloc(num_conflicts * sizeof(Datum));
+	json_null_array = (bool *) palloc0(num_conflicts * sizeof(bool));
+
+	i = 0;
+	foreach(lc, json_datums)
+	{
+		json_datum_array[i] = (Datum) lfirst(lc);
+		i++;
+	}
+
+	/* Construct the json[] array Datum. */
+	get_typlenbyvalalign(JSONOID, &typlen, &typbyval, &typalign);
+	json_array_datum = PointerGetDatum(construct_array(json_datum_array,
+													   num_conflicts,
+													   JSONOID,
+													   typlen,
+													   typbyval,
+													   typalign));
+	pfree(json_datum_array);
+	pfree(json_null_array);
+
+	return json_array_datum;
+}
+
+/*
+ * prepare_conflict_log_tuple
+ *
+ * This routine prepares a tuple detailing a conflict encountered during
+ * logical replication. The prepared tuple will be stored in
+ * MyLogicalRepWorker->conflict_log_tuple which should be inserted into the
+ * conflict log table by calling InsertConflictLogTuple.
+ */
+static void
+prepare_conflict_log_tuple(EState *estate, Relation rel,
+						   Relation conflictlogrel,
+						   ConflictType conflict_type,
+						   TupleTableSlot *searchslot,
+						   List *conflicttuples,
+						   TupleTableSlot *remoteslot)
+{
+	Datum		values[MAX_CONFLICT_ATTR_NUM] = {0};
+	bool		nulls[MAX_CONFLICT_ATTR_NUM] = {0};
+	int			attno;
+	char	   *remote_origin = NULL;
+	MemoryContext	oldctx;
+
+	Assert(MyLogicalRepWorker->conflict_log_tuple == NULL);
+
+	/* Populate the values and nulls arrays. */
+	attno = 0;
+	values[attno++] = ObjectIdGetDatum(RelationGetRelid(rel));
+
+	values[attno++] =
+			CStringGetTextDatum(get_namespace_name(RelationGetNamespace(rel)));
+
+	values[attno++] = CStringGetTextDatum(RelationGetRelationName(rel));
+
+	values[attno++] = CStringGetTextDatum(ConflictTypeNames[conflict_type]);
+
+	if (TransactionIdIsValid(remote_xid))
+		values[attno++] = TransactionIdGetDatum(remote_xid);
+	else
+		nulls[attno++] = true;
+
+	values[attno++] = LSNGetDatum(remote_final_lsn);
+
+	if (remote_commit_ts > 0)
+		values[attno++] = TimestampTzGetDatum(remote_commit_ts);
+	else
+		nulls[attno++] = true;
+
+	if (replorigin_session_origin != InvalidRepOriginId)
+		replorigin_by_oid(replorigin_session_origin, true, &remote_origin);
+
+	if (remote_origin != NULL)
+		values[attno++] = CStringGetTextDatum(remote_origin);
+	else
+		nulls[attno++] = true;
+
+	if (!TupIsNull(searchslot))
+	{
+		Oid		replica_index = GetRelationIdentityOrPK(rel);
+
+		/*
+		 * If the table has a valid replica identity index, build the index
+		 * json datum from key value. Otherwise, construct it from the complete
+		 * tuple in REPLICA IDENTITY FULL cases.
+		 */
+		if (OidIsValid(replica_index))
+			values[attno++] = tuple_table_slot_to_indextup_json(estate, rel,
+																replica_index,
+																searchslot);
+		else
+			values[attno++] = tuple_table_slot_to_json_datum(searchslot);
+	}
+	else
+		nulls[attno++] = true;
+
+	if (!TupIsNull(remoteslot))
+		values[attno++] = tuple_table_slot_to_json_datum(remoteslot);
+	else
+		nulls[attno++] = true;
+
+	values[attno] = build_local_conflicts_json_array(estate, rel,
+													 conflict_type,
+													 conflicttuples);
+
+	Assert(attno + 1 == MAX_CONFLICT_ATTR_NUM);
+
+	oldctx = MemoryContextSwitchTo(ApplyContext);
+	MyLogicalRepWorker->conflict_log_tuple =
+		heap_form_tuple(RelationGetDescr(conflictlogrel), values, nulls);
+	MemoryContextSwitchTo(oldctx);
 }

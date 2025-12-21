@@ -274,6 +274,42 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         </listitem>
        </varlistentry>
 
+       <varlistentry id="sql-createsubscription-params-with-conflict-log-destination">
+        <term><literal>conflict_log_destination</literal> (<type>enum</type>)</term>
+        <listitem>
+         <para>
+          Specifies the destination for recording logical replication conflicts.
+          The supported values are <literal>log</literal>, <literal>table</literal>,
+          and <literal>all</literal>. The default is <literal>log</literal>.
+         </para>
+         <para>
+          The available destinations are:
+          <itemizedlist>
+           <listitem>
+            <para>
+             <literal>log</literal>: Conflict details are recorded in the server log.
+             This is the default behavior.
+            </para>
+           </listitem>
+           <listitem>
+            <para>
+             <literal>table</literal>: The system automatically creates a structured table named
+             <literal>pg_conflict_&lt;subid&gt;</literal> in the subscription owner's schema.
+             This allows for easy querying and analysis of conflicts. This table is
+             automatically dropped when the subscription is removed.
+            </para>
+           </listitem>
+           <listitem>
+            <para>
+             <literal>all</literal>: Records the conflict information to both the server log
+             and the dedicated conflict table.
+            </para>
+           </listitem>
+          </itemizedlist>
+         </para>
+        </listitem>
+       </varlistentry>
+
        <varlistentry id="sql-createsubscription-params-with-streaming">
         <term><literal>streaming</literal> (<type>enum</type>)</term>
         <listitem>

@@ -305,13 +305,11 @@ GetConflictLogTableInfo(ConflictLogDest *log_dest)
 void
 InsertConflictLogTuple(Relation conflictlogrel)
 {
-	int			options = HEAP_INSERT_NO_LOGICAL;
-
 	/* A valid tuple must be prepared and stored in MyLogicalRepWorker. */
 	Assert(MyLogicalRepWorker->conflict_log_tuple != NULL);
 
 	heap_insert(conflictlogrel, MyLogicalRepWorker->conflict_log_tuple,
-				GetCurrentCommandId(true), options, NULL);
+				GetCurrentCommandId(true), 0, NULL);
 
 	/* Free conflict log tuple. */
 	heap_freetuple(MyLogicalRepWorker->conflict_log_tuple);

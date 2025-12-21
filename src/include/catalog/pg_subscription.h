@@ -123,6 +123,7 @@ DECLARE_TOAST_WITH_MACRO(pg_subscription, 4183, 4184, PgSubscriptionToastTable, 
 
 DECLARE_UNIQUE_INDEX_PKEY(pg_subscription_oid_index, 6114, SubscriptionObjectIndexId, pg_subscription, btree(oid oid_ops));
 DECLARE_UNIQUE_INDEX(pg_subscription_subname_index, 6115, SubscriptionNameIndexId, pg_subscription, btree(subdbid oid_ops, subname name_ops));
+DECLARE_UNIQUE_INDEX(pg_subscription_conflictrel_index, 6122, SubscriptionConflictrelIndexId, pg_subscription, btree(oid oid_ops, subconflictlogrelid oid_ops));
 
 MAKE_SYSCACHE(SUBSCRIPTIONOID, pg_subscription_oid_index, 4);
 MAKE_SYSCACHE(SUBSCRIPTIONNAME, pg_subscription_subname_index, 4);

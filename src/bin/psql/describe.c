@@ -3063,6 +3063,7 @@ describeOneTableDetails(const char *schemaname,
 								  "     JOIN pg_catalog.pg_publication_namespace pn ON p.oid = pn.pnpubid\n"
 								  "     JOIN pg_catalog.pg_class pc ON pc.relnamespace = pn.pnnspid\n"
 								  "WHERE pc.oid ='%s' and pg_catalog.pg_relation_is_publishable('%s')\n"
+								  "AND NOT pg_catalog.pg_relation_is_conflict_log_table('%s'::oid)\n"
 								  "UNION\n"
 								  "SELECT pubname\n"
 								  "     , pg_get_expr(pr.prqual, c.oid)\n"
@@ -3082,8 +3083,9 @@ describeOneTableDetails(const char *schemaname,
 								  "     , NULL\n"
 								  "FROM pg_catalog.pg_publication p\n"
 								  "WHERE p.puballtables AND pg_catalog.pg_relation_is_publishable('%s')\n"
+								  "AND NOT pg_catalog.pg_relation_is_conflict_log_table('%s'::oid)\n"
 								  "ORDER BY 1;",
-								  oid, oid, oid, oid);
+								  oid, oid, oid, oid, oid, oid);
 			}
 			else
 			{

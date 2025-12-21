@@ -443,8 +443,9 @@ EXCEPTION WHEN dependent_objects_still_exist THEN
     RAISE NOTICE 'captured expected error: dependent_objects_still_exist';
 END $$;
 
--- PUBLICATION: Verify internal tables are not publishable
--- pg_relation_is_publishable should return false for internal conflict log tables
+-- PUBLICATION: Verify internal tables are publishable
+-- pg_relation_is_publishable should return true for internal conflict log
+-- tables, as it can be published using TABLE publication.
 SELECT pg_relation_is_publishable(subconflictlogrelid)
 FROM pg_subscription WHERE subname = 'regress_conflict_test1';
 

@@ -131,6 +131,8 @@ typedef struct RelationSyncEntry
 
 	bool		schema_sent;
 
+	bool		conflictlogrel; /* is this relation used for conflict logging? */
+
 	/*
 	 * This will be PUBLISH_GENCOLS_STORED if the relation contains generated
 	 * columns and the 'publish_generated_columns' parameter is set to
@@ -2067,6 +2069,7 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 	{
 		entry->replicate_valid = false;
 		entry->schema_sent = false;
+		entry->conflictlogrel = false;
 		entry->include_gencols_type = PUBLISH_GENCOLS_NONE;
 		entry->streamed_txns = NIL;
 		entry->pubactions.pubinsert = entry->pubactions.pubupdate =
@@ -2117,6 +2120,7 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		 * earlier definition.
 		 */
 		entry->schema_sent = false;
+		entry->conflictlogrel = IsConflictLogTable(relid);
 		entry->include_gencols_type = PUBLISH_GENCOLS_NONE;
 		list_free(entry->streamed_txns);
 		entry->streamed_txns = NIL;
@@ -2199,7 +2203,7 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 			 * If this is a FOR ALL TABLES publication, pick the partition
 			 * root and set the ancestor level accordingly.
 			 */
-			if (pub->alltables)
+			if (pub->alltables && !entry->conflictlogrel)
 			{
 				publish = true;
 				if (pub->pubviaroot && am_partition)
@@ -2225,8 +2229,12 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 				{
 					Oid			ancestor;
 					int			level;
-					List	   *ancestors = get_partition_ancestors(relid);
+					List	   *ancestors;
 
+					/* Conflict log table cannot be a partition */
+					Assert(entry->conflictlogrel == false);
+
+					ancestors = get_partition_ancestors(relid);
 					ancestor = GetTopMostAncestorInPublication(pub->oid,
 															   ancestors,
 															   &level);
@@ -2243,7 +2251,8 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 				}
 
 				if (list_member_oid(pubids, pub->oid) ||
-					list_member_oid(schemaPubids, pub->oid) ||
+					(list_member_oid(schemaPubids, pub->oid) &&
+					 !entry->conflictlogrel) ||
 					ancestor_published)
 					publish = true;
 			}

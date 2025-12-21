@@ -12321,6 +12321,13 @@
   prorettype => 'bool', proargtypes => 'regclass',
   prosrc => 'pg_relation_is_publishable' },
 
+# subscriptions
+{ oid => '6123',
+  descr => 'returns whether a relation is a subscription conflict log table',
+  proname => 'pg_relation_is_conflict_log_table', provolatile => 's',
+  prorettype => 'bool', proargtypes => 'regclass',
+  prosrc => 'pg_relation_is_conflict_log_table' },
+
 # rls
 { oid => '3298',
   descr => 'row security for current context active on table by table oid',

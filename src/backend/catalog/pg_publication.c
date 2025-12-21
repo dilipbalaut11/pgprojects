@@ -86,15 +86,6 @@ check_publication_add_relation(Relation targetrel)
 				 errmsg("cannot add relation \"%s\" to publication",
 						RelationGetRelationName(targetrel)),
 				 errdetail("This operation is not supported for unlogged tables.")));
-
-	/* Can't be conflict log table */
-	if (IsConflictLogTable(RelationGetRelid(targetrel)))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("cannot add relation \"%s.%s\" to publication",
-						get_namespace_name(RelationGetNamespace(targetrel)),
-						RelationGetRelationName(targetrel)),
-				 errdetail("This operation is not supported for conflict log tables.")));
 }
 
 /*
@@ -188,8 +179,7 @@ pg_relation_is_publishable(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	/* Subscription conflict log tables are not published */
-	result = is_publishable_class(relid, (Form_pg_class) GETSTRUCT(tuple)) &&
-			 !IsConflictLogTable(relid);
+	result = is_publishable_class(relid, (Form_pg_class) GETSTRUCT(tuple));
 	ReleaseSysCache(tuple);
 	PG_RETURN_BOOL(result);
 }

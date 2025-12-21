@@ -22,6 +22,7 @@
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_type.h"
+#include "commands/subscriptioncmds.h"
 #include "miscadmin.h"
 #include "storage/lmgr.h"
 #include "utils/array.h"
@@ -154,6 +155,28 @@ GetSubscription(Oid subid, bool missing_ok)
 	ReleaseSysCache(tup);
 
 	return sub;
+}
+
+/*
+ * pg_relation_is_conflict_log_table
+ *
+ * Returns true if the given relation OID is used as a conflict log table
+ * by any subscription, else returns false.
+ */
+Datum
+pg_relation_is_conflict_log_table(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	HeapTuple	tuple;
+	bool		result;
+
+	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	if (!HeapTupleIsValid(tuple))
+		PG_RETURN_NULL();
+
+	result = IsConflictLogTable(relid);
+	ReleaseSysCache(tuple);
+	PG_RETURN_BOOL(result);
 }
 
 /*

@@ -336,6 +336,7 @@ IsSharedRelation(Oid relationId)
 		relationId == SharedSecLabelObjectIndexId ||
 		relationId == SubscriptionNameIndexId ||
 		relationId == SubscriptionObjectIndexId ||
+		relationId == SubscriptionConflictrelIndexId ||
 		relationId == TablespaceNameIndexId ||
 		relationId == TablespaceOidIndexId)
 		return true;

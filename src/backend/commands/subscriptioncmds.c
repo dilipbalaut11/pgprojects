@@ -52,6 +52,7 @@
 #include "storage/lmgr.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/fmgroids.h"
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -3494,27 +3495,32 @@ bool
 IsConflictLogTable(Oid relid)
 {
 	Relation        rel;
-	TableScanDesc   scan;
+	ScanKeyData 	scankey;
+	SysScanDesc		scan;
 	HeapTuple       tup;
 	bool            is_clt = false;
 
 	rel = table_open(SubscriptionRelationId, AccessShareLock);
-	scan = table_beginscan_catalog(rel, 0, NULL);
 
-	while (HeapTupleIsValid(tup = heap_getnext(scan, ForwardScanDirection)))
+	ScanKeyInit(&scankey,
+				Anum_pg_subscription_subconflictlogrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(relid));
+
+	scan = systable_beginscan(rel, SubscriptionConflictrelIndexId,
+							  true, NULL, 1, &scankey);
+	while (HeapTupleIsValid(tup = systable_getnext(scan)))
 	{
 		Form_pg_subscription subform = (Form_pg_subscription) GETSTRUCT(tup);
 
-		/* Direct Oid comparison from catalog */
-		if (OidIsValid(subform->subconflictlogrelid) &&
-			subform->subconflictlogrelid == relid)
+		if (OidIsValid(subform->subconflictlogrelid))
 		{
 			is_clt = true;
 			break;
 		}
 	}
 
-	table_endscan(scan);
+	systable_endscan(scan);
 	table_close(rel, AccessShareLock);
 
 	return is_clt;

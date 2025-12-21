@@ -247,6 +247,54 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         </listitem>
        </varlistentry>
 
+       <varlistentry id="sql-createsubscription-params-with-conflict-log-destination">
+        <term><literal>conflict_log_destination</literal> (<type>enum</type>)</term>
+        <listitem>
+         <para>
+          Specifies the destination for recording logical replication conflicts.
+         </para>
+         <para>
+          The available destinations are:
+          <itemizedlist>
+           <listitem>
+            <para>
+             <literal>log</literal>: Conflict details are recorded in the server log.
+             This is the default behavior.
+            </para>
+           </listitem>
+           <listitem>
+            <para>
+             <literal>table</literal>: The system automatically creates a structured table
+             named <literal>pg_conflict_&lt;subid&gt;</literal> in the
+             <literal>pg_conflict</literal> schema. This allows for easy querying and
+             analysis of conflicts.
+            </para>
+            <caution>
+             <para>
+              The internal conflict log table is strictly tied to the lifecycle of the
+              subscription or the <literal>conflict_log_destination</literal> setting. If
+              the subscription is dropped, or if the destination is changed to
+              <literal>log</literal>, the table and all its recorded conflict data are
+              <emphasis>permanently deleted</emphasis>. To perform a post-mortem analysis
+              after removing a subscription, users must manually back up the conflict log
+              table before the deletion occurs.
+             </para>
+            </caution>
+           </listitem>
+           <listitem>
+            <para>
+             <literal>all</literal>: Records to both the server log and the table.
+            </para>
+           </listitem>
+          </itemizedlist>
+         </para>
+         <para>
+          For more details on the schema of the internal conflict log table, see
+          <xref linkend="logical-replication-conflict-log-schema"/>.
+         </para>
+        </listitem>
+       </varlistentry>
+
        <varlistentry id="sql-createsubscription-params-with-copy-data">
         <term><literal>copy_data</literal> (<type>boolean</type>)</term>
         <listitem>

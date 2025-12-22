@@ -180,12 +180,6 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 			if (elevel < ERROR)
 				InsertConflictLogTuple(conflictlogrel);
 		}
-		else
-			ereport(WARNING,
-					errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-					errmsg("conflict log table \"%s.%s\" structure changed, skipping insertion",
-							get_namespace_name(RelationGetNamespace(conflictlogrel)),
-							RelationGetRelationName(conflictlogrel)));
 
 		table_close(conflictlogrel, RowExclusiveLock);
 	}
@@ -314,10 +308,11 @@ InsertConflictLogTuple(Relation conflictlogrel)
 }
 
 /*
- * ValidateConflictLogTable - Validate conflict log table
+ * ValidateConflictLogTable - Validate conflict log table schema
  *
- * Validate whether the conflict log table is still suitable for considering as
- * conflict log table.
+ * Checks whether the table definition including its column names, data
+ * types, and column ordering meet the requirements for conflict log
+ * table.
  */
 bool
 ValidateConflictLogTable(Relation rel)
@@ -326,15 +321,9 @@ ValidateConflictLogTable(Relation rel)
 	HeapTuple   atup;
 	ScanKeyData scankey;
 	SysScanDesc scan;
-	Form_pg_attribute attForm;
 	int         attcnt = 0;
 	bool        tbl_ok = true;
 
-	/*
-	 * Check whether the table definition including its column names, data
-	 * types, and column ordering meets the requirements for conflict log
-	 * table.
-	 */
 	pg_attribute = table_open(AttributeRelationId, AccessShareLock);
 	ScanKeyInit(&scankey,
 				Anum_pg_attribute_attrelid,
@@ -349,8 +338,7 @@ ValidateConflictLogTable(Relation rel)
 	{
 		const ConflictLogColumnDef *expected;
 		int		schema_idx;
-
-		attForm = (Form_pg_attribute) GETSTRUCT(atup);
+		Form_pg_attribute attForm = (Form_pg_attribute) GETSTRUCT(atup);
 
 		/* Skip system columns and dropped columns */
 		if (attForm->attnum < 1 || attForm->attisdropped)
@@ -383,7 +371,14 @@ ValidateConflictLogTable(Relation rel)
 	table_close(pg_attribute, AccessShareLock);
 
 	if (attcnt != MAX_CONFLICT_ATTR_NUM || !tbl_ok)
+	{
+		ereport(WARNING,
+				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				errmsg("conflict log table \"%s.%s\" structure changed, skipping insertion",
+					   get_namespace_name(RelationGetNamespace(rel)),
+					   RelationGetRelationName(rel)));
 		return false;
+	}
 
 	return true;
 }
@@ -828,31 +823,20 @@ tuple_table_slot_to_indextup_json(EState *estate, Relation localrel,
 	return DirectFunctionCall1(row_to_json, datum);
 }
 
-/*
- * Initialize the tuple descriptor for local conflict info.
- */
 static TupleDesc
 build_conflict_tupledesc(void)
 {
-	TupleDesc	tupdesc;
-	int			attno = 1;
+	TupleDesc   tupdesc;
 
 	tupdesc = CreateTemplateTupleDesc(MAX_LOCAL_CONFLICT_INFO_ATTRS);
 
-	TupleDescInitEntry(tupdesc, (AttrNumber) attno++, "xid",
-						XIDOID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) attno++, "commit_ts",
-						TIMESTAMPTZOID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) attno++, "origin",
-						TEXTOID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) attno++, "key",
-						JSONOID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) attno, "tuple",
-						JSONOID, -1, 0);
+	for (int i = 0; i < MAX_LOCAL_CONFLICT_INFO_ATTRS; i++)
+		TupleDescInitEntry(tupdesc, (AttrNumber) (i + 1),
+						   LocalConflictSchema[i].attname,
+						   LocalConflictSchema[i].atttypid,
+						   -1, 0);
 
 	BlessTupleDesc(tupdesc);
-
-	Assert(attno == MAX_LOCAL_CONFLICT_INFO_ATTRS);
 
 	return tupdesc;
 }
@@ -887,15 +871,12 @@ build_local_conflicts_json_array(EState *estate, Relation rel,
 	/* Process local conflict tuple list and prepare an array of JSON. */
 	foreach_ptr(ConflictTupleInfo, conflicttuple, conflicttuples)
 	{
-		Datum		values[MAX_LOCAL_CONFLICT_INFO_ATTRS];
-		bool		nulls[MAX_LOCAL_CONFLICT_INFO_ATTRS];
+		Datum		values[MAX_LOCAL_CONFLICT_INFO_ATTRS] = {0};
+		bool		nulls[MAX_LOCAL_CONFLICT_INFO_ATTRS] = {0};
 		char	   *origin_name = NULL;
 		HeapTuple	tuple;
 		Datum		json_datum;
 		int			attno;
-
-		memset(values, 0, sizeof(Datum) * MAX_LOCAL_CONFLICT_INFO_ATTRS);
-		memset(nulls, 0, sizeof(bool) * MAX_LOCAL_CONFLICT_INFO_ATTRS);
 
 		attno = 0;
 		values[attno++] = TransactionIdGetDatum(conflicttuple->xmin);
@@ -1002,17 +983,13 @@ prepare_conflict_log_tuple(EState *estate, Relation rel,
 						   List *conflicttuples,
 						   TupleTableSlot *remoteslot)
 {
-	Datum		values[MAX_CONFLICT_ATTR_NUM];
-	bool		nulls[MAX_CONFLICT_ATTR_NUM];
+	Datum		values[MAX_CONFLICT_ATTR_NUM] = {0};
+	bool		nulls[MAX_CONFLICT_ATTR_NUM] = {0};
 	int			attno;
 	char	   *remote_origin = NULL;
 	MemoryContext	oldctx;
 
 	Assert(MyLogicalRepWorker->conflict_log_tuple == NULL);
-
-	/* Initialize values and nulls arrays. */
-	memset(values, 0, sizeof(Datum) * MAX_CONFLICT_ATTR_NUM);
-	memset(nulls, 0, sizeof(bool) * MAX_CONFLICT_ATTR_NUM);
 
 	/* Populate the values and nulls arrays. */
 	attno = 0;

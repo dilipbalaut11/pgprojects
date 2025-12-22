@@ -5632,12 +5632,6 @@ start_apply(XLogRecPtr origin_startpos)
 				conflictlogrel = GetConflictLogTableInfo(&dest);
 				if (ValidateConflictLogTable(conflictlogrel))
 					InsertConflictLogTuple(conflictlogrel);
-				else
-					ereport(WARNING,
-							errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-							errmsg("Conflict log table \"%s.%s\" structure changed, skipping insertion",
-								   get_namespace_name(RelationGetNamespace(conflictlogrel)),
-								   RelationGetRelationName(conflictlogrel)));
 				MyLogicalRepWorker->conflict_log_tuple = NULL;
 				table_close(conflictlogrel, RowExclusiveLock);
 

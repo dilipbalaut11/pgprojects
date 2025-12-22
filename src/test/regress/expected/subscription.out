@@ -657,6 +657,7 @@ SELECT to_regclass(:'internal_tablename');
  
 (1 row)
 
+-- Clean up remaining test subscription
 ALTER SUBSCRIPTION regress_conflict_log_default DISABLE;
 ALTER SUBSCRIPTION regress_conflict_log_default SET (slot_name = NONE);
 DROP SUBSCRIPTION regress_conflict_log_default;

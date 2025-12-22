@@ -460,6 +460,7 @@ DROP SUBSCRIPTION regress_conflict_test1;
 -- should return NULL, meaning the internal table was reaped via dependency
 SELECT to_regclass(:'internal_tablename');
 
+-- Clean up remaining test subscription
 ALTER SUBSCRIPTION regress_conflict_log_default DISABLE;
 ALTER SUBSCRIPTION regress_conflict_log_default SET (slot_name = NONE);
 DROP SUBSCRIPTION regress_conflict_log_default;

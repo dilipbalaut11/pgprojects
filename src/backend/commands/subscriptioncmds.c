@@ -33,6 +33,7 @@
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_type.h"
+#include "commands/comment.h"
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
 #include "commands/subscriptioncmds.h"
@@ -142,8 +143,8 @@ static List *merge_publications(List *oldpublist, List *newpublist, bool addpub,
 static void ReportSlotConnectionError(List *rstates, Oid subid, char *slotname, char *err);
 static void CheckAlterSubOption(Subscription *sub, const char *option,
 								bool slot_needs_update, bool isTopLevel);
-static Oid create_conflict_log_table(Oid namespaceId, char *conflictrel,
-									 Oid subid);
+static Oid create_conflict_log_table(Oid subid, char *subname, Oid namespaceId,
+									 char *conflictrel);
 
 /*
  * Common option parsing function for CREATE and ALTER SUBSCRIPTION commands.
@@ -802,8 +803,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 						makeRangeVar(NULL, conflict_table_name, -1));
 
 		/* Store the Oid returned from creation. */
-		logrelid = create_conflict_log_table(namespaceId, conflict_table_name,
-											 subid);
+		logrelid = create_conflict_log_table(subid, stmt->subname, namespaceId,
+											 conflict_table_name);
 		values[Anum_pg_subscription_subconflictlogrelid - 1] =
 						ObjectIdGetDatum(logrelid);
 	}
@@ -1761,9 +1762,8 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 							nspid = RangeVarGetCreationNamespace(makeRangeVar(
 														NULL, relname, -1));
 
-							relid = create_conflict_log_table(nspid,
-															  relname,
-															  subid);
+							relid = create_conflict_log_table(subid, sub->name,
+															  nspid, relname);
 
 							values[Anum_pg_subscription_subconflictlogrelid - 1] =
 														ObjectIdGetDatum(relid);
@@ -2325,7 +2325,7 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	 * subscription.  We must drop the dependent objects before the
 	 * subscription itself is removed.  By using
 	 * PERFORM_DELETION_SKIP_ORIGINAL, we ensure that only the conflict log
-	 * table is reaped while the  subscription remains for the final deletion
+	 * table is reaped while the subscription remains for the final deletion
 	 * step.
 	 */
 	ObjectAddressSet(object, SubscriptionRelationId, subid);
@@ -3345,11 +3345,10 @@ static TupleDesc
 create_conflict_log_table_tupdesc(void)
 {
 	TupleDesc	tupdesc;
-	int			i;
 
 	tupdesc = CreateTemplateTupleDesc(MAX_CONFLICT_ATTR_NUM);
 
-	for (i = 0; i < MAX_CONFLICT_ATTR_NUM; i++)
+	for (int i = 0; i < MAX_CONFLICT_ATTR_NUM; i++)
 	{
 		Oid type_oid = ConflictLogSchema[i].atttypid;
 
@@ -3376,21 +3375,14 @@ create_conflict_log_table_tupdesc(void)
  * privileges on it.
  */
 static Oid
-create_conflict_log_table(Oid namespaceId, char *conflictrel, Oid subid)
+create_conflict_log_table(Oid subid, char *subname, Oid namespaceId,
+						  char *conflictrel)
 {
 	TupleDesc	tupdesc;
 	Oid			relid;
+	char		comment[256];
 	ObjectAddress	myself;
 	ObjectAddress	subaddr;
-
-	/* Report an error if the specified conflict log table already exists. */
-	if (OidIsValid(get_relname_relid(conflictrel, namespaceId)))
-		ereport(ERROR,
-				(errcode(ERRCODE_DUPLICATE_TABLE),
-				 errmsg("could not generate conflict log table \"%s.%s\"",
-						get_namespace_name(namespaceId), conflictrel),
-				 errdetail("A table with the internally generated name already exists."),
-				 errhint("Drop the existing table or change your 'search_path' to use a different schema.")));
 
 	/*
 	 * Conflict log tables must be permanent relations.  Disallow creation in
@@ -3403,6 +3395,15 @@ create_conflict_log_table(Oid namespaceId, char *conflictrel, Oid subid)
 						conflictrel),
 				 errdetail("Conflict log tables cannot be created in a temporary namespace."),
 				 errhint("Ensure your 'search_path' is set to permanent schema.")));
+
+	/* Report an error if the specified conflict log table already exists. */
+	if (OidIsValid(get_relname_relid(conflictrel, namespaceId)))
+		ereport(ERROR,
+				(errcode(ERRCODE_DUPLICATE_TABLE),
+				 errmsg("could not generate conflict log table \"%s.%s\"",
+						get_namespace_name(namespaceId), conflictrel),
+				 errdetail("A table with the internally generated name already exists."),
+				 errhint("Drop the existing table or change your 'search_path' to use a different schema.")));
 
 	/* Build the tuple descriptor for the new table. */
 	tupdesc = create_conflict_log_table_tupdesc();
@@ -3429,6 +3430,11 @@ create_conflict_log_table(Oid namespaceId, char *conflictrel, Oid subid)
 									 false,
 									 InvalidOid,
 									 NULL);
+
+	/* Add a comments for the conflict log table. */
+	snprintf(comment, sizeof(comment),
+			 "Conflict log table for subscription \"%s\"", subname);
+	CreateComments(relid, RelationRelationId, 0, comment);
 
 	/*
 	 * Establish an internal dependency between the conflict log table and
@@ -3466,13 +3472,11 @@ GetConflictLogTableName(char *dest, Oid subid)
 ConflictLogDest
 GetLogDestination(const char *dest)
 {
-	int	i;
-
 	/* Empty string or NULL defaults to LOG. */
 	if (dest == NULL || dest[0] == '\0')
 		return CONFLICT_LOG_DEST_LOG;
 
-	for (i = CONFLICT_LOG_DEST_LOG; i <= CONFLICT_LOG_DEST_ALL; i++)
+	for (int i = CONFLICT_LOG_DEST_LOG; i <= CONFLICT_LOG_DEST_ALL; i++)
 	{
 		if (pg_strcasecmp(dest, ConflictLogDestLabels[i]) == 0)
 			return (ConflictLogDest) i;

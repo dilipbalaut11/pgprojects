@@ -126,8 +126,20 @@ static const ConflictLogColumnDef ConflictLogSchema[] =
 	{ .attname = "local_conflicts",  .atttypid = JSONARRAYOID }
 };
 
-/* Define the count using the array size */
 #define MAX_CONFLICT_ATTR_NUM (sizeof(ConflictLogSchema) / sizeof(ConflictLogSchema[0]))
+
+/* Schema for the elements within the 'local_conflicts' JSON array */
+static const ConflictLogColumnDef LocalConflictSchema[] =
+{
+	{ .attname = "xid",       .atttypid = XIDOID },
+	{ .attname = "commit_ts", .atttypid = TIMESTAMPTZOID },
+	{ .attname = "origin",    .atttypid = TEXTOID },
+	{ .attname = "key",       .atttypid = JSONOID },
+	{ .attname = "tuple",     .atttypid = JSONOID }
+};
+
+#define MAX_LOCAL_CONFLICT_INFO_ATTRS \
+	(sizeof(LocalConflictSchema) / sizeof(LocalConflictSchema[0]))
 
 extern bool GetTupleTransactionInfo(TupleTableSlot *localslot,
 									TransactionId *xmin,

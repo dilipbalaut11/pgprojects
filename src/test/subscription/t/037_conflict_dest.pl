@@ -77,7 +77,7 @@ $node_subscriber->safe_psql('postgres',
 # Get the internally generated table name
 my $subid = $node_subscriber->safe_psql('postgres',
 	"SELECT oid FROM pg_subscription WHERE subname = 'sub_tab';");
-my $conflict_table = "conflict_log_table_$subid";
+my $conflict_table = "pg_conflict.conflict_log_table_$subid";
 
 $node_publisher->safe_psql('postgres',
 	"INSERT INTO conf_tab VALUES (10, 20, 30);");
@@ -158,7 +158,7 @@ $node_subscriber->safe_psql('postgres', "TRUNCATE conf_tab;");
 $node_subscriber->safe_psql('postgres',
     "ALTER SUBSCRIPTION sub_tab SET (conflict_log_destination = 'all');");
 
-$node_subscriber->safe_psql('postgres', "TRUNCATE TABLE $conflict_table;");
+$node_subscriber->safe_psql('postgres', "DELETE FROM $conflict_table;");
 # Trigger a conflict for server log (insert_exists)
 $node_subscriber->safe_psql('postgres', "INSERT INTO conf_tab VALUES (600, 600, 600);");
 $node_publisher->safe_psql('postgres', "INSERT INTO conf_tab VALUES (600, 700, 700);");

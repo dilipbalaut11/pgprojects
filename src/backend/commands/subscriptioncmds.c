@@ -30,6 +30,7 @@
 #include "catalog/pg_am_d.h"
 #include "catalog/pg_authid_d.h"
 #include "catalog/pg_database_d.h"
+#include "catalog/pg_namespace.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_type.h"
@@ -3385,6 +3386,7 @@ create_conflict_log_table(Oid subid, char *subname, Oid namespaceId,
 	ObjectAddress	myself;
 	ObjectAddress	subaddr;
 
+	namespaceId = PG_CONFLICT_NAMESPACE;
 	/*
 	 * Conflict log tables must be permanent relations.  Disallow creation in
 	 * temporary namespaces to ensure the same.

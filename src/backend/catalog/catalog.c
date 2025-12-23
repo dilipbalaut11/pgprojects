@@ -86,7 +86,8 @@ bool
 IsSystemClass(Oid relid, Form_pg_class reltuple)
 {
 	/* IsCatalogRelationOid is a bit faster, so test that first */
-	return (IsCatalogRelationOid(relid) || IsToastClass(reltuple));
+	return (IsCatalogRelationOid(relid) || IsToastClass(reltuple)
+			|| IsConflictClass(reltuple));
 }
 
 /*
@@ -228,6 +229,20 @@ IsToastClass(Form_pg_class reltuple)
 	Oid			relnamespace = reltuple->relnamespace;
 
 	return IsToastNamespace(relnamespace);
+}
+
+/*
+ * IsConflictClass
+ *		Like the above, but takes a Form_pg_class as argument.
+ *		Used when we do not want to open the relation and have to
+ *		search pg_class directly.
+ */
+bool
+IsConflictClass(Form_pg_class reltuple)
+{
+	Oid			relnamespace = reltuple->relnamespace;
+
+	return (relnamespace == PG_CONFLICT_NAMESPACE);
 }
 
 /*

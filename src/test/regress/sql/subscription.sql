@@ -438,9 +438,9 @@ ALTER SUBSCRIPTION regress_conflict_test1 SET (conflict_log_destination = 'table
 -- use DO block to hide OID in error message
 DO $$
 BEGIN
-    EXECUTE 'DROP TABLE ' || (SELECT 'conflict_log_table_' || oid FROM pg_subscription WHERE subname = 'regress_conflict_test1');
-EXCEPTION WHEN dependent_objects_still_exist THEN
-    RAISE NOTICE 'captured expected error: dependent_objects_still_exist';
+    EXECUTE 'DROP TABLE ' || (SELECT 'pg_conflict.conflict_log_table_' || oid FROM pg_subscription WHERE subname = 'regress_conflict_test1');
+EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'captured expected error: insufficient_privilege';
 END $$;
 
 -- PUBLICATION: Verify internal tables are publishable

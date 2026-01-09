@@ -50,7 +50,7 @@ $node_subscriber->safe_psql(
 	'postgres',
 	"CREATE SUBSCRIPTION sub_tab
 	 CONNECTION '$publisher_connstr application_name=$appname'
-	 PUBLICATION pub_tab;");
+	 PUBLICATION pub_tab WITH (conflict_log_destination=all)");
 
 # Wait for initial table sync to finish
 $node_subscriber->wait_for_subscription_sync($node_publisher, $appname);
@@ -86,10 +86,38 @@ $node_subscriber->wait_for_log(
 .*Key \(c\)=\(4\); existing local row \(4, 4, 4\); remote row \(2, 3, 4\)./,
 	$log_offset);
 
+my $subid = $node_subscriber->safe_psql('postgres',
+	"SELECT oid FROM pg_subscription WHERE subname = 'sub_tab';");
+my $conflict_table = "pg_conflict.pg_conflict_$subid";
+
+# Wait for the conflict to be logged
+my $log_check = $node_subscriber->poll_query_until(
+    'postgres',
+    "SELECT count(*) > 0 FROM $conflict_table;"
+);
+
+my $conflict_check = $node_subscriber->safe_psql('postgres',
+    "SELECT count(*) FROM $conflict_table WHERE conflict_type = 'multiple_unique_conflicts';");
+is($conflict_check, 1, 'Verified multiple_unique_conflicts logged into internal table');
+
+my $json_query = qq[
+    SELECT string_agg((unnested.j::json)->'key'->>'a', ',')
+    FROM (
+        SELECT unnest(local_conflicts) AS j
+        FROM $conflict_table
+    ) AS unnested;
+];
+
+my $all_keys = $node_subscriber->safe_psql('postgres', $json_query);
+
+# Verify that '2' is present in the resulting string
+like($all_keys, qr/2/, 'Verified that key 2 exists in the local_conflicts log');
+
 pass('multiple_unique_conflicts detected during insert');
 
 # Truncate table to get rid of the error
 $node_subscriber->safe_psql('postgres', "TRUNCATE conf_tab;");
+$node_subscriber->safe_psql('postgres', "DELETE FROM $conflict_table");
 
 ##################################################
 # Test multiple_unique_conflicts due to UPDATE
@@ -117,6 +145,29 @@ $node_subscriber->wait_for_log(
 .*Key already exists in unique index \"conf_tab_c_key\".*
 .*Key \(c\)=\(8\); existing local row \(8, 8, 8\); remote row \(6, 7, 8\)./,
 	$log_offset);
+
+# Wait for the conflict to be logged
+$log_check = $node_subscriber->poll_query_until(
+    'postgres',
+    "SELECT count(*) > 0 FROM $conflict_table;"
+);
+
+$conflict_check = $node_subscriber->safe_psql('postgres',
+    "SELECT count(*) FROM $conflict_table WHERE conflict_type = 'multiple_unique_conflicts';");
+is($conflict_check, 1, 'Verified multiple_unique_conflicts logged into internal table');
+
+$json_query = qq[
+    SELECT string_agg((unnested.j::json)->'key'->>'a', ',')
+    FROM (
+        SELECT unnest(local_conflicts) AS j
+        FROM $conflict_table
+    ) AS unnested;
+];
+
+$all_keys = $node_subscriber->safe_psql('postgres', $json_query);
+
+# Verify that '6' is present in the resulting string
+like($all_keys, qr/6/, 'Verified that key 6 exists in the local_conflicts log');
 
 pass('multiple_unique_conflicts detected during update');
 

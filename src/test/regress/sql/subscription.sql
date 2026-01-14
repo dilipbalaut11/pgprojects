@@ -392,7 +392,7 @@ SELECT subname, subconflictlogdest, subconflictlogrelid > 0 AS has_relid
 FROM pg_subscription WHERE subname = 'regress_conflict_test1';
 
 -- verify the physical table exists, its OID matches subconflictlogrelid,
--- and it is located in the 'pg_conflict' namespace.
+-- and it is located in the 'pg_conflict' namespace
 SELECT n.nspname, (c.oid = s.subconflictlogrelid) AS "oid_matches"
 FROM pg_class c
 JOIN pg_subscription s ON c.relname = 'pg_conflict_' || s.oid
@@ -411,7 +411,7 @@ WHERE s.subname = 'regress_conflict_test1' AND a.attnum > 0
 -- ALTER SUBSCRIPTION - conflict_log_destination state transitions
 --
 -- These tests verify the transition logic between different logging
--- destinations, ensuring internal tables are created or dropped as expected.
+-- destinations, ensuring internal tables are created or dropped as expected
 --
 
 -- transition from 'log' to 'all'
@@ -446,7 +446,7 @@ WHERE s.subname = 'regress_conflict_test2';
 -- PUBLICATION: Verify internal tables are not publishable
 --
 -- pg_relation_is_publishable should return false for internal conflict log
--- tables to prevent them from being accidentally included in publications.
+-- tables to prevent them from being accidentally included in publications
 --
 SELECT n.nspname, pg_relation_is_publishable(c.oid)
 FROM pg_class c
@@ -458,8 +458,8 @@ WHERE s.subname = 'regress_conflict_test1';
 -- Table Protection and Lifecycle Management
 --
 -- These tests verify that:
--- Manual DROP TABLE is disallowed.
--- DROP SUBSCRIPTION automatically reaps the table.
+-- Manual DROP TABLE is disallowed
+-- DROP SUBSCRIPTION automatically reaps the table
 --
 -- re-enable table logging for verification
 ALTER SUBSCRIPTION regress_conflict_test1 SET (conflict_log_destination = 'table');
@@ -467,7 +467,7 @@ ALTER SUBSCRIPTION regress_conflict_test1 SET (conflict_log_destination = 'table
 -- We use a DO block with dynamic SQL because the internal conflict log table
 -- name contains the subscription OID, which is non-deterministic. This
 -- approach allows us to attempt the DROP and capture the expected error
--- without hard-coding a specific OID in the expected output.
+-- without hard-coding a specific OID in the expected output
 
 -- fail - drop table not allowed due to internal dependency
 DO $$
@@ -498,8 +498,8 @@ CREATE SUBSCRIPTION regress_conflict_protection_test CONNECTION 'dbname=regress_
     PUBLICATION testpub WITH (connect = false, conflict_log_destination = 'table');
 
 -- Trying to ALTER the internal conflict log table
--- This should fail because the table is system-managed.
--- As mentioned in previous test cases, we use a DO block to hide dynamic OIDs.
+-- This should fail because the table is system-managed
+-- As mentioned in previous test cases, we use a DO block to hide dynamic OIDs
 DO $$
 DECLARE
     tab_name text;
@@ -514,9 +514,9 @@ EXCEPTION WHEN insufficient_privilege THEN
     RAISE NOTICE 'captured expected error: insufficient_privilege during ALTER';
 END $$;
 
--- Trying to TRUNCATE the internal conflict log table
--- This should be allowed.
--- As mentioned in previous test cases, we use a DO block to hide dynamic OIDs.
+-- Test Manual INSERT on conflict log table
+-- This should fail because the table is system-managed
+-- Hiding the OID in the error message by catching the exception
 DO $$
 DECLARE
     tab_name text;
@@ -525,18 +525,42 @@ BEGIN
     FROM pg_class c JOIN pg_subscription s ON c.relname = 'pg_conflict_' || s.oid
     WHERE s.subname = 'regress_conflict_protection_test';
 
-    RAISE NOTICE 'Attempting TRUNCATE on internal conflict table';
-    EXECUTE 'TRUNCATE ' || tab_name;
+    EXECUTE 'INSERT INTO ' || tab_name || ' (relname) VALUES (''mytest'')';
 EXCEPTION WHEN insufficient_privilege THEN
-    RAISE NOTICE 'captured expected error: insufficient_privilege during TRUNCATE';
+    RAISE NOTICE 'captured expected error: insufficient_privilege during INSERT';
 END $$;
 
+-- Test Manual UPDATE on conflict log table
+-- This should fail because the table is system-managed
+-- Hiding the OID in the error message by catching the exception
+DO $$
+DECLARE
+    tab_name text;
+BEGIN
+    SELECT 'pg_conflict.' || relname INTO tab_name
+    FROM pg_class c JOIN pg_subscription s ON c.relname = 'pg_conflict_' || s.oid
+    WHERE s.subname = 'regress_conflict_protection_test';
+
+    EXECUTE 'UPDATE ' || tab_name || ' SET relname = ''mytest'' ';
+EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'captured expected error: insufficient_privilege during UPDATE';
+END $$;
+
+-- Trying to perform TRUNCATE/DELETE on the internal conflict log table
+-- This should be allowed so that user can perform cleanup
+SELECT 'pg_conflict.' || relname AS conflict_tab
+FROM pg_class c 
+JOIN pg_subscription s ON c.relname = 'pg_conflict_' || s.oid
+WHERE s.subname = 'regress_conflict_protection_test' \gset
+TRUNCATE :conflict_tab;
+DELETE FROM :conflict_tab;
+
 -- Trying to create a new table manually in the pg_conflict namespace
--- This should fail as the namespace is reserved for conflict logs tables.
+-- This should fail as the namespace is reserved for conflict logs tables
 CREATE TABLE pg_conflict.manual_table (id int);
 
 -- Moving an existing table into the pg_conflict namespace
--- Users should not be able to move their own tables within this namespace.
+-- Users should not be able to move their own tables within this namespace
 CREATE TABLE public.test_move (id int);
 ALTER TABLE public.test_move SET SCHEMA pg_conflict;
 DROP TABLE public.test_move;

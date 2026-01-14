@@ -1166,6 +1166,24 @@ CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation,
 							RelationGetRelationName(resultRel))));
 			break;
 	}
+
+	/*
+	 * Conflict logging tables (CLT) are managed by the system to record 
+	 * replication conflicts. We allow DELETE to permit users to manually 
+	 * prune or truncate these logs, but manual data insertion or 
+	 * modification (INSERT, UPDATE, MERGE) is prohibited to maintain 
+	 * the integrity of the system-generated logs.
+	 */
+	if (IsConflictNamespace(RelationGetNamespace(resultRel)) && 
+		operation != CMD_DELETE)
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				errmsg("cannot execute %s on conflict logging table \"%s\"",
+						(operation == CMD_INSERT ? "INSERT" :
+						operation == CMD_UPDATE ? "UPDATE" :
+						operation == CMD_MERGE ? "MERGE" : "this operation"),
+						RelationGetRelationName(resultRel)),
+				errdetail("Conflict logging tables are system-managed and only support cleanup via DELETE or TRUNCATE.")));
 }
 
 /*

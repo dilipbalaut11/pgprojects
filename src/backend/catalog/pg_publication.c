@@ -902,7 +902,6 @@ GetAllPublicationRelations(char relkind, bool pubviaroot)
 		Form_pg_class relForm = (Form_pg_class) GETSTRUCT(tuple);
 		Oid			relid = relForm->oid;
 
-		/* Subscription conflict log tables are not published */
 		if (is_publishable_class(relid, relForm) &&
 			!(relForm->relispartition && pubviaroot))
 			result = lappend_oid(result, relid);

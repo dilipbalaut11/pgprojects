@@ -111,7 +111,7 @@ typedef struct SubOpts
 	bool		retaindeadtuples;
 	int32		maxretention;
 	char	   *origin;
-	ConflictLogDest logdest;
+	ConflictLogDest conflictlogdest;
 	XLogRecPtr	lsn;
 } SubOpts;
 
@@ -201,7 +201,7 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 	if (IsSet(supported_opts, SUBOPT_ORIGIN))
 		opts->origin = pstrdup(LOGICALREP_ORIGIN_ANY);
 	if (IsSet(supported_opts, SUBOPT_CONFLICT_LOG_DEST))
-		opts->logdest = CONFLICT_LOG_DEST_LOG;
+		opts->conflictlogdest = CONFLICT_LOG_DEST_LOG;
 
 	/* Parse options */
 	foreach(lc, stmt_options)
@@ -422,7 +422,7 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 				errorConflictingDefElem(defel, pstate);
 
 			val = defGetString(defel);
-			opts->logdest = GetLogDestination(val);
+			opts->conflictlogdest = GetLogDestination(val);
 			opts->specified_opts |= SUBOPT_CONFLICT_LOG_DEST;
 		}
 		else
@@ -774,10 +774,10 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 
 	/* Always set the destination, default will be 'log'. */
 	values[Anum_pg_subscription_subconflictlogdest - 1] =
-		CStringGetTextDatum(ConflictLogDestNames[opts.logdest]);
+		CStringGetTextDatum(ConflictLogDestNames[opts.conflictlogdest]);
 
 	/* If logging to a table is required, physically create the table. */
-	if (IsSet(opts.logdest, CONFLICT_LOG_DEST_TABLE))
+	if (IsSet(opts.conflictlogdest, CONFLICT_LOG_DEST_TABLE))
 		logrelid = create_conflict_log_table(subid, stmt->subname);
 
 	/* Store table OID in the catalog. */
@@ -1708,15 +1708,15 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 					ConflictLogDest old_dest =
 							GetLogDestination(sub->conflictlogdest);
 
-					if (opts.logdest != old_dest)
+					if (opts.conflictlogdest != old_dest)
 					{
-						bool want_table =
-								IsSet(opts.logdest, CONFLICT_LOG_DEST_TABLE);
+						bool want_table = IsSet(opts.conflictlogdest,
+												CONFLICT_LOG_DEST_TABLE);
 						bool has_oldtable =
 								IsSet(old_dest, CONFLICT_LOG_DEST_TABLE);
 
 						values[Anum_pg_subscription_subconflictlogdest - 1] =
-							CStringGetTextDatum(ConflictLogDestNames[opts.logdest]);
+							CStringGetTextDatum(ConflictLogDestNames[opts.conflictlogdest]);
 						replaces[Anum_pg_subscription_subconflictlogdest - 1] = true;
 
 						if (want_table && !has_oldtable)

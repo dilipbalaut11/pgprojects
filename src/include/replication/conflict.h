@@ -96,7 +96,7 @@ typedef enum ConflictLogDest
 	/* Log conflicts to an internally managed table */
 	CONFLICT_LOG_DEST_TABLE = 1 << 1,   /* 0x02 */
 
-	/* Convenience flag for all supported destinations */
+	/* Convenience bitmask for all supported destinations */
 	CONFLICT_LOG_DEST_ALL   = (CONFLICT_LOG_DEST_LOG | CONFLICT_LOG_DEST_TABLE)
 } ConflictLogDest;
 

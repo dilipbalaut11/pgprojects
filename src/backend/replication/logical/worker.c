@@ -482,7 +482,9 @@ static bool MySubscriptionValid = false;
 static List *on_commit_wakeup_workers_subids = NIL;
 
 bool		in_remote_transaction = false;
-static XLogRecPtr remote_final_lsn = InvalidXLogRecPtr;
+XLogRecPtr remote_final_lsn = InvalidXLogRecPtr;
+TransactionId	remote_xid = InvalidTransactionId;
+TimestampTz	remote_commit_ts = 0;
 
 /* fields valid only when processing streamed transaction */
 static bool in_streamed_transaction = false;
@@ -1219,6 +1221,8 @@ apply_handle_begin(StringInfo s)
 	set_apply_error_context_xact(begin_data.xid, begin_data.final_lsn);
 
 	remote_final_lsn = begin_data.final_lsn;
+	remote_commit_ts = begin_data.committime;
+	remote_xid = begin_data.xid;
 
 	maybe_start_skipping_changes(begin_data.final_lsn);
 
@@ -1744,6 +1748,10 @@ apply_handle_stream_start(StringInfo s)
 
 	/* extract XID of the top-level transaction */
 	stream_xid = logicalrep_read_stream_start(s, &first_segment);
+
+	remote_xid = stream_xid;
+	remote_final_lsn = InvalidXLogRecPtr;
+	remote_commit_ts = 0;
 
 	if (!TransactionIdIsValid(stream_xid))
 		ereport(ERROR,
@@ -5608,6 +5616,27 @@ start_apply(XLogRecPtr origin_startpos)
 			AbortOutOfAnyTransaction();
 			pgstat_report_subscription_error(MySubscription->oid,
 											 MyLogicalRepWorker->type);
+
+			/*
+			 * Insert any pending conflict log tuple under a new transaction.
+			 */
+			if (MyLogicalRepWorker->conflict_log_tuple != NULL)
+			{
+				Relation	conflictlogrel;
+				ConflictLogDest	dest;
+
+				StartTransactionCommand();
+				PushActiveSnapshot(GetTransactionSnapshot());
+
+				/* Open conflict log table and insert the tuple. */
+				conflictlogrel = GetConflictLogDestAndTable(&dest);
+				Assert((dest & CONFLICT_LOG_DEST_TABLE) != 0);
+				InsertConflictLogTuple(conflictlogrel);
+				table_close(conflictlogrel, RowExclusiveLock);
+
+				PopActiveSnapshot();
+				CommitTransactionCommand();
+			}
 
 			PG_RE_THROW();
 		}

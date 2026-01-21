@@ -134,6 +134,18 @@ static const ConflictLogColumnDef ConflictLogSchema[] =
 
 #define MAX_CONFLICT_ATTR_NUM lengthof(ConflictLogSchema)
 
+/* Schema for the elements within the 'local_conflicts' JSON array */
+static const ConflictLogColumnDef LocalConflictSchema[] =
+{
+	{ .attname = "xid",       .atttypid = XIDOID },
+	{ .attname = "commit_ts", .atttypid = TIMESTAMPTZOID },
+	{ .attname = "origin",    .atttypid = TEXTOID },
+	{ .attname = "key",       .atttypid = JSONOID },
+	{ .attname = "tuple",     .atttypid = JSONOID }
+};
+
+#define MAX_LOCAL_CONFLICT_INFO_ATTRS lengthof(LocalConflictSchema)
+
 extern bool GetTupleTransactionInfo(TupleTableSlot *localslot,
 									TransactionId *xmin,
 									ReplOriginId *localorigin,
@@ -144,4 +156,7 @@ extern void ReportApplyConflict(EState *estate, ResultRelInfo *relinfo,
 								TupleTableSlot *remoteslot,
 								List *conflicttuples);
 extern void InitConflictIndexes(ResultRelInfo *relInfo);
+extern Relation GetConflictLogDestAndTable(ConflictLogDest *log_dest);
+extern void InsertConflictLogTuple(Relation conflictlogrel);
+extern bool ValidateConflictLogTable(Relation rel);
 #endif

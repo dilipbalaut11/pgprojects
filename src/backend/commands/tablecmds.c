@@ -2431,9 +2431,11 @@ truncate_check_rel(Oid relid, Form_pg_class reltuple)
 	 * pg_largeobject and pg_largeobject_metadata to be truncated as part of
 	 * pg_upgrade, because we need to change its relfilenode to match the old
 	 * cluster, and allowing a TRUNCATE command to be executed is the easiest
-	 * way of doing that.
+	 * way of doing that.  We also allow TRUNCATE on the conflict log tables,
+	 * to permit users to manually prune these logs to manage disk space.
 	 */
-	if (!allowSystemTableMods && IsSystemClass(relid, reltuple)
+	if (!allowSystemTableMods && IsSystemClass(relid, reltuple) &&
+		!IsConflictClass(reltuple)
 		&& (!IsBinaryUpgrade ||
 			(relid != LargeObjectRelationId &&
 			 relid != LargeObjectMetadataRelationId)))

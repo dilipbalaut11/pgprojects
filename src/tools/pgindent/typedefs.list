@@ -514,6 +514,8 @@ ConditionVariableMinimallyPadded
 ConditionalStack
 ConfigData
 ConfigVariable
+ConflictLogColumnDef
+ConflictLogDest
 ConflictTupleInfo
 ConflictType
 ConnCacheEntry

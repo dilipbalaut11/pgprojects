@@ -1178,6 +1178,21 @@ CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation,
 							RelationGetRelationName(resultRel))));
 			break;
 	}
+
+	/*
+	 * Conflict log tables are managed by the system to record logical
+	 * replication conflicts.  We allow DELETE to permit users to manually
+	 * prune or truncate these logs, but manual data insertion or modification
+	 * (INSERT, UPDATE, MERGE) is prohibited to maintain the integrity of the
+	 * system-generated logs.
+	 */
+	if (IsConflictNamespace(RelationGetNamespace(resultRel)) &&
+		operation != CMD_DELETE)
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("cannot modify or insert data into conflict log table \"%s\"",
+						RelationGetRelationName(resultRel)),
+				 errdetail("Conflict log tables are system-managed and only support cleanup via DELETE or TRUNCATE.")));
 }
 
 /*
@@ -1249,6 +1264,17 @@ CheckValidRowMarkRel(Relation rel, RowMarkType markType)
 							RelationGetRelationName(rel))));
 			break;
 	}
+
+	/*
+	 * Conflict log tables are managed by the system to record logical
+	 * replication conflicts.  We do not allow locking rows in CONFLICT
+	 * relations.
+	 */
+	if (IsConflictNamespace(RelationGetNamespace(rel)))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot lock rows in conflict log table \"%s\"",
+						RelationGetRelationName(rel))));
 }
 
 /*

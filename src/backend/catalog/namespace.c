@@ -3525,7 +3525,7 @@ LookupCreationNamespace(const char *nspname)
  *
  * We complain if either the old or new namespaces is a temporary schema
  * (or temporary toast schema), or if either the old or new namespaces is the
- * TOAST schema.
+ * TOAST schema or the CONFLICT schema.
  */
 void
 CheckSetNamespace(Oid oldNspOid, Oid nspOid)
@@ -3541,6 +3541,12 @@ CheckSetNamespace(Oid oldNspOid, Oid nspOid)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot move objects into or out of TOAST schema")));
+
+	/* similarly for CONFLICT schema */
+	if (nspOid == PG_CONFLICT_NAMESPACE || oldNspOid == PG_CONFLICT_NAMESPACE)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot move objects into or out of CONFLICT schema")));
 }
 
 /*

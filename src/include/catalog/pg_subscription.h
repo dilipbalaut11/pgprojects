@@ -95,6 +95,7 @@ CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROW
 	Oid			subserver BKI_LOOKUP_OPT(pg_foreign_server);	/* If connection uses
 																 * server */
 
+	Oid         subconflictlogrelid; /* Relid of the conflict log table. */
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	/* Connection string to the publisher */
 	text		subconninfo;	/* Set if connecting with connection string */
@@ -110,6 +111,14 @@ CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROW
 
 	/* List of publications subscribed to */
 	text		subpublications[1] BKI_FORCE_NOT_NULL;
+
+	/*
+	 * Strategy for logging replication conflicts:
+	 * 'log' - server log only,
+	 * 'table' - conflict log table only,
+	 * 'all' - both log and table.
+	 */
+	text		subconflictlogdest;
 
 	/* Only publish data originating from the specified origin */
 	text		suborigin BKI_DEFAULT(LOGICALREP_ORIGIN_ANY);
@@ -164,6 +173,7 @@ typedef struct Subscription
 									 * and the retention duration has not
 									 * exceeded max_retention_duration, when
 									 * defined */
+	Oid			conflictlogrelid;	/* conflict log table Oid */
 	char	   *conninfo;		/* Connection string to the publisher */
 	char	   *slotname;		/* Name of the replication slot */
 	char	   *synccommit;		/* Synchronous commit setting for worker */
@@ -171,6 +181,7 @@ typedef struct Subscription
 	List	   *publications;	/* List of publication names to subscribe to */
 	char	   *origin;			/* Only publish data originating from the
 								 * specified origin */
+	char	   *conflictlogdest;	/* Conflict log destination */
 } Subscription;
 
 #ifdef EXPOSE_TO_CLIENT_CODE

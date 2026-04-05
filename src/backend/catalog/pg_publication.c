@@ -31,6 +31,7 @@
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_type.h"
 #include "commands/publicationcmds.h"
+#include "commands/subscriptioncmds.h"
 #include "funcapi.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -96,6 +97,15 @@ check_publication_add_relation(PublicationRelInfo *pri)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg(errormsg, RelationGetRelationName(targetrel)),
 				 errdetail("This operation is not supported for unlogged tables.")));
+
+	/* Can't be conflict log table */
+	if (IsConflictNamespace(RelationGetNamespace(targetrel)))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("cannot add relation \"%s.%s\" to publication",
+						get_namespace_name(RelationGetNamespace(targetrel)),
+						RelationGetRelationName(targetrel)),
+				 errdetail("This operation is not supported for conflict log tables.")));
 }
 
 /*
@@ -106,7 +116,8 @@ static void
 check_publication_add_schema(Oid schemaid)
 {
 	/* Can't be system namespace */
-	if (IsCatalogNamespace(schemaid) || IsToastNamespace(schemaid))
+	if (IsCatalogNamespace(schemaid) || IsToastNamespace(schemaid) ||
+		IsConflictNamespace(schemaid))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("cannot add schema \"%s\" to publication",
@@ -150,6 +161,7 @@ is_publishable_class(Oid relid, Form_pg_class reltuple)
 			reltuple->relkind == RELKIND_PARTITIONED_TABLE ||
 			reltuple->relkind == RELKIND_SEQUENCE) &&
 		!IsCatalogRelationOid(relid) &&
+		!IsConflictClass(reltuple) &&
 		reltuple->relpersistence == RELPERSISTENCE_PERMANENT &&
 		relid >= FirstNormalObjectId;
 }

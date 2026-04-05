@@ -7093,7 +7093,7 @@ describeSubscriptions(const char *pattern, bool verbose)
 	printQueryOpt myopt = pset.popt;
 	static const bool translate_columns[] = {false, false, false, false,
 		false, false, false, false, false, false, false, false, false, false,
-	false, false, false, false, false, false, false};
+	false, false, false, false, false, false, false, false, false};
 
 	if (pset.sversion < 100000)
 	{
@@ -7201,6 +7201,20 @@ describeSubscriptions(const char *pattern, bool verbose)
 		appendPQExpBuffer(&buf,
 						  ",  pg_catalog.obj_description(oid, 'pg_subscription') AS \"%s\"\n",
 						  gettext_noop("Description"));
+
+		/* Conflict log destination is supported in v19 and higher */
+		if (pset.sversion >= 190000)
+		{
+			appendPQExpBuffer(&buf,
+							  ", subconflictlogdest AS \"%s\"\n",
+							  gettext_noop("Conflict log destination"));
+
+			appendPQExpBuffer(&buf,
+							  ", (CASE WHEN subconflictlogdest IN ('table', 'all') "
+							  " THEN 'pg_conflict.pg_conflict_' || oid "
+							  " ELSE '-' END) AS \"%s\"\n",
+							  gettext_noop("Conflict log table"));
+		}
 	}
 
 	/* Only display subscriptions in current database. */

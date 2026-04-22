@@ -89,6 +89,12 @@
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
 
 /*
+ * This will be set by the pg_upgrade_support function --
+ * binary_upgrade_set_next_pg_subscription_oid().
+ */
+Oid			binary_upgrade_next_pg_subscription_oid = InvalidOid;
+
+/*
  * Structure to hold a bitmap representing the user-provided CREATE/ALTER
  * SUBSCRIPTION command options and the parsed/default values of each of them.
  */
@@ -794,8 +800,21 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	memset(values, 0, sizeof(values));
 	memset(nulls, false, sizeof(nulls));
 
-	subid = GetNewOidWithIndex(rel, SubscriptionObjectIndexId,
-							   Anum_pg_subscription_oid);
+	/* Use binary-upgrade override for pg_subscription.oid? */
+	if (IsBinaryUpgrade)
+	{
+		if (!OidIsValid(binary_upgrade_next_pg_subscription_oid))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("pg_subscription OID value not set when in binary upgrade mode")));
+
+		subid = binary_upgrade_next_pg_subscription_oid;
+		binary_upgrade_next_pg_subscription_oid = InvalidOid;
+	}
+	else
+		subid = GetNewOidWithIndex(rel, SubscriptionObjectIndexId,
+								   Anum_pg_subscription_oid);
+
 	values[Anum_pg_subscription_oid - 1] = ObjectIdGetDatum(subid);
 	values[Anum_pg_subscription_subdbid - 1] = ObjectIdGetDatum(MyDatabaseId);
 	values[Anum_pg_subscription_subskiplsn - 1] = LSNGetDatum(InvalidXLogRecPtr);
@@ -1441,6 +1460,85 @@ CheckAlterSubOption(Subscription *sub, const char *option,
 }
 
 /*
+ * AlterSubscriptionConflictLogDestination
+ *
+ * Update the conflict log table associated with a subscription when its
+ * conflict log destination is changed.
+ *
+ * If the new destination requires a conflict log table and none was previously
+ * required, this function validates an existing conflict log table identified
+ * by the subscription specific naming convention or creates a new one.
+ *
+ * If the new destination no longer requires a conflict log table, the existing
+ * conflict log table associated with the subscription is removed via internal
+ * dependency cleanup to prevent orphaned relations.
+ *
+ * The function enforces that any conflict log table used is a permanent
+ * relation in a permanent schema, matches the expected structure, and is not
+ * already associated with another subscription.
+ *
+ * On success, *conflicttablerelid is set to the OID of the conflict log table
+ * that was created or validated, or to InvalidOid if no table is required.
+ *
+ * Returns true if the subscription's conflict log table reference must be
+ * updated as a result of the destination change; false otherwise.
+ */
+static bool
+AlterSubscriptionConflictLogDestination(Subscription *sub,
+										ConflictLogDest logdest,
+										Oid *conflicttablerelid)
+{
+	ConflictLogDest old_dest = GetLogDestination(sub->conflictlogdest);
+	bool		want_table;
+	bool		has_oldtable;
+	bool		update_relid = false;
+	Oid			relid = InvalidOid;
+
+	want_table = IsSet(logdest, CONFLICT_LOG_DEST_TABLE);
+	has_oldtable = IsSet(old_dest, CONFLICT_LOG_DEST_TABLE);
+
+	if (want_table && !has_oldtable)
+	{
+		char		relname[NAMEDATALEN];
+
+		snprintf(relname, NAMEDATALEN, "pg_conflict_%u", sub->oid);
+
+		/*
+		 * In upgrade scenarios, the conflict log table already exists. Update
+		 * the catalog to record the association.
+		 */
+		relid = get_relname_relid(relname, PG_CONFLICT_NAMESPACE);
+		if (!OidIsValid(relid))
+			relid = create_conflict_log_table(sub->oid, sub->name);
+
+		update_relid = true;
+	}
+	else if (!want_table && has_oldtable)
+	{
+		ObjectAddress object;
+
+		/*
+		 * Conflict log tables are recorded as internal dependencies of the
+		 * subscription.  Drop the table if it is not required anymore to
+		 * avoid stale or orphaned relations.
+		 *
+		 * XXX: At present, only conflict log tables are managed this way. In
+		 * future if we introduce additional internal dependencies, we may
+		 * need a targeted deletion to avoid deletion of any other objects.
+		 */
+		ObjectAddressSet(object, SubscriptionRelationId, sub->oid);
+		performDeletion(&object, DROP_CASCADE,
+						PERFORM_DELETION_INTERNAL |
+						PERFORM_DELETION_SKIP_ORIGINAL);
+
+		update_relid = true;
+	}
+
+	*conflicttablerelid = relid;
+	return update_relid;
+}
+
+/*
  * Alter the existing subscription.
  */
 ObjectAddress
@@ -1804,52 +1902,22 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 
 					if (opts.conflictlogdest != old_dest)
 					{
-						bool want_table = IsSet(opts.conflictlogdest,
-												CONFLICT_LOG_DEST_TABLE);
-						bool has_oldtable =
-								IsSet(old_dest, CONFLICT_LOG_DEST_TABLE);
+						bool		update_relid;
+						Oid			relid = InvalidOid;
 
 						values[Anum_pg_subscription_subconflictlogdest - 1] =
 							CStringGetTextDatum(ConflictLogDestNames[opts.conflictlogdest]);
 						replaces[Anum_pg_subscription_subconflictlogdest - 1] = true;
 
-						if (want_table && !has_oldtable)
+						update_relid = AlterSubscriptionConflictLogDestination(sub,
+																			   opts.conflictlogdest,
+																			   &relid);
+						if (update_relid)
 						{
-							Oid		relid;
-
-							relid = create_conflict_log_table(subid, sub->name);
-
 							values[Anum_pg_subscription_subconflictlogrelid - 1] =
 														ObjectIdGetDatum(relid);
 							replaces[Anum_pg_subscription_subconflictlogrelid - 1] =
 														true;
-						}
-						else if (!want_table && has_oldtable)
-						{
-							ObjectAddress object;
-
-							/*
-							 * Conflict log tables are recorded as internal
-							 * dependencies of the subscription.  Drop the
-							 * table if it is not required anymore to avoid
-							 * stale or orphaned relations.
-							 *
-							 * XXX: At present, only conflict log tables are
-							 * managed this way.  In future if we introduce
-							 * additional internal dependencies, we may need
-							 * a targeted deletion to avoid deletion of any
-							 * other objects.
-							 */
-							ObjectAddressSet(object, SubscriptionRelationId,
-											 subid);
-							performDeletion(&object, DROP_CASCADE,
-											PERFORM_DELETION_INTERNAL |
-											PERFORM_DELETION_SKIP_ORIGINAL);
-
-							values[Anum_pg_subscription_subconflictlogrelid - 1] =
-												ObjectIdGetDatum(InvalidOid);
-							replaces[Anum_pg_subscription_subconflictlogrelid - 1] =
-												true;
 						}
 					}
 				}

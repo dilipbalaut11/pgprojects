@@ -311,11 +311,13 @@ heap_create(const char *relname,
 	 * But allow creating indexes on relations in pg_catalog even if
 	 * allow_system_table_mods = off, upper layers already guarantee it's on a
 	 * user defined relation, not a system one.
+	 *
+	 * Allow creation of conflict table in binary-upgrade mode.
 	 */
 	if (!allow_system_table_mods &&
 		((IsCatalogNamespace(relnamespace) && relkind != RELKIND_INDEX) ||
 		 IsToastNamespace(relnamespace) ||
-		 IsConflictNamespace(relnamespace)) &&
+		 (!IsBinaryUpgrade && IsConflictNamespace(relnamespace))) &&
 		IsNormalProcessingMode())
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),

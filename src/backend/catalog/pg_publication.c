@@ -48,6 +48,18 @@ typedef struct
 								 * table. */
 } published_rel;
 
+static char *get_relation_qualified_name(Relation rel);
+
+/*
+ * Get a palloc'd string containing the schema-qualified name of the relation.
+ */
+static char *
+get_relation_qualified_name(Relation rel)
+{
+	return get_qualified_relname(RelationGetNamespace(rel),
+								 RelationGetRelationName(rel));
+}
+
 /*
  * Check if relation can be in given publication and throws appropriate
  * error if not.
@@ -67,7 +79,7 @@ check_publication_add_relation(PublicationRelInfo *pri)
 	if (pri->except && targetrel->rd_rel->relispartition)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg(errormsg, RelationGetRelationName(targetrel)),
+				 errmsg(errormsg, get_relation_qualified_name(targetrel)),
 				 errdetail("This operation is not supported for individual partitions.")));
 
 	/* Must be a regular or partitioned table */
@@ -75,26 +87,26 @@ check_publication_add_relation(PublicationRelInfo *pri)
 		RelationGetForm(targetrel)->relkind != RELKIND_PARTITIONED_TABLE)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg(errormsg, RelationGetRelationName(targetrel)),
+				 errmsg(errormsg, get_relation_qualified_name(targetrel)),
 				 errdetail_relkind_not_supported(RelationGetForm(targetrel)->relkind)));
 
 	/* Can't be system table */
 	if (IsCatalogRelation(targetrel))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg(errormsg, RelationGetRelationName(targetrel)),
+				 errmsg(errormsg, get_relation_qualified_name(targetrel)),
 				 errdetail("This operation is not supported for system tables.")));
 
 	/* UNLOGGED and TEMP relations cannot be part of publication. */
 	if (targetrel->rd_rel->relpersistence == RELPERSISTENCE_TEMP)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg(errormsg, RelationGetRelationName(targetrel)),
+				 errmsg(errormsg, get_relation_qualified_name(targetrel)),
 				 errdetail("This operation is not supported for temporary tables.")));
 	else if (targetrel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg(errormsg, RelationGetRelationName(targetrel)),
+				 errmsg(errormsg, get_relation_qualified_name(targetrel)),
 				 errdetail("This operation is not supported for unlogged tables.")));
 }
 

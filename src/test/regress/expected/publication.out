@@ -458,7 +458,7 @@ Excluded from publications:
 Number of partitions: 1 (Use \d+ to list them.)
 
 CREATE PUBLICATION testpub9 FOR ALL TABLES EXCEPT (TABLE testpub_part1);
-ERROR:  cannot specify relation "testpub_part1" in the publication EXCEPT clause
+ERROR:  cannot specify relation "public.testpub_part1" in the publication EXCEPT clause
 DETAIL:  This operation is not supported for individual partitions.
 CREATE TABLE tab_main (a int) PARTITION BY RANGE(a);
 -- Attaching a partition is not allowed if the partitioned table appears in a
@@ -1499,23 +1499,23 @@ UPDATE testpub_tbl4 set a = 3;
 DROP TABLE testpub_tbl4;
 -- fail - view
 CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_view;
-ERROR:  cannot add relation "testpub_view" to publication
+ERROR:  cannot add relation "public.testpub_view" to publication
 DETAIL:  This operation is not supported for views.
 CREATE TEMPORARY TABLE testpub_temptbl(a int);
 -- fail - temporary table
 CREATE PUBLICATION testpub_fortemptbl FOR TABLE testpub_temptbl;
-ERROR:  cannot add relation "testpub_temptbl" to publication
+ERROR:  cannot add relation "pg_temp.testpub_temptbl" to publication
 DETAIL:  This operation is not supported for temporary tables.
 DROP TABLE testpub_temptbl;
 CREATE UNLOGGED TABLE testpub_unloggedtbl(a int);
 -- fail - unlogged table
 CREATE PUBLICATION testpub_forunloggedtbl FOR TABLE testpub_unloggedtbl;
-ERROR:  cannot add relation "testpub_unloggedtbl" to publication
+ERROR:  cannot add relation "public.testpub_unloggedtbl" to publication
 DETAIL:  This operation is not supported for unlogged tables.
 DROP TABLE testpub_unloggedtbl;
 -- fail - system table
 CREATE PUBLICATION testpub_forsystemtbl FOR TABLE pg_publication;
-ERROR:  cannot add relation "pg_publication" to publication
+ERROR:  cannot add relation "pg_catalog.pg_publication" to publication
 DETAIL:  This operation is not supported for system tables.
 SET client_min_messages = 'ERROR';
 CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_tbl1, pub_test.testpub_nopk;
@@ -1537,7 +1537,7 @@ Tables:
 
 -- fail - view
 ALTER PUBLICATION testpub_default ADD TABLE testpub_view;
-ERROR:  cannot add relation "testpub_view" to publication
+ERROR:  cannot add relation "public.testpub_view" to publication
 DETAIL:  This operation is not supported for views.
 ALTER PUBLICATION testpub_default ADD TABLE testpub_tbl1;
 ALTER PUBLICATION testpub_default SET TABLE testpub_tbl1;

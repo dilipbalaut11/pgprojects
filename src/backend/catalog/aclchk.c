@@ -3345,7 +3345,7 @@ pg_class_aclmask_ext(Oid table_oid, Oid roleid, AclMode mask,
 	 * themselves.  ACL_USAGE is if we ever have system sequences.
 	 */
 	if ((mask & (ACL_INSERT | ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE | ACL_USAGE)) &&
-		IsSystemClass(table_oid, classForm) &&
+		IsSystemClass(table_oid, classForm) && !IsConflictClass(classForm) &&
 		classForm->relkind != RELKIND_VIEW &&
 		!superuser_arg(roleid))
 		mask &= ~(ACL_INSERT | ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE | ACL_USAGE);

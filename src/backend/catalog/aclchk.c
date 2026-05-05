@@ -3343,12 +3343,20 @@ pg_class_aclmask_ext(Oid table_oid, Oid roleid, AclMode mask,
 	 * As of 7.4 we have some updatable system views; those shouldn't be
 	 * protected in this way.  Assume the view rules can take care of
 	 * themselves.  ACL_USAGE is if we ever have system sequences.
+	 *
+	 * For conflict log tables, we allow non-superusers to perform DELETE
+	 * and TRUNCATE for maintenance, while still restricting INSERT,
+	 * UPDATE, and USAGE.
 	 */
 	if ((mask & (ACL_INSERT | ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE | ACL_USAGE)) &&
-		IsSystemClass(table_oid, classForm) &&
-		classForm->relkind != RELKIND_VIEW &&
+		IsConflictClass(classForm) &&
 		!superuser_arg(roleid))
-		mask &= ~(ACL_INSERT | ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE | ACL_USAGE);
+		mask &= ~(ACL_INSERT | ACL_UPDATE | ACL_USAGE);
+	else if ((mask & (ACL_INSERT | ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE | ACL_USAGE)) &&
+			IsSystemClass(table_oid, classForm) &&
+			classForm->relkind != RELKIND_VIEW &&
+			!superuser_arg(roleid))
+			mask &= ~(ACL_INSERT | ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE | ACL_USAGE);
 
 	/*
 	 * Otherwise, superusers bypass all permission-checking.

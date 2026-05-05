@@ -108,6 +108,13 @@ check_publication_add_relation(PublicationRelInfo *pri)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg(errormsg, get_relation_qualified_name(targetrel)),
 				 errdetail("This operation is not supported for unlogged tables.")));
+
+	/* Can't be conflict log table */
+	if (IsConflictNamespace(RelationGetNamespace(targetrel)))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg(errormsg, get_relation_qualified_name(targetrel)),
+				 errdetail("This operation is not supported for conflict log tables.")));
 }
 
 /*
@@ -118,7 +125,8 @@ static void
 check_publication_add_schema(Oid schemaid)
 {
 	/* Can't be system namespace */
-	if (IsCatalogNamespace(schemaid) || IsToastNamespace(schemaid))
+	if (IsCatalogNamespace(schemaid) || IsToastNamespace(schemaid) ||
+		IsConflictNamespace(schemaid))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("cannot add schema \"%s\" to publication",
@@ -162,6 +170,7 @@ is_publishable_class(Oid relid, Form_pg_class reltuple)
 			reltuple->relkind == RELKIND_PARTITIONED_TABLE ||
 			reltuple->relkind == RELKIND_SEQUENCE) &&
 		!IsCatalogRelationOid(relid) &&
+		!IsConflictClass(reltuple) &&
 		reltuple->relpersistence == RELPERSISTENCE_PERMANENT &&
 		relid >= FirstNormalObjectId;
 }

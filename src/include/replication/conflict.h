@@ -10,6 +10,7 @@
 #define CONFLICT_H
 
 #include "access/xlogdefs.h"
+#include "catalog/pg_type.h"
 #include "datatype/timestamp.h"
 #include "nodes/pg_list.h"
 
@@ -78,6 +79,37 @@ typedef struct ConflictTupleInfo
 	TimestampTz ts;				/* timestamp of when the modification on the
 								 * conflicting local row occurred */
 } ConflictTupleInfo;
+
+/*
+ * Defines where logical replication conflict details are recorded.
+ *
+ * While stored as a text-based array/string in
+ * pg_subscription.subconflictlogdest for user readability and extensibility,
+ * we map these to an internal enum to allow for efficient checks.
+ */
+typedef enum ConflictLogDest
+{
+	CONFLICT_LOG_DEST_LOG = 0,	/* Emit to server logs */
+	CONFLICT_LOG_DEST_TABLE,	/* Insert into the conflict log table */
+	CONFLICT_LOG_DEST_ALL		/* Both log and table */
+} ConflictLogDest;
+
+/*
+ * Array mapping for converting internal enum to string.
+ */
+extern PGDLLIMPORT const char *const ConflictLogDestNames[];
+
+/* Structure to hold metadata for one column of the conflict log table */
+typedef struct ConflictLogColumnDef
+{
+	const char *attname;    /* Column name */
+	Oid         atttypid;   /* Data type OID */
+} ConflictLogColumnDef;
+
+/* The single source of truth for the conflict log table schema */
+extern PGDLLIMPORT const ConflictLogColumnDef ConflictLogSchema[];
+
+#define MAX_CONFLICT_ATTR_NUM 11
 
 extern bool GetTupleTransactionInfo(TupleTableSlot *localslot,
 									TransactionId *xmin,

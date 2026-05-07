@@ -173,8 +173,8 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 	Relation		localrel = relinfo->ri_RelationDesc;
 	ConflictLogDest	dest;
 	Relation		conflictlogrel;
-	bool			log_dest_clt;
-	bool 			log_dest_logfile;
+	bool			log_dest_clt = false;
+	bool 			log_dest_logfile = false;
 
 	pgstat_report_subscription_conflict(MySubscription->oid, type);
 

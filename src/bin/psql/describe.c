@@ -7109,7 +7109,8 @@ describeSubscriptions(const char *pattern, bool verbose)
 
 	printfPQExpBuffer(&buf, "/* %s */\n", _("Get matching subscriptions"));
 	appendPQExpBuffer(&buf,
-					  "SELECT subname AS \"%s\"\n"
+					  "SELECT oid\n"
+					  ",  subname AS \"%s\"\n"
 					  ",  pg_catalog.pg_get_userbyid(subowner) AS \"%s\"\n"
 					  ",  subenabled AS \"%s\"\n"
 					  ",  subpublications AS \"%s\"\n",
@@ -7208,12 +7209,6 @@ describeSubscriptions(const char *pattern, bool verbose)
 			appendPQExpBuffer(&buf,
 							  ", subconflictlogdest AS \"%s\"\n",
 							  gettext_noop("Conflict log destination"));
-
-			appendPQExpBuffer(&buf,
-							  ", (CASE WHEN subconflictlogdest IN ('table', 'all') "
-							  " THEN 'pg_conflict.pg_conflict_log_' || oid "
-							  " ELSE '-' END) AS \"%s\"\n",
-							  gettext_noop("Conflict log table"));
 		}
 	}
 
@@ -7233,19 +7228,103 @@ describeSubscriptions(const char *pattern, bool verbose)
 		return false;
 	}
 
-	appendPQExpBufferStr(&buf, "ORDER BY 1;");
+	appendPQExpBufferStr(&buf, "ORDER BY 2;");
 
 	res = PSQLexec(buf.data);
 	termPQExpBuffer(&buf);
 	if (!res)
 		return false;
 
-	myopt.title = _("List of subscriptions");
-	myopt.translate_header = true;
-	myopt.translate_columns = translate_columns;
-	myopt.n_translate_columns = lengthof(translate_columns);
+	if (PQntuples(res) == 0)
+	{
+		if (!pset.quiet)
+		{
+			if (pattern)
+				pg_log_error("Did not find any subscription named \"%s\".",
+							 pattern);
+			else
+				pg_log_error("Did not find any subscriptions.");
+		}
 
-	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+		PQclear(res);
+		return false;
+	}
+
+	if (!verbose)
+	{
+		myopt.title = _("List of subscriptions");
+		myopt.translate_header = true;
+		myopt.translate_columns = translate_columns;
+		myopt.n_translate_columns = lengthof(translate_columns);
+
+		/*
+		 * If we are not in verbose mode, just print the query results as a
+		 * table.  But first remove the oid column from the result.
+		 */
+		printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+	}
+	else
+	{
+		/*
+		 * If we are in verbose mode, print each subscription's details,
+		 * with a footer for the conflict log table.
+		 */
+		int			i;
+
+		for (i = 0; i < PQntuples(res); i++)
+		{
+			printTableContent cont;
+			printTableOpt opt = pset.popt.topt;
+			int			j;
+			int			ncols = PQnfields(res) - 1;
+			char	   *subid = PQgetvalue(res, i, 0);
+			char	   *subname = PQgetvalue(res, i, 1);
+			PQExpBufferData title;
+
+			initPQExpBuffer(&title);
+			printfPQExpBuffer(&title, _("Subscription %s"), subname);
+
+			printTableInit(&cont, &opt, title.data, ncols, 1);
+
+			for (j = 1; j < PQnfields(res); j++)
+				printTableAddHeader(&cont, PQfname(res, j), true, 'l');
+
+			for (j = 1; j < PQnfields(res); j++)
+				printTableAddCell(&cont, PQgetvalue(res, i, j), false, false);
+
+			/* Conflict log table is supported in v19 and higher */
+			if (pset.sversion >= 190000)
+			{
+				PGresult   *res2;
+				char	   *dest = PQgetvalue(res, i, PQfnumber(res, gettext_noop("Conflict log destination")));
+
+				if (dest && (strcmp(dest, "table") == 0 || strcmp(dest, "all") == 0))
+				{
+					initPQExpBuffer(&buf);
+					printfPQExpBuffer(&buf,
+									  "SELECT 'pg_conflict.pg_conflict_log_' || oid\n"
+									  "FROM pg_catalog.pg_subscription\n"
+									  "WHERE oid = %s", subid);
+					res2 = PSQLexec(buf.data);
+					termPQExpBuffer(&buf);
+
+					if (res2 && PQntuples(res2) > 0)
+					{
+						printTableAddFooter(&cont, _("Conflict log table:"));
+						initPQExpBuffer(&buf);
+						printfPQExpBuffer(&buf, "    \"%s\"", PQgetvalue(res2, 0, 0));
+						printTableAddFooter(&cont, buf.data);
+						termPQExpBuffer(&buf);
+					}
+					PQclear(res2);
+				}
+			}
+
+			printTable(&cont, pset.queryFout, pset.logfile);
+			printTableCleanup(&cont);
+			termPQExpBuffer(&title);
+		}
+	}
 
 	PQclear(res);
 	return true;

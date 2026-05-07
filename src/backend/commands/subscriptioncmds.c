@@ -2718,6 +2718,10 @@ AlterSubscriptionOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 	form->subowner = newOwnerId;
 	CatalogTupleUpdate(rel, &tup->t_self, tup);
 
+	/* Update owner of the conflict log table if it exists */
+	if (OidIsValid(form->subconflictlogrelid))
+		ATExecChangeOwner(form->subconflictlogrelid, newOwnerId, true, AccessExclusiveLock);
+
 	/* Update owner dependency reference */
 	changeDependencyOnOwner(SubscriptionRelationId,
 							form->oid,

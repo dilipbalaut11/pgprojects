@@ -38,6 +38,7 @@
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
 #include "commands/subscriptioncmds.h"
+#include "commands/tablecmds.h"
 #include "executor/executor.h"
 #include "foreign/foreign.h"
 #include "miscadmin.h"
@@ -2718,6 +2719,11 @@ AlterSubscriptionOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 
 	form->subowner = newOwnerId;
 	CatalogTupleUpdate(rel, &tup->t_self, tup);
+
+	/* Update owner of the conflict log table if it exists. */
+	if (OidIsValid(form->subconflictlogrelid))
+		ATExecChangeOwner(form->subconflictlogrelid, newOwnerId, true,
+						  AccessExclusiveLock);
 
 	/* Update owner dependency reference */
 	changeDependencyOnOwner(SubscriptionRelationId,

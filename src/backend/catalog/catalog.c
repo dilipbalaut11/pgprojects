@@ -88,7 +88,7 @@ IsSystemClass(Oid relid, Form_pg_class reltuple)
 	/* IsCatalogRelationOid is a bit faster, so test that first */
 	return (IsCatalogRelationOid(relid) ||
 			IsToastClass(reltuple) ||
-			IsConflictClass(reltuple));
+			IsConflictLogTableClass(reltuple));
 }
 
 /*
@@ -233,11 +233,14 @@ IsToastClass(Form_pg_class reltuple)
 }
 
 /*
- * IsConflictClass - Check if the given pg_class tuple belongs to the conflict
- *					 namespace.
+ * IsConflictLogTableClass
+ *		True iff Form_pg_class tuple represents a subscription-specific
+ *      Conflict Log Table.
+ *
+ *		Does not perform any catalog accesses.
  */
 bool
-IsConflictClass(Form_pg_class reltuple)
+IsConflictLogTableClass(Form_pg_class reltuple)
 {
 	Oid			relnamespace = reltuple->relnamespace;
 

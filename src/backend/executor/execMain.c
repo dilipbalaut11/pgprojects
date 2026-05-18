@@ -1201,7 +1201,7 @@ CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation,
 	if (IsConflictNamespace(RelationGetNamespace(resultRel)) &&
 		operation != CMD_DELETE)
 		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("cannot modify or insert data into conflict log table \"%s\"",
 						RelationGetRelationName(resultRel)),
 				 errdetail("Conflict log tables are system-managed and only support cleanup via DELETE or TRUNCATE.")));
@@ -1279,13 +1279,12 @@ CheckValidRowMarkRel(Relation rel, RowMarkType markType)
 
 	/*
 	 * Conflict log tables are managed by the system to record logical
-	 * replication conflicts.  We do not allow locking rows in CONFLICT
-	 * relations.
+	 * replication conflicts.
 	 */
 	if (IsConflictNamespace(RelationGetNamespace(rel)))
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("cannot lock rows in conflict log table \"%s\"",
+				 errmsg("cannot lock rows in the conflict log table \"%s\"",
 						RelationGetRelationName(rel))));
 }
 

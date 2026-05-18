@@ -2461,7 +2461,7 @@ truncate_check_rel(Oid relid, Form_pg_class reltuple)
 	 * to permit users to manually prune these logs to manage disk space.
 	 */
 	if (!allowSystemTableMods && IsSystemClass(relid, reltuple) &&
-		!IsConflictClass(reltuple)
+		!IsConflictLogTableClass(reltuple)
 		&& (!IsBinaryUpgrade ||
 			(relid != LargeObjectRelationId &&
 			 relid != LargeObjectMetadataRelationId)))

@@ -94,23 +94,18 @@ typedef enum ConflictLogDest
 	CONFLICT_LOG_DEST_ALL		/* Both log and table */
 } ConflictLogDest;
 
+#define CONFLICTS_LOGGED_TO_TABLE(dest) \
+	((dest == CONFLICT_LOG_DEST_TABLE) || (dest == CONFLICT_LOG_DEST_ALL))
+#define CONFLICTS_LOGGED_TO_FILE(dest) \
+	((dest == CONFLICT_LOG_DEST_LOG) || (dest == CONFLICT_LOG_DEST_ALL))
+
 /*
  * Array mapping for converting internal enum to string.
  */
 extern PGDLLIMPORT const char *const ConflictLogDestNames[];
 
-/* Structure to hold metadata for one column of the conflict log table */
-typedef struct ConflictLogColumnDef
-{
-	const char *attname;    /* Column name */
-	Oid         atttypid;   /* Data type OID */
-} ConflictLogColumnDef;
-
-/* The single source of truth for the conflict log table schema */
-extern PGDLLIMPORT const ConflictLogColumnDef ConflictLogSchema[];
-
-#define MAX_CONFLICT_ATTR_NUM 11
-
+extern Oid create_conflict_log_table(Oid subid, char *subname, Oid subowner);
+extern ConflictLogDest GetLogDestination(const char *dest);
 extern bool GetTupleTransactionInfo(TupleTableSlot *localslot,
 									TransactionId *xmin,
 									ReplOriginId *localorigin,

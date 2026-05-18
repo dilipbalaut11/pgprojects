@@ -92,6 +92,13 @@ check_publication_add_relation(PublicationRelInfo *pri)
 				 errmsg(errormsg, relname),
 				 errdetail("This operation is not supported for system tables.")));
 
+	/* Can't be conflict log table */
+	if (IsConflictNamespace(RelationGetNamespace(targetrel)))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg(errormsg, relname),
+				 errdetail("This operation is not supported for conflict log tables.")));
+
 	/* UNLOGGED and TEMP relations cannot be part of publication. */
 	if (targetrel->rd_rel->relpersistence == RELPERSISTENCE_TEMP)
 		ereport(ERROR,
@@ -103,13 +110,6 @@ check_publication_add_relation(PublicationRelInfo *pri)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg(errormsg, relname),
 				 errdetail("This operation is not supported for unlogged tables.")));
-
-	/* Can't be conflict log table */
-	if (IsConflictNamespace(RelationGetNamespace(targetrel)))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg(errormsg, relname),
-				 errdetail("This operation is not supported for conflict log tables.")));
 }
 
 /*
@@ -165,7 +165,7 @@ is_publishable_class(Oid relid, Form_pg_class reltuple)
 			reltuple->relkind == RELKIND_PARTITIONED_TABLE ||
 			reltuple->relkind == RELKIND_SEQUENCE) &&
 		!IsCatalogRelationOid(relid) &&
-		!IsConflictClass(reltuple) &&
+		!IsConflictLogTableClass(reltuple) &&
 		reltuple->relpersistence == RELPERSISTENCE_PERMANENT &&
 		relid >= FirstNormalObjectId;
 }

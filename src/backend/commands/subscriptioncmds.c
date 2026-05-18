@@ -21,12 +21,10 @@
 #include "access/xact.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
-#include "catalog/heap.h"
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
 #include "catalog/objectaddress.h"
-#include "catalog/pg_am_d.h"
 #include "catalog/pg_authid_d.h"
 #include "catalog/pg_database_d.h"
 #include "catalog/pg_foreign_server.h"
@@ -146,7 +144,11 @@ static List *merge_publications(List *oldpublist, List *newpublist, bool addpub,
 static void ReportSlotConnectionError(List *rstates, Oid subid, char *slotname, char *err);
 static void CheckAlterSubOption(Subscription *sub, const char *option,
 								bool slot_needs_update, bool isTopLevel);
-static Oid create_conflict_log_table(Oid subid, char *subname, Oid subowner);
+static bool alter_sub_conflictlogdestination(Subscription *sub,
+											 ConflictLogDest logdest,
+											 Oid *conflicttablerelid);
+static void drop_sub_dependencies(Oid subid, char *subname,
+								  Oid subconflictlogrelid);
 
 /*
  * Common option parsing function for CREATE and ALTER SUBSCRIPTION commands.
@@ -839,13 +841,15 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	values[Anum_pg_subscription_suborigin - 1] =
 		CStringGetTextDatum(opts.origin);
 
-	/* Always set the destination, default will be 'log'. */
 	values[Anum_pg_subscription_subconflictlogdest - 1] =
 		CStringGetTextDatum(ConflictLogDestNames[opts.conflictlogdest]);
 
-	/* If logging to a table is required, physically create the table. */
-	if (opts.conflictlogdest == CONFLICT_LOG_DEST_TABLE ||
-		opts.conflictlogdest == CONFLICT_LOG_DEST_ALL)
+	/*
+	 * If logging to a table is required, physically create it now. We create
+	 * the conflict log table here so its relation OID can be stored when
+	 * inserting the pg_subscription tuple below.
+	 */
+	if (CONFLICTS_LOGGED_TO_TABLE(opts.conflictlogdest))
 		logrelid = create_conflict_log_table(subid, stmt->subname, owner);
 
 	/* Store table OID in the catalog. */
@@ -870,6 +874,25 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 
 		ObjectAddressSet(referenced, ForeignServerRelationId, serverid);
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+	}
+
+	/*
+	 * If conflicts are logs to table establish an internal dependency
+	 * between the conflict log table and the subscription.
+	 *
+	 * We use DEPENDENCY_INTERNAL to signify that the table's lifecycle is
+	 * strictly tied to the subscription, similar to how a TOAST table relates
+	 * to its main table or a sequence relates to an identity column.
+	 *
+	 * This ensures the conflict log table is automatically reaped during a
+	 * DROP SUBSCRIPTION via performDeletion().
+	 */
+	if (CONFLICTS_LOGGED_TO_TABLE(opts.conflictlogdest))
+	{
+		ObjectAddress clt;
+
+		ObjectAddressSet(clt, RelationRelationId, logrelid);
+		recordDependencyOn(&clt, &myself, DEPENDENCY_INTERNAL);
 	}
 
 	/*
@@ -1442,6 +1465,70 @@ CheckAlterSubOption(Subscription *sub, const char *option,
 }
 
 /*
+ * alter_sub_conflictlogdestination
+ *
+ * When the subscription's 'conflict_log_destination' is changed, update the
+ * conflict log table if required.
+ *
+ * If the new destination no longer requires a conflict log table, the existing
+ * conflict log table associated with the subscription is removed via internal
+ * dependency cleanup to prevent orphaned relations.
+ *
+ * On success, *conflicttablerelid is set to the OID of the conflict log table
+ * that was created or validated, or to InvalidOid if no table is required.
+ *
+ * Returns true if the subscription's conflict log table reference must be
+ * updated as a result of the destination change; false otherwise.
+ */
+static bool
+alter_sub_conflictlogdestination(Subscription *sub, ConflictLogDest logdest,
+								 Oid *conflicttablerelid)
+{
+	ConflictLogDest old_dest = GetLogDestination(sub->conflictlogdest);
+	bool		want_table;
+	bool		has_oldtable;
+	bool		update_relid = false;
+	Oid			relid = InvalidOid;
+
+	want_table = CONFLICTS_LOGGED_TO_TABLE(logdest);
+	has_oldtable = CONFLICTS_LOGGED_TO_TABLE(old_dest);
+
+	if (has_oldtable)
+	{
+		/* There is a conflict log table already. */
+		if (!want_table)
+		{
+			drop_sub_dependencies(sub->oid, sub->name, sub->conflictlogrelid);
+			update_relid = true;
+		}
+	}
+	else
+	{
+		/* There was no previous conflict log table. */
+		if (want_table)
+		{
+			ObjectAddress clt;
+			ObjectAddress subobj;
+
+			relid = create_conflict_log_table(sub->oid, sub->name, sub->owner);
+			update_relid = true;
+
+			/*
+			 * Establish an internal dependency between the conflict log table
+			 * and the subscription.  For details refer comments in
+			 * CreateSubscription function.
+			 */
+			ObjectAddressSet(clt, RelationRelationId, relid);
+			ObjectAddressSet(subobj, SubscriptionRelationId, sub->oid);
+			recordDependencyOn(&clt, &subobj, DEPENDENCY_INTERNAL);
+		}
+	}
+
+	*conflicttablerelid = relid;
+	return update_relid;
+}
+
+/*
  * Alter the existing subscription.
  */
 ObjectAddress
@@ -1806,53 +1893,22 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 
 					if (opts.conflictlogdest != old_dest)
 					{
-						bool want_table = (opts.conflictlogdest == CONFLICT_LOG_DEST_TABLE ||
-										   opts.conflictlogdest == CONFLICT_LOG_DEST_ALL);
-						bool has_oldtable = (old_dest == CONFLICT_LOG_DEST_TABLE ||
-											 old_dest == CONFLICT_LOG_DEST_ALL);
+						bool		update_relid;
+						Oid			relid = InvalidOid;
 
 						values[Anum_pg_subscription_subconflictlogdest - 1] =
 							CStringGetTextDatum(ConflictLogDestNames[opts.conflictlogdest]);
 						replaces[Anum_pg_subscription_subconflictlogdest - 1] = true;
 
-						if (want_table && !has_oldtable)
+						update_relid = alter_sub_conflictlogdestination(sub,
+																		opts.conflictlogdest,
+																		&relid);
+						if (update_relid)
 						{
-							Oid		relid;
-
-							relid = create_conflict_log_table(subid, sub->name,
-															  sub->owner);
-
 							values[Anum_pg_subscription_subconflictlogrelid - 1] =
 														ObjectIdGetDatum(relid);
 							replaces[Anum_pg_subscription_subconflictlogrelid - 1] =
 														true;
-						}
-						else if (!want_table && has_oldtable)
-						{
-							ObjectAddress object;
-
-							/*
-							 * Conflict log tables are recorded as internal
-							 * dependencies of the subscription.  Drop the
-							 * table if it is not required anymore to avoid
-							 * stale or orphaned relations.
-							 *
-							 * XXX: At present, only conflict log tables are
-							 * managed this way.  In future if we introduce
-							 * additional internal dependencies, we may need
-							 * a targeted deletion to avoid deletion of any
-							 * other objects.
-							 */
-							ObjectAddressSet(object, SubscriptionRelationId,
-											 subid);
-							performDeletion(&object, DROP_CASCADE,
-											PERFORM_DELETION_INTERNAL |
-											PERFORM_DELETION_SKIP_ORIGINAL);
-
-							values[Anum_pg_subscription_subconflictlogrelid - 1] =
-												ObjectIdGetDatum(InvalidOid);
-							replaces[Anum_pg_subscription_subconflictlogrelid - 1] =
-												true;
 						}
 					}
 				}
@@ -2273,6 +2329,49 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 }
 
 /*
+ * drop_sub_dependencies
+ *
+ * The conflict log table is registered as an internal dependency of the
+ * subscription. This function removes the dependency by performing a
+ * cascading deletion on the subscription object, which in turn drops the
+ * associated conflict log table.
+ *
+ * This is used to clean up conflict log tables that are no longer required,
+ * preventing accumulation of stale or orphaned relations.
+ *
+ * NOTE:
+ * Only conflict log tables are currently managed via this internal dependency
+ * mechanism.
+ */
+static void
+drop_sub_dependencies(Oid subid, char *subname, Oid subconflictlogrelid)
+{
+	/* Drop any dependent conflict log table */
+	if (OidIsValid(subconflictlogrelid))
+	{
+		ObjectAddress object;
+		char 		 *conflictrelname;
+
+		conflictrelname = get_rel_name(subconflictlogrelid);
+		Assert(conflictrelname);
+
+		/*
+		 * By using PERFORM_DELETION_SKIP_ORIGINAL, we ensure that only the
+		 * conflict log table is deleted while the subscription remains.
+		 */
+		ObjectAddressSet(object, SubscriptionRelationId, subid);
+		performDeletion(&object, DROP_CASCADE,
+						PERFORM_DELETION_INTERNAL |
+						PERFORM_DELETION_SKIP_ORIGINAL);
+
+		ereport(NOTICE,
+				errmsg("dropped conflict log table \"%s\" for subscription \"%s\"",
+						get_qualified_objname(PG_CONFLICT_NAMESPACE, conflictrelname),
+						subname));
+	}
+}
+
+/*
  * Drop a subscription
  */
 void
@@ -2283,6 +2382,7 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	HeapTuple	tup;
 	Oid			subid;
 	Oid			subowner;
+	Oid			subconflictlogrelid;
 	Datum		datum;
 	bool		isnull;
 	char	   *subname;
@@ -2296,7 +2396,6 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	Form_pg_subscription form;
 	List	   *rstates;
 	bool		must_use_password;
-	ObjectAddress	object;
 
 	/*
 	 * The launcher may concurrently start a new worker for this subscription.
@@ -2329,6 +2428,7 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	form = (Form_pg_subscription) GETSTRUCT(tup);
 	subid = form->oid;
 	subowner = form->subowner;
+	subconflictlogrelid = form->subconflictlogrelid;
 	must_use_password = !superuser_arg(subowner) && form->subpasswordrequired;
 
 	/* must be owner */
@@ -2483,18 +2583,7 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	deleteDependencyRecordsFor(SubscriptionRelationId, subid, false);
 	deleteSharedDependencyRecordsFor(SubscriptionRelationId, subid, 0);
 
-	/*
-	 * Conflict log tables are recorded as internal dependencies of the
-	 * subscription.  We must drop the dependent objects before the
-	 * subscription itself is removed.  By using
-	 * PERFORM_DELETION_SKIP_ORIGINAL, we ensure that only the conflict log
-	 * table is reaped while the subscription remains for the final deletion
-	 * step.
-	 */
-	ObjectAddressSet(object, SubscriptionRelationId, subid);
-	performDeletion(&object, DROP_CASCADE,
-					PERFORM_DELETION_INTERNAL |
-					PERFORM_DELETION_SKIP_ORIGINAL);
+	drop_sub_dependencies(subid, subname, subconflictlogrelid);
 
 	/* Remove any associated relation synchronization states. */
 	RemoveSubscriptionRel(subid, InvalidOid);
@@ -3539,147 +3628,4 @@ defGetStreamingMode(DefElem *def)
 			 errmsg("%s requires a Boolean value or \"parallel\"",
 					def->defname)));
 	return LOGICALREP_STREAM_OFF;	/* keep compiler quiet */
-}
-
-/*
- * Builds the TupleDesc for the conflict log table.
- */
-static TupleDesc
-create_conflict_log_table_tupdesc(void)
-{
-	TupleDesc	tupdesc;
-
-	tupdesc = CreateTemplateTupleDesc(MAX_CONFLICT_ATTR_NUM);
-
-	for (int i = 0; i < MAX_CONFLICT_ATTR_NUM; i++)
-	{
-		Oid type_oid = ConflictLogSchema[i].atttypid;
-
-		/*
-		 * Special handling for the JSON array type for proper
-		 * TupleDescInitEntry call.
-		 */
-		if (type_oid == JSONARRAYOID)
-			type_oid = get_array_type(JSONOID);
-
-		TupleDescInitEntry(tupdesc, i + 1,
-						   ConflictLogSchema[i].attname,
-						   type_oid,
-						   -1, 0);
-	}
-
-	TupleDescFinalize(tupdesc);
-
-	return tupdesc;
-}
-
-/*
- * Create a structured conflict log table for a subscription.
- *
- * The table is created within the system-managed 'pg_conflict' namespace to
- * prevent users from manually dropping or altering it.  This also prevents
- * accidental name collisions with user-created tables with the same name.
- *
- * The table name is generated automatically using the subscription's OID
- * (e.g., "pg_conflict_log_<subid>") to ensure uniqueness within the cluster
- * and to avoid collisions during subscription renames.
- */
-static Oid
-create_conflict_log_table(Oid subid, char *subname, Oid subowner)
-{
-	TupleDesc	tupdesc;
-	Oid			relid;
-	ObjectAddress	myself;
-	ObjectAddress	subaddr;
-	char    	relname[NAMEDATALEN];
-
-	snprintf(relname, NAMEDATALEN, "pg_conflict_log_%u", subid);
-
-	/*
-	 * Check for an existing table with the sname name in the pg_conflict namespace.
-	 * A collision should not occur under normal operation, but we must handle cases
-	 * where a table has been created manually.
-	 */
-	if (OidIsValid(get_relname_relid(relname, PG_CONFLICT_NAMESPACE)))
-		ereport(ERROR,
-				(errcode(ERRCODE_DUPLICATE_TABLE),
-				 errmsg("conflict log table pg_conflict.\"%s\" already exists", relname),
-				 errhint("A table with the same name already exists. "
-						 "To proceed, drop the existing table and retry.")));
-
-	/* Build the tuple descriptor for the new table. */
-	tupdesc = create_conflict_log_table_tupdesc();
-
-	/* Create conflict log table. */
-	relid = heap_create_with_catalog(relname,
-									 PG_CONFLICT_NAMESPACE,
-									 0,	/* tablespace */
-									 InvalidOid, /* relid */
-									 InvalidOid, /* reltypeid */
-									 InvalidOid, /* reloftypeid */
-									 subowner,
-									 HEAP_TABLE_AM_OID,
-									 tupdesc,
-									 NIL,
-									 RELKIND_RELATION,
-									 RELPERSISTENCE_PERMANENT,
-									 false, /* shared_relation */
-									 false, /* mapped_relation */
-									 ONCOMMIT_NOOP,
-									 (Datum) 0, /* reloptions */
-									 false, /* use_user_acl */
-									 true, /* allow_system_table_mods */
-									 true, /* is_internal */
-									 InvalidOid, /* relrewrite */
-									 NULL); /* typaddress */
-
-	/*
-	 * Establish an internal dependency between the conflict log table and
-	 * the subscription.
-	 *
-	 * We use DEPENDENCY_INTERNAL to signify that the table's lifecycle is
-	 * strictly tied to the subscription, similar to how a TOAST table relates
-	 * to its main table or a sequence relates to an identity column.
-	 *
-	 * This ensures the conflict log table is automatically reaped during a
-	 * DROP SUBSCRIPTION via performDeletion().
-	 */
-	ObjectAddressSet(myself, RelationRelationId, relid);
-	ObjectAddressSet(subaddr, SubscriptionRelationId, subid);
-	recordDependencyOn(&myself, &subaddr, DEPENDENCY_INTERNAL);
-
-	/* Release tuple descriptor memory. */
-	FreeTupleDesc(tupdesc);
-
-	ereport(NOTICE,
-			(errmsg("created conflict log table \"%s\" for subscription \"%s\"",
-					get_qualified_objname(PG_CONFLICT_NAMESPACE, relname),
-					subname)));
-
-	return relid;
-}
-
-/*
- * GetLogDestination
- *
- * Convert string to enum by comparing against standardized labels.
- */
-ConflictLogDest
-GetLogDestination(const char *dest)
-{
-	/* Empty string or NULL defaults to LOG. */
-	if (dest == NULL || dest[0] == '\0' || pg_strcasecmp(dest, "log") == 0)
-		return CONFLICT_LOG_DEST_LOG;
-
-	if (pg_strcasecmp(dest, "table") == 0)
-		return CONFLICT_LOG_DEST_TABLE;
-
-	if (pg_strcasecmp(dest, "all") == 0)
-		return CONFLICT_LOG_DEST_ALL;
-
-	/* Unrecognized string. */
-	ereport(ERROR,
-			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-			 errmsg("unrecognized conflict_log_destination value: \"%s\"", dest),
-			 errhint("Valid values are \"log\", \"table\", and \"all\".")));
 }

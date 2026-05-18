@@ -25,7 +25,7 @@ extern bool IsInplaceUpdateRelation(Relation relation);
 
 extern bool IsSystemClass(Oid relid, Form_pg_class reltuple);
 extern bool IsToastClass(Form_pg_class reltuple);
-extern bool IsConflictClass(Form_pg_class reltuple);
+extern bool IsConflictLogTableClass(Form_pg_class reltuple);
 
 extern bool IsCatalogRelationOid(Oid relid);
 extern bool IsCatalogTextUniqueIndexOid(Oid relid);

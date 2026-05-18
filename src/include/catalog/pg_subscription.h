@@ -97,6 +97,14 @@ CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROW
 
 	Oid         subconflictlogrelid; /* Relid of the conflict log table. */
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
+	/*
+	 * Strategy for logging replication conflicts:
+	 * 'log' - server log only,
+	 * 'table' - conflict log table only,
+	 * 'all' - both log and table.
+	 */
+	text		subconflictlogdest BKI_FORCE_NOT_NULL;
+
 	/* Connection string to the publisher */
 	text		subconninfo;	/* Set if connecting with connection string */
 
@@ -111,14 +119,6 @@ CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROW
 
 	/* List of publications subscribed to */
 	text		subpublications[1] BKI_FORCE_NOT_NULL;
-
-	/*
-	 * Strategy for logging replication conflicts:
-	 * 'log' - server log only,
-	 * 'table' - conflict log table only,
-	 * 'all' - both log and table.
-	 */
-	text		subconflictlogdest BKI_FORCE_NOT_NULL;
 
 	/* Only publish data originating from the specified origin */
 	text		suborigin BKI_DEFAULT(LOGICALREP_ORIGIN_ANY);

@@ -115,6 +115,7 @@ extern void ReportApplyConflict(EState *estate, ResultRelInfo *relinfo,
 								TupleTableSlot *searchslot,
 								TupleTableSlot *remoteslot,
 								List *conflicttuples);
+extern void ProcessPendingConflictLogTuple(void);
 extern void InitConflictIndexes(ResultRelInfo *relInfo);
 extern Relation GetConflictLogDestAndTable(ConflictLogDest *log_dest);
 extern void InsertConflictLogTuple(Relation conflictlogrel);

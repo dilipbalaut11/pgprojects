@@ -85,11 +85,11 @@ $node_subscriber->wait_for_log(
 	$log_offset);
 
 # Verify the contents of the Conflict Log Table (CLT)
-# This section ensures that the clt contains the expected
+# This section ensures that the CLT contains the expected
 # type and specific key data.
 my $subid = $node_subscriber->safe_psql('postgres',
 	"SELECT oid FROM pg_subscription WHERE subname = 'sub_tab';");
-my $clt = "pg_conflict.pg_conflict_log_$subid";
+my $clt = "pg_conflict.pg_conflict_log_for_subid_$subid";
 
 # Wait for the conflict to be logged in the CLT
 my $log_check = $node_subscriber->poll_query_until(

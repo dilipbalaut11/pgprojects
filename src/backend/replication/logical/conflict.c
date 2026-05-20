@@ -32,10 +32,8 @@
 #include "storage/lmgr.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
-#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/pg_lsn.h"
-#include "utils/json.h"
 
 /*
  * String representations for the supported conflict logging destinations.
@@ -48,7 +46,6 @@ const char *const ConflictLogDestNames[] = {
 
 StaticAssertDecl(lengthof(ConflictLogDestNames) == 3,
 				 "ConflictLogDestNames length mismatch");
-
 
 /* Structure to hold metadata for one column of the conflict log table */
 typedef struct ConflictLogColumnDef
@@ -81,17 +78,6 @@ static const ConflictLogColumnDef ConflictLogSchema[] = {
 
 #define NUM_CONFLICT_ATTRS lengthof(ConflictLogSchema)
 
-static const char *const ConflictTypeNames[] = {
-	[CT_INSERT_EXISTS] = "insert_exists",
-	[CT_UPDATE_ORIGIN_DIFFERS] = "update_origin_differs",
-	[CT_UPDATE_EXISTS] = "update_exists",
-	[CT_UPDATE_MISSING] = "update_missing",
-	[CT_DELETE_ORIGIN_DIFFERS] = "delete_origin_differs",
-	[CT_UPDATE_DELETED] = "update_deleted",
-	[CT_DELETE_MISSING] = "delete_missing",
-	[CT_MULTIPLE_UNIQUE_CONFLICTS] = "multiple_unique_conflicts"
-};
-
 /* Schema for the elements within the 'local_conflicts' JSON array */
 static const ConflictLogColumnDef LocalConflictSchema[] =
 {
@@ -102,7 +88,18 @@ static const ConflictLogColumnDef LocalConflictSchema[] =
 	{ .attname = "tuple",     .atttypid = JSONOID }
 };
 
-#define MAX_LOCAL_CONFLICT_INFO_ATTRS lengthof(LocalConflictSchema)
+#define NUM_LOCAL_CONFLICT_ATTRS lengthof(LocalConflictSchema)
+
+static const char *const ConflictTypeNames[] = {
+	[CT_INSERT_EXISTS] = "insert_exists",
+	[CT_UPDATE_ORIGIN_DIFFERS] = "update_origin_differs",
+	[CT_UPDATE_EXISTS] = "update_exists",
+	[CT_UPDATE_MISSING] = "update_missing",
+	[CT_DELETE_ORIGIN_DIFFERS] = "delete_origin_differs",
+	[CT_UPDATE_DELETED] = "update_deleted",
+	[CT_DELETE_MISSING] = "delete_missing",
+	[CT_MULTIPLE_UNIQUE_CONFLICTS] = "multiple_unique_conflicts"
+};
 
 static int	errcode_apply_conflict(ConflictType type);
 static void errdetail_apply_conflict(EState *estate,
@@ -324,7 +321,7 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 	Relation		localrel = relinfo->ri_RelationDesc;
 	ConflictLogDest	dest;
 	Relation		conflictlogrel;
-	bool			log_dest_clt = false;
+	bool			log_dest_table;
 	bool 			log_dest_logfile;
 
 	pgstat_report_subscription_conflict(MySubscription->oid, type);
@@ -335,13 +332,11 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 	 */
 	conflictlogrel = GetConflictLogDestAndTable(&dest);
 
-	if (dest == CONFLICT_LOG_DEST_TABLE || dest == CONFLICT_LOG_DEST_ALL)
-		log_dest_clt = true;
-	if (dest == CONFLICT_LOG_DEST_LOG || dest == CONFLICT_LOG_DEST_ALL)
-		log_dest_logfile = true;
+	log_dest_table = CONFLICTS_LOGGED_TO_TABLE(dest);
+	log_dest_logfile = CONFLICTS_LOGGED_TO_LOG(dest);
 
 	/* Insert to table if requested. */
-	if (log_dest_clt)
+	if (log_dest_table)
 	{
 		Assert(conflictlogrel != NULL);
 
@@ -370,9 +365,8 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 			 */
 			ereport(elevel,
 					errcode_apply_conflict(type),
-					errmsg("conflict detected on relation \"%s.%s\": conflict=%s",
-						get_namespace_name(RelationGetNamespace(localrel)),
-						RelationGetRelationName(localrel),
+					errmsg("conflict detected on relation \"%s\": conflict=%s",
+						RelationGetQualifiedRelationName(localrel),
 						ConflictTypeNames[type]),
 					errdetail("Conflict details are logged to the conflict log table: %s",
 							  RelationGetRelationName(conflictlogrel)));
@@ -401,12 +395,52 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 		/* Standard reporting with full internal details. */
 		ereport(elevel,
 				errcode_apply_conflict(type),
-				errmsg("conflict detected on relation \"%s.%s\": conflict=%s",
-					   get_namespace_name(RelationGetNamespace(localrel)),
-					   RelationGetRelationName(localrel),
+				errmsg("conflict detected on relation \"%s\": conflict=%s",
+					   RelationGetQualifiedRelationName(localrel),
 					   ConflictTypeNames[type]),
 				errdetail_internal("%s", err_detail.data));
 	}
+}
+
+/*
+ * ProcessPendingConflictLogTuple
+ *      Insert any deferred conflict log tuple in a separate transaction.
+ *
+ * For conflicts raised at ERROR level, the conflict log tuple cannot be
+ * inserted immediately because the surrounding transaction will abort.
+ * To ensure that conflict information is not lost, such tuples are prepared
+ * during error processing (see prepare_conflict_log_tuple()) but their
+ * insertion is deferred.
+ *
+ * This function is responsible for completing that deferred insertion after
+ * the failing transaction has been aborted and the system has returned to an
+ * idle state.  It executes the insertion in a new, independent transaction,
+ * ensuring that the conflict log entry is durable and not rolled back
+ * together with the failed apply transaction.
+ */
+void
+ProcessPendingConflictLogTuple(void)
+{
+	Relation	conflictlogrel;
+	ConflictLogDest dest;
+
+	/* Nothing to do */
+	if (MyLogicalRepWorker->conflict_log_tuple == NULL)
+		return;
+
+	StartTransactionCommand();
+	PushActiveSnapshot(GetTransactionSnapshot());
+
+	/* Open conflict log table and insert the tuple */
+	conflictlogrel = GetConflictLogDestAndTable(&dest);
+	Assert(conflictlogrel);
+
+	InsertConflictLogTuple(conflictlogrel);
+
+	table_close(conflictlogrel, RowExclusiveLock);
+
+	PopActiveSnapshot();
+	CommitTransactionCommand();
 }
 
 /*
@@ -456,10 +490,10 @@ GetConflictLogDestAndTable(ConflictLogDest *log_dest)
 	 * Convert the text log destination to the internal enum.  MySubscription
 	 * already contains the data from pg_subscription.
 	 */
-	*log_dest = GetLogDestination(MySubscription->conflictlogdest);
+	*log_dest = GetConflictLogDest(MySubscription->conflictlogdest);
 
 	/* Quick exit if a conflict log table was not requested. */
-	if (*log_dest == CONFLICT_LOG_DEST_LOG)
+	if (!CONFLICTS_LOGGED_TO_TABLE(*log_dest))
 		return NULL;
 
 	conflictlogrelid = MySubscription->conflictlogrelid;
@@ -479,13 +513,11 @@ GetConflictLogDestAndTable(ConflictLogDest *log_dest)
 void
 InsertConflictLogTuple(Relation conflictlogrel)
 {
-	int			options = HEAP_INSERT_NO_LOGICAL;
-
 	/* A valid tuple must be prepared and stored in MyLogicalRepWorker. */
 	Assert(MyLogicalRepWorker->conflict_log_tuple != NULL);
 
 	heap_insert(conflictlogrel, MyLogicalRepWorker->conflict_log_tuple,
-				GetCurrentCommandId(true), options, NULL);
+				GetCurrentCommandId(true), HEAP_INSERT_NO_LOGICAL, NULL);
 
 	/* Free conflict log tuple. */
 	heap_freetuple(MyLogicalRepWorker->conflict_log_tuple);
@@ -1040,7 +1072,7 @@ tuple_table_slot_to_indextup_json(EState *estate, Relation localrel,
 
 	build_index_datums_from_slot(estate, localrel, slot, indexDesc, values,
 								 isnull);
-	tupdesc = RelationGetDescr(indexDesc);
+	tupdesc = CreateTupleDescCopy(RelationGetDescr(indexDesc));
 
 	/* Bless the tupdesc so it can be looked up by row_to_json. */
 	BlessTupleDesc(tupdesc);
@@ -1049,8 +1081,9 @@ tuple_table_slot_to_indextup_json(EState *estate, Relation localrel,
 	tuple = heap_form_tuple(tupdesc, values, isnull);
 	datum = heap_copy_tuple_as_datum(tuple, tupdesc);
 
-	index_close(indexDesc, NoLock);
 	heap_freetuple(tuple);
+	FreeTupleDesc(tupdesc);
+	index_close(indexDesc, NoLock);
 
 	/* Convert to a JSON datum. */
 	return DirectFunctionCall1(row_to_json, datum);
@@ -1059,26 +1092,41 @@ tuple_table_slot_to_indextup_json(EState *estate, Relation localrel,
 /*
  * build_conflict_tupledesc
  *
- * Build and bless a tuple descriptor for the internal conflict log table
- * based on the predefined LocalConflictSchema.
+ * Build and bless a tuple descriptor for the conflict log table based on the
+ * predefined LocalConflictSchema.
  */
 static TupleDesc
 build_conflict_tupledesc(void)
 {
-	TupleDesc   tupdesc;
+	static TupleDesc cached_tupdesc = NULL;
 
-	tupdesc = CreateTemplateTupleDesc(MAX_LOCAL_CONFLICT_INFO_ATTRS);
+	if (cached_tupdesc == NULL)
+	{
+		MemoryContext oldcxt;
 
-	for (int i = 0; i < MAX_LOCAL_CONFLICT_INFO_ATTRS; i++)
-		TupleDescInitEntry(tupdesc, (AttrNumber) (i + 1),
-						   LocalConflictSchema[i].attname,
-						   LocalConflictSchema[i].atttypid,
-						   -1, 0);
+		oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
 
-	TupleDescFinalize(tupdesc);
-	BlessTupleDesc(tupdesc);
+		cached_tupdesc = CreateTemplateTupleDesc(NUM_LOCAL_CONFLICT_ATTRS);
 
-	return tupdesc;
+		for (int i = 0; i < NUM_LOCAL_CONFLICT_ATTRS; i++)
+			TupleDescInitEntry(cached_tupdesc,
+							   (AttrNumber) (i + 1),
+							   LocalConflictSchema[i].attname,
+							   LocalConflictSchema[i].atttypid,
+							   -1, 0);
+
+		TupleDescFinalize(cached_tupdesc);
+
+		/*
+		 * Bless once so it can be used as a RECORD type (e.g. for
+		 * row_to_json or other record-based operations).
+		 */
+		BlessTupleDesc(cached_tupdesc);
+
+		MemoryContextSwitchTo(oldcxt);
+	}
+
+	return cached_tupdesc;
 }
 
 /*
@@ -1110,8 +1158,8 @@ build_local_conflicts_json_array(EState *estate, Relation rel,
 	/* Process local conflict tuple list and prepare an array of JSON. */
 	foreach_ptr(ConflictTupleInfo, conflicttuple, conflicttuples)
 	{
-		Datum		values[MAX_LOCAL_CONFLICT_INFO_ATTRS] = {0};
-		bool		nulls[MAX_LOCAL_CONFLICT_INFO_ATTRS] = {0};
+		Datum		values[NUM_LOCAL_CONFLICT_ATTRS] = {0};
+		bool		nulls[NUM_LOCAL_CONFLICT_ATTRS] = {0};
 		char	   *origin_name = NULL;
 		HeapTuple	tuple;
 		Datum		json_datum;
@@ -1161,7 +1209,7 @@ build_local_conflicts_json_array(EState *estate, Relation rel,
 		else
 			nulls[attno] = true;
 
-		Assert(attno + 1 == MAX_LOCAL_CONFLICT_INFO_ATTRS);
+		Assert(attno + 1 == NUM_LOCAL_CONFLICT_ATTRS);
 
 		tuple = heap_form_tuple(tupdesc, values, nulls);
 
@@ -1220,8 +1268,8 @@ prepare_conflict_log_tuple(EState *estate, Relation rel,
 						   List *conflicttuples,
 						   TupleTableSlot *remoteslot)
 {
-	Datum		values[MAX_CONFLICT_ATTR_NUM] = {0};
-	bool		nulls[MAX_CONFLICT_ATTR_NUM] = {0};
+	Datum		values[NUM_CONFLICT_ATTRS] = {0};
+	bool		nulls[NUM_CONFLICT_ATTRS] = {0};
 	int			attno;
 	char	   *remote_origin = NULL;
 	MemoryContext	oldctx;
@@ -1259,6 +1307,11 @@ prepare_conflict_log_tuple(EState *estate, Relation rel,
 	else
 		nulls[attno++] = true;
 
+	if (!TupIsNull(remoteslot))
+		values[attno++] = tuple_table_slot_to_json_datum(remoteslot);
+	else
+		nulls[attno++] = true;
+
 	if (!TupIsNull(searchslot))
 	{
 		Oid		replica_index = GetRelationIdentityOrPK(rel);
@@ -1278,16 +1331,11 @@ prepare_conflict_log_tuple(EState *estate, Relation rel,
 	else
 		nulls[attno++] = true;
 
-	if (!TupIsNull(remoteslot))
-		values[attno++] = tuple_table_slot_to_json_datum(remoteslot);
-	else
-		nulls[attno++] = true;
-
 	values[attno] = build_local_conflicts_json_array(estate, rel,
 													 conflict_type,
 													 conflicttuples);
 
-	Assert(attno + 1 == MAX_CONFLICT_ATTR_NUM);
+	Assert(attno + 1 == NUM_CONFLICT_ATTRS);
 
 	oldctx = MemoryContextSwitchTo(ApplyContext);
 	MyLogicalRepWorker->conflict_log_tuple =

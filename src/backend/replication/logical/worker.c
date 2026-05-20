@@ -1766,14 +1766,14 @@ apply_handle_stream_start(StringInfo s)
 	/* extract XID of the top-level transaction */
 	stream_xid = logicalrep_read_stream_start(s, &first_segment);
 
-	remote_xid = stream_xid;
-	remote_final_lsn = InvalidXLogRecPtr;
-	remote_commit_ts = 0;
-
 	if (!TransactionIdIsValid(stream_xid))
 		ereport(ERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
 				 errmsg_internal("invalid transaction ID in streamed replication transaction")));
+
+	remote_xid = stream_xid;
+	remote_final_lsn = InvalidXLogRecPtr;
+	remote_commit_ts = 0;
 
 	set_apply_error_context_xact(stream_xid, InvalidXLogRecPtr);
 
@@ -5674,27 +5674,7 @@ start_apply(XLogRecPtr origin_startpos)
 			 */
 			AbortOutOfAnyTransaction();
 			pgstat_report_subscription_error(MySubscription->oid);
-
-			/*
-			 * Insert any pending conflict log tuple under a new transaction.
-			 */
-			if (MyLogicalRepWorker->conflict_log_tuple != NULL)
-			{
-				Relation	conflictlogrel;
-				ConflictLogDest	dest;
-
-				StartTransactionCommand();
-				PushActiveSnapshot(GetTransactionSnapshot());
-
-				/* Open conflict log table and insert the tuple. */
-				conflictlogrel = GetConflictLogDestAndTable(&dest);
-				Assert(dest != CONFLICT_LOG_DEST_LOG);
-				InsertConflictLogTuple(conflictlogrel);
-				table_close(conflictlogrel, RowExclusiveLock);
-
-				PopActiveSnapshot();
-				CommitTransactionCommand();
-			}
+			ProcessPendingConflictLogTuple();
 
 			PG_RE_THROW();
 		}
@@ -6068,6 +6048,8 @@ DisableSubscriptionAndExit(void)
 	 * synchronization, or apply.
 	 */
 	pgstat_report_subscription_error(MyLogicalRepWorker->subid);
+
+	ProcessPendingConflictLogTuple();
 
 	/* Disable the subscription */
 	StartTransactionCommand();

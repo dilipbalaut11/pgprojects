@@ -24,6 +24,31 @@
 #include "storage/lmgr.h"
 #include "utils/lsyscache.h"
 
+const char *const ConflictLogDestNames[] = {
+	[CONFLICT_LOG_DEST_LOG] = "log",
+	[CONFLICT_LOG_DEST_TABLE] = "table",
+	[CONFLICT_LOG_DEST_ALL] = "all"
+};
+
+const ConflictLogColumnDef ConflictLogSchema[] = {
+	{ .attname = "relid",            .atttypid = OIDOID },
+	{ .attname = "schemaname",       .atttypid = TEXTOID },
+	{ .attname = "relname",          .atttypid = TEXTOID },
+	{ .attname = "conflict_type",    .atttypid = TEXTOID },
+	{ .attname = "remote_xid",       .atttypid = XIDOID },
+	{ .attname = "remote_commit_lsn",.atttypid = LSNOID },
+	{ .attname = "remote_commit_ts", .atttypid = TIMESTAMPTZOID },
+	{ .attname = "remote_origin",    .atttypid = TEXTOID },
+	{ .attname = "replica_identity", .atttypid = JSONOID },
+	{ .attname = "remote_tuple",     .atttypid = JSONOID },
+	{ .attname = "local_conflicts",  .atttypid = JSONARRAYOID }
+};
+
+StaticAssertDecl(lengthof(ConflictLogSchema) == MAX_CONFLICT_ATTR_NUM,
+				 "ConflictLogSchema length mismatch");
+StaticAssertDecl(lengthof(ConflictLogDestNames) == 3,
+				 "ConflictLogDestNames length mismatch");
+
 static const char *const ConflictTypeNames[] = {
 	[CT_INSERT_EXISTS] = "insert_exists",
 	[CT_UPDATE_ORIGIN_DIFFERS] = "update_origin_differs",

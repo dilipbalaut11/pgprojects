@@ -315,7 +315,8 @@ heap_create(const char *relname,
 	 */
 	if (!allow_system_table_mods &&
 		((IsCatalogNamespace(relnamespace) && relkind != RELKIND_INDEX) ||
-		 IsToastNamespace(relnamespace)) &&
+		 IsToastNamespace(relnamespace) ||
+		 IsConflictNamespace(relnamespace)) &&
 		IsNormalProcessingMode())
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),

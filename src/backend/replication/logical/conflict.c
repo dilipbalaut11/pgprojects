@@ -176,6 +176,8 @@ create_conflict_log_table(Oid subid, char *subname, Oid subowner)
 {
 	TupleDesc	tupdesc;
 	Oid			relid;
+	ObjectAddress	myself;
+	ObjectAddress	subaddr;
 	char    	relname[NAMEDATALEN];
 
 	snprintf(relname, NAMEDATALEN, "pg_conflict_log_for_subid_%u", subid);
@@ -218,6 +220,21 @@ create_conflict_log_table(Oid subid, char *subname, Oid subowner)
 									 InvalidOid, /* relrewrite */
 									 NULL); /* typaddress */
 	Assert(OidIsValid(relid));
+
+	/*
+	 * Establish an internal dependency between the conflict log table and
+	 * the subscription.
+	 *
+	 * We use DEPENDENCY_INTERNAL to signify that the table's lifecycle is
+	 * strictly tied to the subscription, similar to how a TOAST table relates
+	 * to its main table or a sequence relates to an identity column.
+	 *
+	 * This ensures the conflict log table is automatically reaped during a
+	 * DROP SUBSCRIPTION via performDeletion().
+	 */
+	ObjectAddressSet(myself, RelationRelationId, relid);
+	ObjectAddressSet(subaddr, SubscriptionRelationId, subid);
+	recordDependencyOn(&myself, &subaddr, DEPENDENCY_INTERNAL);
 
 	/* Release tuple descriptor memory. */
 	FreeTupleDesc(tupdesc);

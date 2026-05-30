@@ -651,7 +651,6 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	uint32		supported_opts;
 	SubOpts		opts = {0};
 	AclResult	aclresult;
-	Oid			logrelid = InvalidOid;
 
 	/*
 	 * Parse and check options.
@@ -844,22 +843,45 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	values[Anum_pg_subscription_subconflictlogdest - 1] =
 		CStringGetTextDatum(ConflictLogDestNames[opts.conflictlogdest]);
 
-	/*
-	 * If logging to a table is required, physically create it now. We create
-	 * the conflict log table here so its relation OID can be stored when
-	 * inserting the pg_subscription tuple below.
-	 */
-	if (CONFLICTS_LOGGED_TO_TABLE(opts.conflictlogdest))
-		logrelid = create_conflict_log_table(subid, stmt->subname, owner);
-
-	/* Store table OID in the catalog. */
 	values[Anum_pg_subscription_subconflictlogrelid - 1] =
-						ObjectIdGetDatum(logrelid);
+									ObjectIdGetDatum(InvalidOid);
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
 	/* Insert tuple into catalog. */
 	CatalogTupleInsert(rel, tup);
+	//heap_freetuple(tup);
+
+	/*
+	 * If logging to a table is required, physically create it now. We create
+	 * the conflict log table here.  Also update the pg_subscription row
+	 * after creating the conflict log table with its reloid.
+	 */
+	if (CONFLICTS_LOGGED_TO_TABLE(opts.conflictlogdest))
+	{
+		bool		replaces[Natts_pg_subscription];
+		Oid			logrelid =
+				create_conflict_log_table(subid, stmt->subname, owner);
+
+		/* Form a new tuple. */
+		memset(values, 0, sizeof(values));
+		memset(nulls, false, sizeof(nulls));
+		memset(replaces, false, sizeof(replaces));
+
+		values[Anum_pg_subscription_subconflictlogrelid - 1] =
+									ObjectIdGetDatum(logrelid);
+		replaces[Anum_pg_subscription_subconflictlogrelid - 1] =
+									true;
+
+		/* Make subscription tuple visible before updating it. */
+		CommandCounterIncrement();
+
+		tup = heap_modify_tuple(tup, RelationGetDescr(rel), values, nulls,
+								replaces);
+
+		CatalogTupleUpdate(rel, &tup->t_self, tup);
+	}
+
 	heap_freetuple(tup);
 
 	recordDependencyOnOwner(SubscriptionRelationId, subid, owner);
@@ -874,25 +896,6 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 
 		ObjectAddressSet(referenced, ForeignServerRelationId, serverid);
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-	}
-
-	/*
-	 * If conflicts are logs to table establish an internal dependency
-	 * between the conflict log table and the subscription.
-	 *
-	 * We use DEPENDENCY_INTERNAL to signify that the table's lifecycle is
-	 * strictly tied to the subscription, similar to how a TOAST table relates
-	 * to its main table or a sequence relates to an identity column.
-	 *
-	 * This ensures the conflict log table is automatically reaped during a
-	 * DROP SUBSCRIPTION via performDeletion().
-	 */
-	if (CONFLICTS_LOGGED_TO_TABLE(opts.conflictlogdest))
-	{
-		ObjectAddress clt;
-
-		ObjectAddressSet(clt, RelationRelationId, logrelid);
-		recordDependencyOn(&clt, &myself, DEPENDENCY_INTERNAL);
 	}
 
 	/*
@@ -1507,20 +1510,8 @@ alter_sub_conflictlogdestination(Subscription *sub, ConflictLogDest logdest,
 		/* There was no previous conflict log table. */
 		if (want_table)
 		{
-			ObjectAddress clt;
-			ObjectAddress subobj;
-
 			relid = create_conflict_log_table(sub->oid, sub->name, sub->owner);
 			update_relid = true;
-
-			/*
-			 * Establish an internal dependency between the conflict log table
-			 * and the subscription.  For details refer comments in
-			 * CreateSubscription function.
-			 */
-			ObjectAddressSet(clt, RelationRelationId, relid);
-			ObjectAddressSet(subobj, SubscriptionRelationId, sub->oid);
-			recordDependencyOn(&clt, &subobj, DEPENDENCY_INTERNAL);
 		}
 	}
 

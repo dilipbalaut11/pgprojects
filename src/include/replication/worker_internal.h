@@ -100,6 +100,16 @@ typedef struct LogicalRepWorker
 	 */
 	TransactionId oldest_nonremovable_xid;
 
+	/* A conflict log tuple that is prepared but not yet inserted. */
+	HeapTuple	conflict_log_tuple;
+
+	/*
+	 * Error-context string describing the conflict above, used to annotate any
+	 * error raised while inserting conflict_log_tuple into the conflict log
+	 * table.  Allocated, like conflict_log_tuple, in ApplyContext.
+	 */
+	char	   *conflict_log_errcontext;
+
 	/* Stats. */
 	XLogRecPtr	last_lsn;
 	TimestampTz last_send_time;
@@ -121,6 +131,8 @@ typedef enum ParallelTransState
 	PARALLEL_TRANS_UNKNOWN,
 	PARALLEL_TRANS_STARTED,
 	PARALLEL_TRANS_FINISHED,
+	PARALLEL_TRANS_ERROR,		/* worker failed; it will report the error (and
+								 * log the conflict, if any) before exiting */
 } ParallelTransState;
 
 /*
@@ -254,6 +266,10 @@ extern PGDLLIMPORT bool in_remote_transaction;
 extern PGDLLIMPORT bool InitializingApplyWorker;
 
 extern PGDLLIMPORT List *table_states_not_ready;
+
+extern XLogRecPtr remote_final_lsn;
+extern TimestampTz remote_commit_ts;
+extern TransactionId remote_xid;
 
 extern void logicalrep_worker_attach(int slot);
 extern LogicalRepWorker *logicalrep_worker_find(LogicalRepWorkerType wtype,

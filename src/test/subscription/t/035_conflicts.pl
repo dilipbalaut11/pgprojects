@@ -50,7 +50,7 @@ $node_subscriber->safe_psql(
 	'postgres',
 	"CREATE SUBSCRIPTION sub_tab
 	 CONNECTION '$publisher_connstr application_name=$appname'
-	 PUBLICATION pub_tab;");
+	 PUBLICATION pub_tab WITH (conflict_log_destination=all)");
 
 # Wait for initial table sync to finish
 $node_subscriber->wait_for_subscription_sync($node_publisher, $appname);
@@ -84,10 +84,35 @@ $node_subscriber->wait_for_log(
 .*Key already exists in unique index \"conf_tab_c_key\", modified in transaction .*: key \(c\)=\(4\), local row \(4, 4, 4\)./,
 	$log_offset);
 
+# Verify the contents of the Conflict Log Table (CLT)
+# This section ensures that the CLT contains the expected
+# type and specific key data.
+my $subid = $node_subscriber->safe_psql('postgres',
+	"SELECT oid FROM pg_subscription WHERE subname = 'sub_tab';");
+my $clt = "pg_conflict.pg_conflict_log_$subid";
+
+# Wait for the conflict to be logged in the CLT
+my $log_check = $node_subscriber->poll_query_until(
+    'postgres',
+    "SELECT count(*) > 0 FROM $clt;"
+);
+
+my $conflict_check = $node_subscriber->safe_psql('postgres',
+    "SELECT count(*) >= 1 FROM $clt WHERE conflict_type = 'multiple_unique_conflicts';");
+is($conflict_check, 't', 'Verified multiple_unique_conflicts logged into conflict log table');
+
+my $json_query = "SELECT local_conflicts FROM $clt;";
+my $raw_json = $node_subscriber->safe_psql('postgres', $json_query);
+
+# Verify that '2' is present inside the JSON structure using a regex
+# This matches the key/value pattern for "a": 2
+like($raw_json, qr/\\"a\\":2/, 'Verified that key 2 exists in the local_conflicts');
+
 pass('multiple_unique_conflicts detected during insert');
 
 # Truncate table to get rid of the error
 $node_subscriber->safe_psql('postgres', "TRUNCATE conf_tab;");
+$node_subscriber->safe_psql('postgres', "DELETE FROM $clt");
 
 ##################################################
 # Test multiple_unique_conflicts due to UPDATE
@@ -113,6 +138,26 @@ $node_subscriber->wait_for_log(
 .*Key already exists in unique index \"conf_tab_b_key\", modified in transaction .*: key \(b\)=\(7\), local row \(7, 7, 7\).*
 .*Key already exists in unique index \"conf_tab_c_key\", modified in transaction .*: key \(c\)=\(8\), local row \(8, 8, 8\)./,
 	$log_offset);
+
+# Verify the contents of the Conflict Log Table (CLT)
+# This section ensures that the CLT contains the expected
+# type and specific key data.
+
+# Wait for the conflict to be logged in the CLT
+$log_check = $node_subscriber->poll_query_until(
+    'postgres',
+    "SELECT count(*) > 0 FROM $clt;"
+);
+
+$conflict_check = $node_subscriber->safe_psql('postgres',
+    "SELECT count(*) >= 1 FROM $clt WHERE conflict_type = 'multiple_unique_conflicts';");
+is($conflict_check, 't', 'Verified multiple_unique_conflicts logged into conflict log table');
+
+$raw_json = $node_subscriber->safe_psql('postgres', $json_query);
+
+# Verify that '6' is present inside the JSON structure using a regex
+# This matches the key/value pattern for "a": 6
+like($raw_json, qr/\\"a\\":6/, 'Verified that key 6 exists in the local_conflicts');
 
 pass('multiple_unique_conflicts detected during update');
 
@@ -669,5 +714,46 @@ ok( $node_A->poll_query_until(
 		"SELECT count(*) = 0 FROM pg_replication_slots WHERE slot_name = 'pg_conflict_detection'"
 	),
 	"the slot 'pg_conflict_detection' has been dropped on Node A");
+
+###############################################################################
+# Verify that ATSimplePermissions blocks moving a CLT via
+# ALTER TABLE ALL IN TABLESPACE.  We use an isolated database containing only
+# the CLT so no other tables are moved before the error fires.
+###############################################################################
+
+# Create an isolated database with a single CLT and no user tables.
+$node_subscriber->safe_psql('postgres', "CREATE DATABASE clt_ts_test");
+$node_subscriber->safe_psql('clt_ts_test',
+	"CREATE SUBSCRIPTION sub_ts_test
+	     CONNECTION 'dbname=nonexistent'
+	     PUBLICATION pub
+	     WITH (connect=false, conflict_log_destination='table')");
+
+# Create a tablespace backed by a directory inside the data dir.
+my $ts_dir = $node_subscriber->data_dir . '/backup_space';
+mkdir($ts_dir)
+  or die "could not create tablespace directory $ts_dir: $!";
+$node_subscriber->safe_psql('postgres',
+	"CREATE TABLESPACE backup_space LOCATION '$ts_dir'");
+
+# The CLT is the only non-system table in pg_default of clt_ts_test, so
+# ALTER TABLE ALL IN TABLESPACE hits it immediately and ATSimplePermissions
+# raises the expected error.
+(undef, undef, $stderr) = $node_subscriber->psql('clt_ts_test',
+	"ALTER TABLE ALL IN TABLESPACE pg_default SET TABLESPACE backup_space");
+like(
+	$stderr,
+	qr/permission denied: "pg_conflict_log_\d+" is a conflict log table/,
+	"ATSimplePermissions blocks moving CLT via ALTER TABLE ALL IN TABLESPACE");
+
+# Cleanup
+$node_subscriber->safe_psql('clt_ts_test',
+	"ALTER SUBSCRIPTION sub_ts_test DISABLE");
+$node_subscriber->safe_psql('clt_ts_test',
+	"ALTER SUBSCRIPTION sub_ts_test SET (slot_name = NONE)");
+$node_subscriber->safe_psql('clt_ts_test',
+	"DROP SUBSCRIPTION sub_ts_test");
+$node_subscriber->safe_psql('postgres', "DROP DATABASE clt_ts_test");
+$node_subscriber->safe_psql('postgres', "DROP TABLESPACE backup_space");
 
 done_testing();

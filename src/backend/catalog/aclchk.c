@@ -3674,9 +3674,13 @@ pg_namespace_aclmask_ext(Oid nsp_oid, Oid roleid,
 	Acl		   *acl;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
-		return mask;
+	/*
+	 * Disallow creation in the conflict schema for everyone, including
+	 * superusers, unless in binary-upgrade mode.
+	 */
+	if (!IsBinaryUpgrade && (mask & ACL_CREATE) &&
+		IsConflictLogTableNamespace(nsp_oid))
+		return mask & ~ACL_CREATE;
 
 	/*
 	 * If we have been assigned this namespace as a temp namespace, check to

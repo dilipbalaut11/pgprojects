@@ -1300,6 +1300,8 @@ apply_handle_begin_prepare(StringInfo s)
 	set_apply_error_context_xact(begin_data.xid, begin_data.prepare_lsn);
 
 	remote_final_lsn = begin_data.prepare_lsn;
+	remote_xid = begin_data.xid;
+	remote_commit_ts = 0;
 
 	maybe_start_skipping_changes(begin_data.prepare_lsn);
 

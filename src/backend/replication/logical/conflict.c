@@ -421,15 +421,30 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 void
 ProcessPendingConflictLogTuple(void)
 {
-	Relation	conflictlogrel;
-	ConflictLogDest dest;
+	ErrorData  *save_edata = NULL;
+	MemoryContext oldctx;
 
 	/* Nothing to do */
 	if (MyLogicalRepWorker->conflict_log_tuple == NULL)
 		return;
 
+	/*
+	 * If we are already in an error state (e.g. called from a catch block),
+	 * save the error data so we can restore it later if we encounter a nested
+	 * error here.
+	 */
+	if (errordata_stack_depth >= 0)
+	{
+		oldctx = MemoryContextSwitchTo(TopMemoryContext);
+		save_edata = CopyErrorData();
+		MemoryContextSwitchTo(oldctx);
+	}
+
 	PG_TRY();
 	{
+		Relation	conflictlogrel;
+		ConflictLogDest dest;
+
 		StartTransactionCommand();
 		PushActiveSnapshot(GetTransactionSnapshot());
 
@@ -447,7 +462,6 @@ ProcessPendingConflictLogTuple(void)
 	PG_CATCH();
 	{
 		ErrorData  *edata;
-		MemoryContext oldctx;
 
 		/* Save error info in our memory context */
 		oldctx = MemoryContextSwitchTo(TopMemoryContext);
@@ -480,8 +494,23 @@ ProcessPendingConflictLogTuple(void)
 			heap_freetuple(MyLogicalRepWorker->conflict_log_tuple);
 			MyLogicalRepWorker->conflict_log_tuple = NULL;
 		}
+
+		/*
+		 * If we had a saved outer error, restore it now by re-throwing. This
+		 * will jump to the next outer catch block, which is what the caller
+		 * would have done anyway.
+		 */
+		if (save_edata)
+			ReThrowError(save_edata);
 	}
 	PG_END_TRY();
+
+	/*
+	 * If we had a saved outer error, we need to free it to avoid a memory
+	 * leak.
+	 */
+	if (save_edata)
+		FreeErrorData(save_edata);
 }
 
 /*

@@ -354,7 +354,29 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 								   conflicttuples,
 								   remoteslot);
 		if (elevel < ERROR)
-			InsertConflictLogTuple(conflictlogrel);
+		{
+			PG_TRY();
+			{
+				InsertConflictLogTuple(conflictlogrel);
+			}
+			PG_CATCH();
+			{
+				/*
+				 * The insert failed, so the apply transaction will abort and
+				 * the error will propagate to the worker's error handler.
+				 * Discard the prepared tuple here so that the deferred
+				 * insertion path (ProcessPendingConflictLogTuple) does not
+				 * retry this same failing insert.
+				 */
+				if (MyLogicalRepWorker->conflict_log_tuple != NULL)
+				{
+					heap_freetuple(MyLogicalRepWorker->conflict_log_tuple);
+					MyLogicalRepWorker->conflict_log_tuple = NULL;
+				}
+				PG_RE_THROW();
+			}
+			PG_END_TRY();
+		}
 
 		if (!log_dest_logfile)
 		{
@@ -428,60 +450,28 @@ ProcessPendingConflictLogTuple(void)
 	if (MyLogicalRepWorker->conflict_log_tuple == NULL)
 		return;
 
-	PG_TRY();
-	{
-		StartTransactionCommand();
-		PushActiveSnapshot(GetTransactionSnapshot());
+	/*
+	 * Insert the deferred conflict log tuple in its own transaction.  A
+	 * failure here (e.g. the conflict log table was dropped, or an
+	 * out-of-disk-space error) is treated like any other apply error and
+	 * raises an ERROR; such failures are expected to be rare and persistent.
+	 * Callers must therefore have already reported (and cleared) any
+	 * in-progress apply error before calling this, so that this error does not
+	 * mask the original one.
+	 */
+	StartTransactionCommand();
+	PushActiveSnapshot(GetTransactionSnapshot());
 
-		/* Open conflict log table and insert the tuple */
-		conflictlogrel = GetConflictLogDestAndTable(&dest);
-		Assert(conflictlogrel);
+	/* Open conflict log table and insert the tuple */
+	conflictlogrel = GetConflictLogDestAndTable(&dest);
+	Assert(conflictlogrel);
 
-		InsertConflictLogTuple(conflictlogrel);
+	InsertConflictLogTuple(conflictlogrel);
 
-		table_close(conflictlogrel, RowExclusiveLock);
+	table_close(conflictlogrel, RowExclusiveLock);
 
-		PopActiveSnapshot();
-		CommitTransactionCommand();
-	}
-	PG_CATCH();
-	{
-		ErrorData  *edata;
-		MemoryContext oldctx;
-
-		/* Save error info in our memory context */
-		oldctx = MemoryContextSwitchTo(TopMemoryContext);
-		edata = CopyErrorData();
-		MemoryContextSwitchTo(oldctx);
-
-		/* Clear the error state so we can continue */
-		FlushErrorState();
-
-		/* Abort the transaction we started above */
-		AbortOutOfAnyTransaction();
-
-		/*
-		 * Report the error as a warning. We use WARNING because we don't want
-		 * this to be a fatal error for the worker, and we want to allow the
-		 * caller's original error to remain primary.
-		 */
-		ereport(WARNING,
-				(errmsg("could not log conflict to table for subscription \"%s\": %s",
-						MySubscription->name, edata->message)));
-
-		FreeErrorData(edata);
-
-		/*
-		 * Free the conflict log tuple and set it to NULL. This ensures we
-		 * don't try to insert the same problematic tuple again.
-		 */
-		if (MyLogicalRepWorker->conflict_log_tuple != NULL)
-		{
-			heap_freetuple(MyLogicalRepWorker->conflict_log_tuple);
-			MyLogicalRepWorker->conflict_log_tuple = NULL;
-		}
-	}
-	PG_END_TRY();
+	PopActiveSnapshot();
+	CommitTransactionCommand();
 }
 
 /*

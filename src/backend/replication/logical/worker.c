@@ -5671,15 +5671,34 @@ start_apply(XLogRecPtr origin_startpos)
 		else
 		{
 			/*
-			 * Report the worker failed while applying changes. Abort the
-			 * current transaction so that the stats message is sent in an
-			 * idle state.
+			 * Report the apply error and recover to an idle state before
+			 * logging the conflict.  Emitting the error first means a
+			 * subsequent failure to insert the conflict log tuple (treated as
+			 * a hard error, see ProcessPendingConflictLogTuple) cannot mask the
+			 * original error, and lets us drop the error state so the deferred
+			 * insertion runs without a stale error on the stack.
 			 */
+			HOLD_INTERRUPTS();
+			EmitErrorReport();
 			AbortOutOfAnyTransaction();
+			FlushErrorState();
+			RESUME_INTERRUPTS();
+
 			pgstat_report_subscription_error(MySubscription->oid);
+
+			/*
+			 * Insert the deferred conflict log tuple in its own transaction.
+			 * If this fails, the error terminates the worker like any other
+			 * apply failure; such failures are expected to be rare and
+			 * persistent (e.g. out of disk space).
+			 */
 			ProcessPendingConflictLogTuple();
 
-			PG_RE_THROW();
+			/*
+			 * The error has been reported; exit so the launcher restarts the
+			 * worker, which will retry from the last confirmed LSN.
+			 */
+			proc_exit(1);
 		}
 	}
 	PG_END_TRY();
@@ -6052,8 +6071,6 @@ DisableSubscriptionAndExit(void)
 	 */
 	pgstat_report_subscription_error(MyLogicalRepWorker->subid);
 
-	ProcessPendingConflictLogTuple();
-
 	/* Disable the subscription */
 	StartTransactionCommand();
 
@@ -6075,6 +6092,19 @@ DisableSubscriptionAndExit(void)
 	ereport(LOG,
 			errmsg("subscription \"%s\" has been disabled because of an error",
 				   MySubscription->name));
+
+	/*
+	 * Insert the deferred conflict log tuple (if any) now that the
+	 * subscription has been disabled and committed.  Doing it after the
+	 * disable means a failure to log the conflict (treated as a hard error,
+	 * see ProcessPendingConflictLogTuple) cannot prevent the subscription from
+	 * being disabled and so cannot leave the worker restarting and failing
+	 * forever.  Do it before the dead-tuple retention check below: that check
+	 * only warns today, but it takes an elevel and could raise an error, which
+	 * must not prevent the conflict from being recorded.  The original error
+	 * was already reported above.
+	 */
+	ProcessPendingConflictLogTuple();
 
 	/*
 	 * Skip the track_commit_timestamp check when disabling the worker due to

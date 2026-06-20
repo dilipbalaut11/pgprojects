@@ -335,17 +335,16 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 	log_dest_table = CONFLICTS_LOGGED_TO_TABLE(dest);
 	log_dest_logfile = CONFLICTS_LOGGED_TO_LOG(dest);
 
-	/* Insert to table if requested. */
+	/*
+	 * Prepare the conflict log tuple first when the destination includes the
+	 * table.  This must happen before the ereport() below, because for an
+	 * ERROR-level conflict that ereport() raises the error and defers the
+	 * actual insertion to ProcessPendingConflictLogTuple(), which relies on the
+	 * tuple having been prepared.
+	 */
 	if (log_dest_table)
 	{
 		Assert(conflictlogrel != NULL);
-
-		/*
-		 * Prepare the conflict log tuple. If the error level is below ERROR,
-		 * insert it immediately. Otherwise, defer the insertion to a new
-		 * transaction after the current one aborts, ensuring the insertion of
-		 * the log tuple is not rolled back.
-		 */
 		prepare_conflict_log_tuple(estate,
 								   relinfo->ri_RelationDesc,
 								   conflictlogrel,
@@ -353,29 +352,16 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 								   searchslot,
 								   conflicttuples,
 								   remoteslot);
-		if (elevel < ERROR)
-			InsertConflictLogTuple(conflictlogrel);
-
-		if (!log_dest_logfile)
-		{
-			/*
-			 * Not logging conflict details to the server log; Report the error
-			 * msg but omit raw tuple data from server logs since it's already
-			 * captured in the conflict log table.
-			 */
-			ereport(elevel,
-					errcode_apply_conflict(type),
-					errmsg("conflict detected on relation \"%s\": conflict=%s",
-						RelationGetQualifiedRelationName(localrel),
-						ConflictTypeNames[type]),
-					errdetail("Conflict details are logged to the conflict log table: %s",
-							  RelationGetRelationName(conflictlogrel)));
-		}
-
-		table_close(conflictlogrel, RowExclusiveLock);
 	}
 
-	/* Log into the server log if requested. */
+	/*
+	 * Report the conflict to the server log before inserting it into the
+	 * conflict log table.  Emitting it first guarantees the conflict is
+	 * recorded even if the table insert below fails; it is also what raises the
+	 * error for ERROR-level conflicts.  When the server log is one of the
+	 * destinations we emit the full details, otherwise (table-only) we emit a
+	 * shorter message since the details are captured in the table.
+	 */
 	if (log_dest_logfile)
 	{
 		StringInfoData	err_detail;
@@ -399,6 +385,64 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 					   RelationGetQualifiedRelationName(localrel),
 					   ConflictTypeNames[type]),
 				errdetail_internal("%s", err_detail.data));
+	}
+	else if (log_dest_table)
+	{
+		/*
+		 * Not logging conflict details to the server log; report the conflict
+		 * but omit raw tuple data since it is captured in the conflict log
+		 * table.
+		 */
+		ereport(elevel,
+				errcode_apply_conflict(type),
+				errmsg("conflict detected on relation \"%s\": conflict=%s",
+					RelationGetQualifiedRelationName(localrel),
+					ConflictTypeNames[type]),
+				errdetail("Conflict details are logged to the conflict log table: %s",
+						  RelationGetRelationName(conflictlogrel)));
+	}
+
+	/*
+	 * Insert into the conflict log table if requested.  For conflicts below
+	 * ERROR the apply transaction continues, so insert immediately; for
+	 * ERROR-level conflicts the ereport() above already raised the error and
+	 * the insertion is deferred to a new transaction
+	 * (ProcessPendingConflictLogTuple) so that it is not rolled back.
+	 */
+	if (log_dest_table)
+	{
+		if (elevel < ERROR)
+		{
+			PG_TRY();
+			{
+				InsertConflictLogTuple(conflictlogrel);
+			}
+			PG_CATCH();
+			{
+				/*
+				 * The insert failed, so the apply transaction will abort and
+				 * the error will propagate to the worker's error handler.  The
+				 * conflict was already reported to the server log above, so it
+				 * is not lost.  Discard the prepared tuple so that the deferred
+				 * insertion path (ProcessPendingConflictLogTuple) does not retry
+				 * this same failing insert.
+				 */
+				if (MyLogicalRepWorker->conflict_log_tuple != NULL)
+				{
+					heap_freetuple(MyLogicalRepWorker->conflict_log_tuple);
+					MyLogicalRepWorker->conflict_log_tuple = NULL;
+				}
+				if (MyLogicalRepWorker->conflict_log_errcontext != NULL)
+				{
+					pfree(MyLogicalRepWorker->conflict_log_errcontext);
+					MyLogicalRepWorker->conflict_log_errcontext = NULL;
+				}
+				PG_RE_THROW();
+			}
+			PG_END_TRY();
+		}
+
+		table_close(conflictlogrel, RowExclusiveLock);
 	}
 }
 
@@ -428,60 +472,28 @@ ProcessPendingConflictLogTuple(void)
 	if (MyLogicalRepWorker->conflict_log_tuple == NULL)
 		return;
 
-	PG_TRY();
-	{
-		StartTransactionCommand();
-		PushActiveSnapshot(GetTransactionSnapshot());
+	/*
+	 * Insert the deferred conflict log tuple in its own transaction.  A
+	 * failure here (e.g. the conflict log table was dropped, or an
+	 * out-of-disk-space error) is treated like any other apply error and
+	 * raises an ERROR; such failures are expected to be rare and persistent.
+	 * Callers must therefore have already reported (and cleared) any
+	 * in-progress apply error before calling this, so that this error does not
+	 * mask the original one.
+	 */
+	StartTransactionCommand();
+	PushActiveSnapshot(GetTransactionSnapshot());
 
-		/* Open conflict log table and insert the tuple */
-		conflictlogrel = GetConflictLogDestAndTable(&dest);
-		Assert(conflictlogrel);
+	/* Open conflict log table and insert the tuple */
+	conflictlogrel = GetConflictLogDestAndTable(&dest);
+	Assert(conflictlogrel);
 
-		InsertConflictLogTuple(conflictlogrel);
+	InsertConflictLogTuple(conflictlogrel);
 
-		table_close(conflictlogrel, RowExclusiveLock);
+	table_close(conflictlogrel, RowExclusiveLock);
 
-		PopActiveSnapshot();
-		CommitTransactionCommand();
-	}
-	PG_CATCH();
-	{
-		ErrorData  *edata;
-		MemoryContext oldctx;
-
-		/* Save error info in our memory context */
-		oldctx = MemoryContextSwitchTo(TopMemoryContext);
-		edata = CopyErrorData();
-		MemoryContextSwitchTo(oldctx);
-
-		/* Clear the error state so we can continue */
-		FlushErrorState();
-
-		/* Abort the transaction we started above */
-		AbortOutOfAnyTransaction();
-
-		/*
-		 * Report the error as a warning. We use WARNING because we don't want
-		 * this to be a fatal error for the worker, and we want to allow the
-		 * caller's original error to remain primary.
-		 */
-		ereport(WARNING,
-				(errmsg("could not log conflict to table for subscription \"%s\": %s",
-						MySubscription->name, edata->message)));
-
-		FreeErrorData(edata);
-
-		/*
-		 * Free the conflict log tuple and set it to NULL. This ensures we
-		 * don't try to insert the same problematic tuple again.
-		 */
-		if (MyLogicalRepWorker->conflict_log_tuple != NULL)
-		{
-			heap_freetuple(MyLogicalRepWorker->conflict_log_tuple);
-			MyLogicalRepWorker->conflict_log_tuple = NULL;
-		}
-	}
-	PG_END_TRY();
+	PopActiveSnapshot();
+	CommitTransactionCommand();
 }
 
 /*
@@ -545,6 +557,19 @@ GetConflictLogDestAndTable(ConflictLogDest *log_dest)
 }
 
 /*
+ * Error context callback for failures while inserting into the conflict log
+ * table.  Adds a line identifying the conflict that was being logged.
+ */
+static void
+conflict_log_insert_errcontext(void *arg)
+{
+	char	   *ctx = (char *) arg;
+
+	if (ctx)
+		errcontext("%s", ctx);
+}
+
+/*
  * InsertConflictLogTuple
  *
  * Insert conflict log tuple into the conflict log table. It uses
@@ -554,15 +579,34 @@ GetConflictLogDestAndTable(ConflictLogDest *log_dest)
 void
 InsertConflictLogTuple(Relation conflictlogrel)
 {
+	ErrorContextCallback errcallback;
+
 	/* A valid tuple must be prepared and stored in MyLogicalRepWorker. */
 	Assert(MyLogicalRepWorker->conflict_log_tuple != NULL);
+
+	/*
+	 * Set up an error context so that a failure to insert (e.g. the conflict
+	 * log table was dropped, or an out-of-space error) carries information
+	 * identifying the conflict we were trying to log.
+	 */
+	errcallback.callback = conflict_log_insert_errcontext;
+	errcallback.arg = MyLogicalRepWorker->conflict_log_errcontext;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
 
 	heap_insert(conflictlogrel, MyLogicalRepWorker->conflict_log_tuple,
 				GetCurrentCommandId(true), HEAP_INSERT_NO_LOGICAL, NULL);
 
-	/* Free conflict log tuple. */
+	error_context_stack = errcallback.previous;
+
+	/* Free the conflict log tuple and its context string. */
 	heap_freetuple(MyLogicalRepWorker->conflict_log_tuple);
 	MyLogicalRepWorker->conflict_log_tuple = NULL;
+	if (MyLogicalRepWorker->conflict_log_errcontext)
+	{
+		pfree(MyLogicalRepWorker->conflict_log_errcontext);
+		MyLogicalRepWorker->conflict_log_errcontext = NULL;
+	}
 }
 
 /*
@@ -1381,5 +1425,15 @@ prepare_conflict_log_tuple(EState *estate, Relation rel,
 	oldctx = MemoryContextSwitchTo(ApplyContext);
 	MyLogicalRepWorker->conflict_log_tuple =
 		heap_form_tuple(RelationGetDescr(conflictlogrel), values, nulls);
+
+	/*
+	 * Stash a context string describing this conflict, so that if inserting
+	 * the tuple into the conflict log table fails, the resulting error carries
+	 * enough context to identify the conflict (see InsertConflictLogTuple).
+	 */
+	MyLogicalRepWorker->conflict_log_errcontext =
+		psprintf("while logging conflict \"%s\" detected on relation \"%s\"",
+				 ConflictTypeNames[conflict_type],
+				 RelationGetRelationName(rel));
 	MemoryContextSwitchTo(oldctx);
 }

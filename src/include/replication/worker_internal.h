@@ -103,6 +103,13 @@ typedef struct LogicalRepWorker
 	/* A conflict log tuple that is prepared but not yet inserted. */
 	HeapTuple	conflict_log_tuple;
 
+	/*
+	 * Error-context string describing the conflict above, used to annotate any
+	 * error raised while inserting conflict_log_tuple into the conflict log
+	 * table.  Allocated, like conflict_log_tuple, in ApplyContext.
+	 */
+	char	   *conflict_log_errcontext;
+
 	/* Stats. */
 	XLogRecPtr	last_lsn;
 	TimestampTz last_send_time;
@@ -124,6 +131,8 @@ typedef enum ParallelTransState
 	PARALLEL_TRANS_UNKNOWN,
 	PARALLEL_TRANS_STARTED,
 	PARALLEL_TRANS_FINISHED,
+	PARALLEL_TRANS_ERROR,		/* worker failed; it will report the error (and
+								 * log the conflict, if any) before exiting */
 } ParallelTransState;
 
 /*

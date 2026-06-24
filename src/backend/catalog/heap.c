@@ -312,6 +312,8 @@ heap_create(const char *relname,
 	 * But allow creating indexes on relations in pg_catalog even if
 	 * allow_system_table_mods = off, upper layers already guarantee it's on a
 	 * user defined relation, not a system one.
+	 *
+	 * Allow creation of the conflict log table in binary-upgrade mode.
 	 */
 	if (!allow_system_table_mods &&
 		((IsCatalogNamespace(relnamespace) && relkind != RELKIND_INDEX) ||

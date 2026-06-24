@@ -3523,9 +3523,8 @@ LookupCreationNamespace(const char *nspname)
 /*
  * Common checks on switching namespaces.
  *
- * We complain if either the old or new namespaces is a temporary schema
- * (or temporary toast schema), or if either the old or new namespaces is the
- * TOAST schema.
+ * We complain if either the old or new namespaces is a temporary schema,
+ * temporary toast schema, the TOAST schema, or the conflict schema.
  */
 void
 CheckSetNamespace(Oid oldNspOid, Oid nspOid)

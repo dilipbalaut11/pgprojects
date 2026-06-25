@@ -896,6 +896,276 @@ JOIN pg_subscription s ON c.relname = 'pg_conflict_log_' || s.oid
 WHERE s.subname = 'regress_conflict_protection_test' \gset
 TRUNCATE :conflict_tab;
 DELETE FROM :conflict_tab;
+-- Trying to create a new table manually in the pg_conflict namespace
+-- This should fail as the namespace is reserved for conflict log tables
+CREATE TABLE pg_conflict.manual_table (id int);
+ERROR:  permission denied for schema pg_conflict
+LINE 1: CREATE TABLE pg_conflict.manual_table (id int);
+                     ^
+-- Moving an existing table into the pg_conflict namespace
+-- Users should not be able to move their own tables within this namespace
+CREATE TABLE public.test_move (id int);
+ALTER TABLE public.test_move SET SCHEMA pg_conflict;
+ERROR:  permission denied for schema pg_conflict
+DROP TABLE public.test_move;
+-- Setup dummy trigger function for trigger tests
+CREATE FUNCTION public.dummy_trigger_func() RETURNS trigger AS $$
+BEGIN
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- Policy on conflict log table
+DO $$
+DECLARE
+    tab_name text;
+    err_msg text;
+    err_detail text;
+BEGIN
+    SELECT 'pg_conflict.' || relname INTO tab_name
+    FROM pg_class c JOIN pg_subscription s ON c.relname = 'pg_conflict_log_' || s.oid
+    WHERE s.subname = 'regress_conflict_protection_test';
+    EXECUTE 'CREATE POLICY p1 ON ' || tab_name || ' USING (true)';
+EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS err_msg = MESSAGE_TEXT, err_detail = PG_EXCEPTION_DETAIL;
+    RAISE NOTICE 'Policy error: %, detail: %',
+        regexp_replace(err_msg, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx'),
+        regexp_replace(err_detail, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx');
+END $$;
+NOTICE:  Policy error: permission denied: "pg_conflict_log_xxx" is a conflict log table, detail: Conflict log tables are system-managed tables for logical replication conflicts.
+-- Statistics on conflict log table
+DO $$
+DECLARE
+    tab_name text;
+    err_msg text;
+    err_detail text;
+BEGIN
+    SELECT 'pg_conflict.' || relname INTO tab_name
+    FROM pg_class c JOIN pg_subscription s ON c.relname = 'pg_conflict_log_' || s.oid
+    WHERE s.subname = 'regress_conflict_protection_test';
+    EXECUTE 'CREATE STATISTICS s1 ON relname, schemaname FROM ' || tab_name;
+EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS err_msg = MESSAGE_TEXT, err_detail = PG_EXCEPTION_DETAIL;
+    RAISE NOTICE 'Statistics error: %, detail: %',
+        regexp_replace(err_msg, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx'),
+        regexp_replace(err_detail, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx');
+END $$;
+NOTICE:  Statistics error: permission denied: "pg_conflict_log_xxx" is a conflict log table, detail: Conflict log tables are system-managed tables for logical replication conflicts.
+-- Inheritance from conflict log table
+DO $$
+DECLARE
+    tab_name text;
+    err_msg text;
+    err_detail text;
+BEGIN
+    SELECT 'pg_conflict.' || relname INTO tab_name
+    FROM pg_class c JOIN pg_subscription s ON c.relname = 'pg_conflict_log_' || s.oid
+    WHERE s.subname = 'regress_conflict_protection_test';
+    EXECUTE 'CREATE TABLE public.conflict_child () INHERITS (' || tab_name || ')';
+EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS err_msg = MESSAGE_TEXT, err_detail = PG_EXCEPTION_DETAIL;
+    RAISE NOTICE 'Inheritance error: %, detail: %',
+        regexp_replace(err_msg, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx'),
+        regexp_replace(err_detail, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx');
+END $$;
+NOTICE:  Inheritance error: permission denied: cannot inherit from conflict log table "pg_conflict_log_xxx", detail: Conflict log tables are system-managed tables for logical replication conflicts.
+-- Column rename on conflict log table
+DO $$
+DECLARE
+    tab_name text;
+    err_msg text;
+    err_detail text;
+BEGIN
+    SELECT 'pg_conflict.' || relname INTO tab_name
+    FROM pg_class c JOIN pg_subscription s ON c.relname = 'pg_conflict_log_' || s.oid
+    WHERE s.subname = 'regress_conflict_protection_test';
+    EXECUTE 'ALTER TABLE ' || tab_name || ' RENAME COLUMN relname TO new_relname';
+EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS err_msg = MESSAGE_TEXT, err_detail = PG_EXCEPTION_DETAIL;
+    RAISE NOTICE 'Column rename error: %, detail: %',
+        regexp_replace(err_msg, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx'),
+        regexp_replace(err_detail, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx');
+END $$;
+NOTICE:  Column rename error: permission denied: "pg_conflict_log_xxx" is a conflict log table, detail: Conflict log tables are system-managed tables for logical replication conflicts.
+-- Foreign key reference to conflict log table
+DO $$
+DECLARE
+    tab_name text;
+    err_msg text;
+    err_detail text;
+BEGIN
+    SELECT 'pg_conflict.' || relname INTO tab_name
+    FROM pg_class c JOIN pg_subscription s ON c.relname = 'pg_conflict_log_' || s.oid
+    WHERE s.subname = 'regress_conflict_protection_test';
+    EXECUTE 'CREATE TABLE public.conflict_fk (relname text REFERENCES ' || tab_name || '(relname))';
+EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS err_msg = MESSAGE_TEXT, err_detail = PG_EXCEPTION_DETAIL;
+    RAISE NOTICE 'Foreign key error: %, detail: %',
+        regexp_replace(err_msg, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx'),
+        regexp_replace(err_detail, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx');
+END $$;
+NOTICE:  Foreign key error: permission denied: "pg_conflict_log_xxx" is a conflict log table, detail: Conflict log tables are system-managed tables for logical replication conflicts.
+-- Alter table owner
+DO $$
+DECLARE
+    tab_name text;
+    err_msg text;
+    err_detail text;
+BEGIN
+    SELECT 'pg_conflict.' || relname INTO tab_name
+    FROM pg_class c JOIN pg_subscription s ON c.relname = 'pg_conflict_log_' || s.oid
+    WHERE s.subname = 'regress_conflict_protection_test';
+    EXECUTE 'ALTER TABLE ' || tab_name || ' OWNER TO regress_subscription_user_dummy';
+EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS err_msg = MESSAGE_TEXT, err_detail = PG_EXCEPTION_DETAIL;
+    RAISE NOTICE 'Alter owner error: %, detail: %',
+        regexp_replace(err_msg, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx'),
+        regexp_replace(err_detail, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx');
+END $$;
+NOTICE:  Alter owner error: permission denied: "pg_conflict_log_xxx" is a conflict log table, detail: Conflict log tables are system-managed tables for logical replication conflicts.
+-- Alter table schema
+DO $$
+DECLARE
+    tab_name text;
+    err_msg text;
+    err_detail text;
+BEGIN
+    SELECT 'pg_conflict.' || relname INTO tab_name
+    FROM pg_class c JOIN pg_subscription s ON c.relname = 'pg_conflict_log_' || s.oid
+    WHERE s.subname = 'regress_conflict_protection_test';
+    EXECUTE 'ALTER TABLE ' || tab_name || ' SET SCHEMA public';
+EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS err_msg = MESSAGE_TEXT, err_detail = PG_EXCEPTION_DETAIL;
+    RAISE NOTICE 'Alter schema error: %, detail: %',
+        regexp_replace(err_msg, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx'),
+        regexp_replace(err_detail, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx');
+END $$;
+NOTICE:  Alter schema error: permission denied: "pg_conflict_log_xxx" is a conflict log table, detail: Conflict log tables are system-managed tables for logical replication conflicts.
+-- Create trigger on conflict log table
+DO $$
+DECLARE
+    tab_name text;
+    err_msg text;
+    err_detail text;
+BEGIN
+    SELECT 'pg_conflict.' || relname INTO tab_name
+    FROM pg_class c JOIN pg_subscription s ON c.relname = 'pg_conflict_log_' || s.oid
+    WHERE s.subname = 'regress_conflict_protection_test';
+    EXECUTE 'CREATE TRIGGER t1 BEFORE INSERT ON ' || tab_name || ' FOR EACH ROW EXECUTE FUNCTION public.dummy_trigger_func()';
+EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS err_msg = MESSAGE_TEXT, err_detail = PG_EXCEPTION_DETAIL;
+    RAISE NOTICE 'Create trigger error: %, detail: %',
+        regexp_replace(err_msg, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx'),
+        regexp_replace(err_detail, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx');
+END $$;
+NOTICE:  Create trigger error: permission denied: "pg_conflict_log_xxx" is a conflict log table, detail: Conflict log tables are system-managed tables for logical replication conflicts.
+-- Rename trigger on conflict log table
+DO $$
+DECLARE
+    tab_name text;
+    err_msg text;
+    err_detail text;
+BEGIN
+    SELECT 'pg_conflict.' || relname INTO tab_name
+    FROM pg_class c JOIN pg_subscription s ON c.relname = 'pg_conflict_log_' || s.oid
+    WHERE s.subname = 'regress_conflict_protection_test';
+    EXECUTE 'ALTER TRIGGER non_existent_trigger ON ' || tab_name || ' RENAME TO new_trigger';
+EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS err_msg = MESSAGE_TEXT, err_detail = PG_EXCEPTION_DETAIL;
+    RAISE NOTICE 'Rename trigger error: %, detail: %',
+        regexp_replace(err_msg, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx'),
+        regexp_replace(err_detail, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx');
+END $$;
+NOTICE:  Rename trigger error: permission denied: "pg_conflict_log_xxx" is a conflict log table, detail: Conflict log tables are system-managed tables for logical replication conflicts.
+-- Create rule on conflict log table
+DO $$
+DECLARE
+    tab_name text;
+    err_msg text;
+    err_detail text;
+BEGIN
+    SELECT 'pg_conflict.' || relname INTO tab_name
+    FROM pg_class c JOIN pg_subscription s ON c.relname = 'pg_conflict_log_' || s.oid
+    WHERE s.subname = 'regress_conflict_protection_test';
+    EXECUTE 'CREATE RULE r1 AS ON INSERT TO ' || tab_name || ' DO INSTEAD NOTHING';
+EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS err_msg = MESSAGE_TEXT, err_detail = PG_EXCEPTION_DETAIL;
+    RAISE NOTICE 'Create rule error: %, detail: %',
+        regexp_replace(err_msg, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx'),
+        regexp_replace(err_detail, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx');
+END $$;
+NOTICE:  Create rule error: permission denied: "pg_conflict_log_xxx" is a conflict log table, detail: Conflict log tables are system-managed tables for logical replication conflicts.
+-- Rename rule on conflict log table
+DO $$
+DECLARE
+    tab_name text;
+    err_msg text;
+    err_detail text;
+BEGIN
+    SELECT 'pg_conflict.' || relname INTO tab_name
+    FROM pg_class c JOIN pg_subscription s ON c.relname = 'pg_conflict_log_' || s.oid
+    WHERE s.subname = 'regress_conflict_protection_test';
+    EXECUTE 'ALTER RULE non_existent_rule ON ' || tab_name || ' RENAME TO new_rule';
+EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS err_msg = MESSAGE_TEXT, err_detail = PG_EXCEPTION_DETAIL;
+    RAISE NOTICE 'Rename rule error: %, detail: %',
+        regexp_replace(err_msg, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx'),
+        regexp_replace(err_detail, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx');
+END $$;
+NOTICE:  Rename rule error: permission denied: "pg_conflict_log_xxx" is a conflict log table, detail: Conflict log tables are system-managed tables for logical replication conflicts.
+-- Create index on conflict log table
+DO $$
+DECLARE
+    tab_name text;
+    err_msg text;
+    err_detail text;
+BEGIN
+    SELECT 'pg_conflict.' || relname INTO tab_name
+    FROM pg_class c JOIN pg_subscription s ON c.relname = 'pg_conflict_log_' || s.oid
+    WHERE s.subname = 'regress_conflict_protection_test';
+    EXECUTE 'CREATE INDEX idx1 ON ' || tab_name || ' (relname)';
+EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS err_msg = MESSAGE_TEXT, err_detail = PG_EXCEPTION_DETAIL;
+    RAISE NOTICE 'Create index error: %, detail: %',
+        regexp_replace(err_msg, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx'),
+        regexp_replace(err_detail, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx');
+END $$;
+NOTICE:  Create index error: permission denied: "pg_conflict_log_xxx" is a conflict log table, detail: Conflict log tables are system-managed tables for logical replication conflicts.
+-- fail - conflict log table cannot be added to a publication
+DO $$
+DECLARE
+    tab_name text;
+    err_msg text;
+    err_detail text;
+BEGIN
+    SELECT 'pg_conflict.' || relname INTO tab_name
+    FROM pg_class c JOIN pg_subscription s ON c.relname = 'pg_conflict_log_' || s.oid
+    WHERE s.subname = 'regress_conflict_protection_test';
+    EXECUTE 'CREATE PUBLICATION testpub_for_clt FOR TABLE ' || tab_name;
+EXCEPTION WHEN invalid_parameter_value THEN
+    GET STACKED DIAGNOSTICS err_msg = MESSAGE_TEXT, err_detail = PG_EXCEPTION_DETAIL;
+    RAISE NOTICE 'Publication error: %, detail: %',
+        regexp_replace(err_msg, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx'),
+        err_detail;
+END $$;
+NOTICE:  Publication error: cannot add relation "pg_conflict_log_xxx" to publication, detail: This operation is not supported for conflict log tables.
+-- fail - cannot lock rows in conflict log table
+DO $$
+DECLARE
+    tab_name text;
+    err_msg text;
+BEGIN
+    SELECT 'pg_conflict.' || relname INTO tab_name
+    FROM pg_class c JOIN pg_subscription s ON c.relname = 'pg_conflict_log_' || s.oid
+    WHERE s.subname = 'regress_conflict_protection_test';
+    EXECUTE 'SELECT 1 FROM ' || tab_name || ' FOR UPDATE';
+EXCEPTION WHEN wrong_object_type THEN
+    GET STACKED DIAGNOSTICS err_msg = MESSAGE_TEXT;
+    RAISE NOTICE 'Row lock error: %',
+        regexp_replace(err_msg, 'pg_conflict_log_\d+', 'pg_conflict_log_xxx');
+END $$;
+NOTICE:  Row lock error: cannot lock rows in the conflict log table "pg_conflict_log_xxx"
+-- Clean up trigger function
+DROP FUNCTION public.dummy_trigger_func();
 SET client_min_messages = WARNING;
 -- Clean up remaining test subscription
 ALTER SUBSCRIPTION regress_conflict_log_default DISABLE;

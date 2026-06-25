@@ -101,12 +101,17 @@ my $conflict_check = $node_subscriber->safe_psql('postgres',
     "SELECT count(*) >= 1 FROM $clt WHERE conflict_type = 'multiple_unique_conflicts';");
 is($conflict_check, 't', 'Verified multiple_unique_conflicts logged into conflict log table');
 
+# Verify CLT schema has JSONB columns
+is($node_subscriber->safe_psql('postgres', "SELECT atttypid::regtype FROM pg_attribute WHERE attrelid = '$clt'::regclass AND attname = 'remote_tuple';"), 'jsonb', 'remote_tuple is jsonb');
+is($node_subscriber->safe_psql('postgres', "SELECT atttypid::regtype FROM pg_attribute WHERE attrelid = '$clt'::regclass AND attname = 'replica_identity';"), 'jsonb', 'replica_identity is jsonb');
+is($node_subscriber->safe_psql('postgres', "SELECT atttypid::regtype FROM pg_attribute WHERE attrelid = '$clt'::regclass AND attname = 'local_conflicts';"), 'jsonb[]', 'local_conflicts is jsonb[]');
+
 my $json_query = "SELECT local_conflicts FROM $clt;";
 my $raw_json = $node_subscriber->safe_psql('postgres', $json_query);
 
 # Verify that '2' is present inside the JSON structure using a regex
 # This matches the key/value pattern for "a": 2
-like($raw_json, qr/\\"a\\":2/, 'Verified that key 2 exists in the local_conflicts');
+like($raw_json, qr/\\"a\\":\s*2/, 'Verified that key 2 exists in the local_conflicts');
 
 pass('multiple_unique_conflicts detected during insert');
 
@@ -157,7 +162,7 @@ $raw_json = $node_subscriber->safe_psql('postgres', $json_query);
 
 # Verify that '6' is present inside the JSON structure using a regex
 # This matches the key/value pattern for "a": 6
-like($raw_json, qr/\\"a\\":6/, 'Verified that key 6 exists in the local_conflicts');
+like($raw_json, qr/\\"a\\":\s*6/, 'Verified that key 6 exists in the local_conflicts');
 
 pass('multiple_unique_conflicts detected during update');
 

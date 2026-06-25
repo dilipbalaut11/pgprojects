@@ -32,6 +32,8 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/injection_point.h"
+#include "utils/jsonb.h"
+#include "utils/jsonfuncs.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_lsn.h"
@@ -72,9 +74,9 @@ static const ConflictLogColumnDef ConflictLogSchema[] = {
 	{ .attname = "remote_commit_lsn",.atttypid = LSNOID },
 	{ .attname = "remote_commit_ts", .atttypid = TIMESTAMPTZOID },
 	{ .attname = "remote_origin",    .atttypid = TEXTOID },
-	{ .attname = "remote_tuple",     .atttypid = JSONOID },
-	{ .attname = "replica_identity", .atttypid = JSONOID },
-	{ .attname = "local_conflicts",  .atttypid = JSONARRAYOID }
+	{ .attname = "remote_tuple",     .atttypid = JSONBOID },
+	{ .attname = "replica_identity", .atttypid = JSONBOID },
+	{ .attname = "local_conflicts",  .atttypid = JSONBARRAYOID }
 };
 
 #define NUM_CONFLICT_ATTRS lengthof(ConflictLogSchema)
@@ -85,8 +87,8 @@ static const ConflictLogColumnDef LocalConflictSchema[] =
 	{ .attname = "xid",       .atttypid = XIDOID },
 	{ .attname = "commit_ts", .atttypid = TIMESTAMPTZOID },
 	{ .attname = "origin",    .atttypid = TEXTOID },
-	{ .attname = "key",       .atttypid = JSONOID },
-	{ .attname = "tuple",     .atttypid = JSONOID }
+	{ .attname = "key",       .atttypid = JSONBOID },
+	{ .attname = "tuple",     .atttypid = JSONBOID }
 };
 
 #define NUM_LOCAL_CONFLICT_ATTRS lengthof(LocalConflictSchema)
@@ -143,13 +145,13 @@ static void build_index_datums_from_slot(EState *estate, Relation localrel,
 										 bool *isnull);
 static char *build_index_value_desc(EState *estate, Relation localrel,
 									TupleTableSlot *slot, Oid indexoid);
-static Datum tuple_table_slot_to_json_datum(TupleTableSlot *slot);
-static Datum tuple_table_slot_to_indextup_json(EState *estate,
+static Datum tuple_table_slot_to_jsonb_datum(TupleTableSlot *slot);
+static Datum tuple_table_slot_to_indextup_jsonb(EState *estate,
 											   Relation localrel,
 											   Oid replica_index,
 											   TupleTableSlot *slot);
 static TupleDesc build_conflict_tupledesc(void);
-static Datum build_local_conflicts_json_array(EState *estate, Relation rel,
+static Datum build_local_conflicts_jsonb_array(EState *estate, Relation rel,
 											  ConflictType conflict_type,
 											  List *conflicttuples);
 static void prepare_conflict_log_tuple(EState *estate, Relation rel,
@@ -1173,31 +1175,37 @@ build_index_value_desc(EState *estate, Relation localrel, TupleTableSlot *slot,
  * Helper function to convert a TupleTableSlot to JSON.
  */
 static Datum
-tuple_table_slot_to_json_datum(TupleTableSlot *slot)
+tuple_table_slot_to_jsonb_datum(TupleTableSlot *slot)
 {
 	HeapTuple	tuple;
 	Datum		datum;
-	Datum		json;
+	Datum		jsonb;
+	Oid			typoid;
+	JsonTypeCategory tcategory;
+	Oid			outfuncoid;
 
 	Assert(slot != NULL);
 
 	tuple = ExecCopySlotHeapTuple(slot);
 	datum = heap_copy_tuple_as_datum(tuple, slot->tts_tupleDescriptor);
 
-	json = DirectFunctionCall1(row_to_json, datum);
+	typoid = HeapTupleHeaderGetTypeId(DatumGetHeapTupleHeader(datum));
+	json_categorize_type(typoid, true, &tcategory, &outfuncoid);
+	jsonb = datum_to_jsonb(datum, tcategory, outfuncoid);
+
 	heap_freetuple(tuple);
 
-	return json;
+	return jsonb;
 }
 
 /*
- * tuple_table_slot_to_indextup_json
+ * tuple_table_slot_to_indextup_jsonb
  *
  * Fetch replica identity key from the tuple table slot and convert into a
- * JSON datum.
+ * JSONB datum.
  */
 static Datum
-tuple_table_slot_to_indextup_json(EState *estate, Relation localrel,
+tuple_table_slot_to_indextup_jsonb(EState *estate, Relation localrel,
 								  Oid indexid, TupleTableSlot *slot)
 {
 	Relation	indexDesc;
@@ -1206,6 +1214,10 @@ tuple_table_slot_to_indextup_json(EState *estate, Relation localrel,
 	HeapTuple	tuple;
 	TupleDesc	tupdesc;
 	Datum		datum;
+	Oid			typoid;
+	JsonTypeCategory tcategory;
+	Oid			outfuncoid;
+	Datum		jsonb;
 
 	Assert(slot != NULL);
 
@@ -1224,12 +1236,17 @@ tuple_table_slot_to_indextup_json(EState *estate, Relation localrel,
 	tuple = heap_form_tuple(tupdesc, values, isnull);
 	datum = heap_copy_tuple_as_datum(tuple, tupdesc);
 
+	typoid = tupdesc->tdtypeid;
+
 	heap_freetuple(tuple);
 	FreeTupleDesc(tupdesc);
 	index_close(indexDesc, NoLock);
 
-	/* Convert to a JSON datum. */
-	return DirectFunctionCall1(row_to_json, datum);
+	/* Convert to a JSONB datum. */
+	json_categorize_type(typoid, true, &tcategory, &outfuncoid);
+	jsonb = datum_to_jsonb(datum, tcategory, outfuncoid);
+
+	return jsonb;
 }
 
 /*
@@ -1262,7 +1279,7 @@ build_conflict_tupledesc(void)
 
 		/*
 		 * Bless once so it can be used as a RECORD type (e.g. for
-		 * row_to_json or other record-based operations).
+		 * datum_to_jsonb or other record-based operations).
 		 */
 		BlessTupleDesc(cached_tupdesc);
 
@@ -1280,9 +1297,9 @@ build_conflict_tupledesc(void)
  * [ { "xid": "1001", "commit_ts": "...", "origin": "...", "tuple": {...} }, ... ]
  */
 static Datum
-build_local_conflicts_json_array(EState *estate, Relation rel,
-								 ConflictType conflict_type,
-								 List *conflicttuples)
+build_local_conflicts_jsonb_array(EState *estate, Relation rel,
+								  ConflictType conflict_type,
+								  List *conflicttuples)
 {
 	ListCell   *lc;
 	List	   *json_datums = NIL;
@@ -1294,11 +1311,15 @@ build_local_conflicts_json_array(EState *estate, Relation rel,
 	bool		typbyval;
 	char		typalign;
 	TupleDesc	tupdesc;
+	JsonTypeCategory tcategory;
+	Oid			outfuncoid;
 
 	/* Build local conflicts tuple descriptor. */
 	tupdesc = build_conflict_tupledesc();
 
-	/* Process local conflict tuple list and prepare an array of JSON. */
+	json_categorize_type(tupdesc->tdtypeid, true, &tcategory, &outfuncoid);
+
+	/* Process local conflict tuple list and prepare an array of JSONB. */
 	foreach_ptr(ConflictTupleInfo, conflicttuple, conflicttuples)
 	{
 		Datum		values[NUM_LOCAL_CONFLICT_ATTRS] = {0};
@@ -1339,16 +1360,16 @@ build_local_conflicts_json_array(EState *estate, Relation rel,
 				   CheckRelationOidLockedByMe(indexoid, RowExclusiveLock,
 											  true));
 			values[attno++] =
-					tuple_table_slot_to_indextup_json(estate, rel,
-													  indexoid,
-													  conflicttuple->slot);
+					tuple_table_slot_to_indextup_jsonb(estate, rel,
+													   indexoid,
+													   conflicttuple->slot);
 		}
 		else
 			nulls[attno++] = true;
 
-		/* Convert conflicting tuple to JSON datum. */
+		/* Convert conflicting tuple to JSONB datum. */
 		if (conflicttuple->slot)
-			values[attno] = tuple_table_slot_to_json_datum(conflicttuple->slot);
+			values[attno] = tuple_table_slot_to_jsonb_datum(conflicttuple->slot);
 		else
 			nulls[attno] = true;
 
@@ -1359,10 +1380,9 @@ build_local_conflicts_json_array(EState *estate, Relation rel,
 		json_datum = heap_copy_tuple_as_datum(tuple, tupdesc);
 
 		/*
-		 * Build the higher level JSON datum in format described in function
-		 * header.
+		 * Build the higher level JSONB datum.
 		 */
-		json_datum = DirectFunctionCall1(row_to_json, json_datum);
+		json_datum = datum_to_jsonb(json_datum, tcategory, outfuncoid);
 
 		/* Done with the temporary tuple. */
 		heap_freetuple(tuple);
@@ -1382,11 +1402,11 @@ build_local_conflicts_json_array(EState *estate, Relation rel,
 		i++;
 	}
 
-	/* Construct the JSON array Datum. */
-	get_typlenbyvalalign(JSONOID, &typlen, &typbyval, &typalign);
+	/* Construct the JSONB array Datum. */
+	get_typlenbyvalalign(JSONBOID, &typlen, &typbyval, &typalign);
 	json_array_datum = PointerGetDatum(construct_array(json_datum_array,
 													   num_conflicts,
-													   JSONOID,
+													   JSONBOID,
 													   typlen,
 													   typbyval,
 													   typalign));
@@ -1451,7 +1471,7 @@ prepare_conflict_log_tuple(EState *estate, Relation rel,
 		nulls[attno++] = true;
 
 	if (!TupIsNull(remoteslot))
-		values[attno++] = tuple_table_slot_to_json_datum(remoteslot);
+		values[attno++] = tuple_table_slot_to_jsonb_datum(remoteslot);
 	else
 		nulls[attno++] = true;
 
@@ -1461,22 +1481,22 @@ prepare_conflict_log_tuple(EState *estate, Relation rel,
 
 		/*
 		 * If the table has a valid replica identity index, build the index
-		 * JSON datum from key value. Otherwise, construct it from the complete
+		 * JSONB datum from key value. Otherwise, construct it from the complete
 		 * tuple in REPLICA IDENTITY FULL cases.
 		 */
 		if (OidIsValid(replica_index))
-			values[attno++] = tuple_table_slot_to_indextup_json(estate, rel,
-																replica_index,
-																searchslot);
+			values[attno++] = tuple_table_slot_to_indextup_jsonb(estate, rel,
+																 replica_index,
+																 searchslot);
 		else
-			values[attno++] = tuple_table_slot_to_json_datum(searchslot);
+			values[attno++] = tuple_table_slot_to_jsonb_datum(searchslot);
 	}
 	else
 		nulls[attno++] = true;
 
-	values[attno] = build_local_conflicts_json_array(estate, rel,
-													 conflict_type,
-													 conflicttuples);
+	values[attno] = build_local_conflicts_jsonb_array(estate, rel,
+													  conflict_type,
+													  conflicttuples);
 
 	Assert(attno + 1 == NUM_CONFLICT_ATTRS);
 

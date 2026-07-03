@@ -434,7 +434,7 @@ _LoadLOs(ArchiveHandle *AH, TocEntry *te)
 					 tocfname, line);
 
 		StartRestoreLO(AH, oid, AH->public.ropt->dropSchema);
-		snprintf(path, MAXPGPATH, "%s/%s", ctx->directory, lofname);
+		setFilePath(AH, path, lofname);
 		_PrintFileData(AH, path);
 		EndRestoreLO(AH, oid);
 	}
@@ -683,8 +683,21 @@ setFilePath(ArchiveHandle *AH, char *buf, const char *relativeFilename)
 {
 	lclContext *ctx = (lclContext *) AH->formatData;
 	char	   *dname;
+	struct stat st;
 
 	dname = ctx->directory;
+
+	/*
+	 * Per-entry filenames come from the (untrusted) toc.dat / blobs_*.toc.
+	 * Refuse empty names, '.' or '..', or anything containing directory
+	 * separators.
+	 */
+	if (relativeFilename[0] == '\0' ||
+		strcmp(relativeFilename, ".") == 0 ||
+		strcmp(relativeFilename, "..") == 0 ||
+		first_dir_separator(relativeFilename) != NULL)
+		pg_fatal("invalid archive: entry filename \"%s\" is not a plain file name",
+				 relativeFilename);
 
 	if (strlen(dname) + 1 + strlen(relativeFilename) + 1 > MAXPGPATH)
 		pg_fatal("file name too long: \"%s\"", dname);
@@ -692,6 +705,13 @@ setFilePath(ArchiveHandle *AH, char *buf, const char *relativeFilename)
 	strcpy(buf, dname);
 	strcat(buf, "/");
 	strcat(buf, relativeFilename);
+
+	/*
+	 * Refuse symbolic links to prevent path traversal attacks via symlinks.
+	 */
+	if (lstat(buf, &st) == 0 && S_ISLNK(st.st_mode))
+		pg_fatal("invalid archive: entry file \"%s\" is a symbolic link",
+				 buf);
 }
 
 /*

@@ -2249,6 +2249,7 @@ PatternInfo
 PatternInfoArray
 Pattern_Prefix_Status
 Pattern_Type
+PendingConflictLogData
 PendingFsyncEntry
 PendingListenAction
 PendingListenEntry

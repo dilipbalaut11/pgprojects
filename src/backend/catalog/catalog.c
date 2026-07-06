@@ -236,7 +236,9 @@ IsToastClass(Form_pg_class reltuple)
  * IsConflictLogTableClass
  *		True iff pg_class tuple represents a Conflict Log Table.
  *
- *		Does not perform any catalog accesses.
+ *		Does not perform any catalog accesses.  See
+ * 		IsConflictLogTableNamespace() for why operations on these tables are
+ * 		restricted.
  */
 bool
 IsConflictLogTableClass(Form_pg_class reltuple)
@@ -285,6 +287,15 @@ IsToastNamespace(Oid namespaceId)
  *		True iff namespace is pg_conflict.
  *
  *		Does not perform any catalog accesses.
+ *
+ * Tables in the pg_conflict namespace are conflict log tables, created and
+ * maintained by the system to record logical replication conflicts. The
+ * apply worker's inserts depend on their fixed structure, so they are treated
+ * as system-managed: call sites across the backend use this (and
+ * IsConflictLogTableClass()) to reject operations that could disrupt logging,
+ * such as DDL, manual INSERT/UPDATE/MERGE, and row locking. DELETE and
+ * TRUNCATE are the only data operations allowed, so that users can still
+ * prune old conflict rows.
  */
 bool
 IsConflictLogTableNamespace(Oid namespaceId)

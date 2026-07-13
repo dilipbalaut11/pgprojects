@@ -25,6 +25,7 @@
 #include "catalog/pg_type.h"
 #include "foreign/foreign.h"
 #include "miscadmin.h"
+#include "replication/logicallauncher.h"
 #include "storage/lmgr.h"
 #include "storage/lock.h"
 #include "utils/acl.h"
@@ -113,6 +114,12 @@ GetSubscription(Oid subid, bool missing_ok, bool conninfo_needed,
 	oldcxt = MemoryContextSwitchTo(cxt);
 
 	subform = (Form_pg_subscription) GETSTRUCT(tup);
+
+	/*
+	 * Outside the launcher process, subscription lookups must only access
+	 * subscriptions belonging to the current database.
+	 */
+	Assert(IsLogicalLauncher() || subform->subdbid == MyDatabaseId);
 
 	sub = palloc0_object(Subscription);
 	sub->cxt = cxt;
@@ -271,6 +278,9 @@ DisableSubscription(Oid subid)
 
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for subscription %u", subid);
+
+	/* Must only modify subscriptions belonging to the current database. */
+	Assert(((Form_pg_subscription) GETSTRUCT(tup))->subdbid == MyDatabaseId);
 
 	LockSharedObject(SubscriptionRelationId, subid, 0, AccessShareLock);
 
@@ -713,6 +723,9 @@ UpdateDeadTupleRetentionStatus(Oid subid, bool active)
 
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for subscription %u", subid);
+
+	/* Must only modify subscriptions belonging to the current database. */
+	Assert(((Form_pg_subscription) GETSTRUCT(tup))->subdbid == MyDatabaseId);
 
 	LockSharedObject(SubscriptionRelationId, subid, 0, AccessShareLock);
 

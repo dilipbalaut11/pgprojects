@@ -1,0 +1,5 @@
+# pg_iceberg_copy extension
+comment = 'Extension to copy PostgreSQL data blocks, WAL, and SLRU to disk in Iceberg format'
+default_version = '1.0'
+module_pathname = '$libdir/pg_iceberg_copy'
+relocatable = true

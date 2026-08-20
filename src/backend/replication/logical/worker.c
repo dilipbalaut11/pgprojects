@@ -328,14 +328,21 @@ typedef struct ApplyExecutionData
  * Context describing the remote transaction whose changes are currently
  * being applied, and the change within it.
  *
- * The remote transaction information (remote_xid and finish_lsn) is set when
- * the transaction's changes begin to be applied and is used not only for
- * error context reporting (see apply_error_callback), but also to decide
- * whether a change should be applied at all (see
- * should_apply_changes_for_rel) and to validate the transaction finish
- * messages.  finish_lsn is invalid when the final LSN of the remote
- * transaction is not yet known (e.g. while streaming an in-progress
- * transaction).
+ * The remote transaction information (remote_xid, finish_lsn and commit_ts)
+ * is set when the transaction's changes begin to be applied and is used not
+ * only for error context reporting (see apply_error_callback), but also to
+ * decide whether a change should be applied at all (see
+ * should_apply_changes_for_rel), to validate the transaction finish
+ * messages, and to populate the conflict log table if a conflict is
+ * detected while applying the transaction (see
+ * GetRemoteTransactionInfoForConflict).
+ *
+ * finish_lsn is invalid when the final LSN of the remote transaction is not
+ * yet known (e.g. while streaming an in-progress transaction).  Similarly,
+ * commit_ts is 0 when the remote commit timestamp is not yet known; for a
+ * streamed transaction it is filled in only if and when the leader apply
+ * worker processes the commit record, so it remains 0 for conflicts handled
+ * by a parallel apply worker.
  *
  * The remaining fields describe the individual change being applied and are
  * used only for error context reporting.
@@ -349,6 +356,7 @@ typedef struct ApplyRemoteCtx
 	int			remote_attnum;	/* -1 if invalid */
 	TransactionId remote_xid;
 	XLogRecPtr	finish_lsn;
+	TimestampTz commit_ts;		/* remote commit ts; 0 if unknown */
 	char	   *origin_name;
 } ApplyRemoteCtx;
 
@@ -483,6 +491,7 @@ static ApplyRemoteCtx remote_ctx =
 	.remote_attnum = -1,
 	.remote_xid = InvalidTransactionId,
 	.finish_lsn = InvalidXLogRecPtr,
+	.commit_ts = 0,
 	.origin_name = NULL,
 };
 
@@ -641,7 +650,9 @@ static void stop_skipping_changes(void);
 static void clear_subscription_skip_lsn(XLogRecPtr finish_lsn);
 
 /* Functions to maintain the context of the remote transaction being applied */
-static inline void set_remote_transaction_info(TransactionId xid, XLogRecPtr lsn);
+static inline void set_remote_transaction_info(TransactionId xid,
+											   XLogRecPtr lsn,
+											   TimestampTz commit_ts);
 static inline void reset_apply_remote_context(void);
 
 static TransApplyAction get_transaction_apply_action(TransactionId xid,
@@ -1249,7 +1260,8 @@ apply_handle_begin(StringInfo s)
 	Assert(!TransactionIdIsValid(stream_xid));
 
 	logicalrep_read_begin(s, &begin_data);
-	set_remote_transaction_info(begin_data.xid, begin_data.final_lsn);
+	set_remote_transaction_info(begin_data.xid, begin_data.final_lsn,
+								begin_data.committime);
 
 	maybe_start_skipping_changes(begin_data.final_lsn);
 
@@ -1307,7 +1319,12 @@ apply_handle_begin_prepare(StringInfo s)
 	Assert(!TransactionIdIsValid(stream_xid));
 
 	logicalrep_read_begin_prepare(s, &begin_data);
-	set_remote_transaction_info(begin_data.xid, begin_data.prepare_lsn);
+
+	/*
+	 * The commit timestamp is known only when the commit record arrives, so
+	 * it is set to 0 for now.
+	 */
+	set_remote_transaction_info(begin_data.xid, begin_data.prepare_lsn, 0);
 
 	maybe_start_skipping_changes(begin_data.prepare_lsn);
 
@@ -1437,7 +1454,8 @@ apply_handle_commit_prepared(StringInfo s)
 	char		gid[GIDSIZE];
 
 	logicalrep_read_commit_prepared(s, &prepare_data);
-	set_remote_transaction_info(prepare_data.xid, prepare_data.commit_lsn);
+	set_remote_transaction_info(prepare_data.xid, prepare_data.commit_lsn,
+								prepare_data.commit_time);
 
 	/* Compute GID for two_phase transactions. */
 	TwoPhaseTransactionGid(MySubscription->oid, prepare_data.xid,
@@ -1489,7 +1507,8 @@ apply_handle_rollback_prepared(StringInfo s)
 	char		gid[GIDSIZE];
 
 	logicalrep_read_rollback_prepared(s, &rollback_data);
-	set_remote_transaction_info(rollback_data.xid, rollback_data.rollback_end_lsn);
+	set_remote_transaction_info(rollback_data.xid,
+								rollback_data.rollback_end_lsn, 0);
 
 	/* Compute GID for two_phase transactions. */
 	TwoPhaseTransactionGid(MySubscription->oid, rollback_data.xid,
@@ -1565,7 +1584,7 @@ apply_handle_stream_prepare(StringInfo s)
 				 errmsg_internal("tablesync worker received a STREAM PREPARE message")));
 
 	logicalrep_read_stream_prepare(s, &prepare_data);
-	set_remote_transaction_info(prepare_data.xid, prepare_data.prepare_lsn);
+	set_remote_transaction_info(prepare_data.xid, prepare_data.prepare_lsn, 0);
 
 	apply_action = get_transaction_apply_action(prepare_data.xid, &winfo);
 
@@ -1780,10 +1799,10 @@ apply_handle_stream_start(StringInfo s)
 				 errmsg_internal("invalid transaction ID in streamed replication transaction")));
 
 	/*
-	 * The final LSN of the streamed transaction is known only when its commit
-	 * record arrives.
+	 * The final LSN and commit timestamp of the streamed transaction are
+	 * known only when its commit record arrives.
 	 */
-	set_remote_transaction_info(stream_xid, InvalidXLogRecPtr);
+	set_remote_transaction_info(stream_xid, InvalidXLogRecPtr, 0);
 
 	/* Try to allocate a worker for the streaming transaction. */
 	if (first_segment)
@@ -2132,7 +2151,7 @@ apply_handle_stream_abort(StringInfo s)
 	 * when a top-level transaction aborts, and a subxid only when a
 	 * subtransaction rolls back.  See set_remote_transaction_info().
 	 */
-	set_remote_transaction_info(subxid, abort_data.abort_lsn);
+	set_remote_transaction_info(subxid, abort_data.abort_lsn, 0);
 
 	apply_action = get_transaction_apply_action(xid, &winfo);
 
@@ -2447,7 +2466,8 @@ apply_handle_stream_commit(StringInfo s)
 				 errmsg_internal("STREAM COMMIT message without STREAM STOP")));
 
 	xid = logicalrep_read_stream_commit(s, &commit_data);
-	set_remote_transaction_info(xid, commit_data.commit_lsn);
+	set_remote_transaction_info(xid, commit_data.commit_lsn,
+								commit_data.committime);
 
 	apply_action = get_transaction_apply_action(xid, &winfo);
 
@@ -6388,8 +6408,10 @@ apply_error_callback(void *arg)
  * Set information identifying the remote transaction currently being
  * applied, kept for the duration of that transaction.  Besides naming the
  * transaction in the error context, this decides whether a change is applied
- * at all (see should_apply_changes_for_rel) and validates the transaction
- * finish messages.
+ * at all (see should_apply_changes_for_rel), validates the transaction
+ * finish messages, and populates the conflict log table if a conflict is
+ * detected while applying the transaction (see
+ * GetRemoteTransactionInfoForConflict).
  *
  * This must be called for every message type that begins or resumes applying
  * a remote transaction's changes (BEGIN, BEGIN PREPARE, STREAM START, STREAM
@@ -6404,13 +6426,45 @@ apply_error_callback(void *arg)
  * subtransaction rolls back, and the top-level xid otherwise.  Nothing else
  * observes a subxid recorded this way, because no change is applied between a
  * STREAM ABORT and the STREAM START or STREAM COMMIT/PREPARE that follows it,
- * and each of those calls this again with the transaction's own values.
+ * and each of those calls this again with the transaction's own values.  The
+ * assertion in
+ * GetRemoteTransactionInfoForConflict() enforces that for conflict logging.
+ *
+ * Callers pass the remote commit timestamp when it is known (from the BEGIN
+ * or STREAM COMMIT message) and 0 otherwise.
  */
 static inline void
-set_remote_transaction_info(TransactionId xid, XLogRecPtr lsn)
+set_remote_transaction_info(TransactionId xid, XLogRecPtr lsn,
+							TimestampTz commit_ts)
 {
 	remote_ctx.remote_xid = xid;
 	remote_ctx.finish_lsn = lsn;
+	remote_ctx.commit_ts = commit_ts;
+}
+
+/*
+ * Return information identifying the remote transaction currently being
+ * applied, for use by conflict logging (see insert_conflict_log_tuple() in
+ * conflict.c).  See set_remote_transaction_info().
+ */
+void
+GetRemoteTransactionInfoForConflict(TransactionId *remote_xid,
+									XLogRecPtr *finish_lsn,
+									TimestampTz *commit_ts)
+{
+	/*
+	 * Conflicts are only detected while applying a row change, which
+	 * guarantees the recorded values describe the top-level transaction.  In
+	 * particular they are never the subxid and abort LSN recorded by a
+	 * subtransaction abort.  See set_remote_transaction_info().
+	 */
+	Assert(remote_ctx.command == LOGICAL_REP_MSG_INSERT ||
+		   remote_ctx.command == LOGICAL_REP_MSG_UPDATE ||
+		   remote_ctx.command == LOGICAL_REP_MSG_DELETE);
+
+	*remote_xid = remote_ctx.remote_xid;
+	*finish_lsn = remote_ctx.finish_lsn;
+	*commit_ts = remote_ctx.commit_ts;
 }
 
 /* Reset all information of the remote transaction context */
@@ -6420,7 +6474,7 @@ reset_apply_remote_context(void)
 	remote_ctx.command = 0;
 	remote_ctx.rel = NULL;
 	remote_ctx.remote_attnum = -1;
-	set_remote_transaction_info(InvalidTransactionId, InvalidXLogRecPtr);
+	set_remote_transaction_info(InvalidTransactionId, InvalidXLogRecPtr, 0);
 }
 
 /*

@@ -15,6 +15,7 @@
 #include "postgres.h"
 
 #include "access/commit_ts.h"
+#include "access/detoast.h"
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/tableam.h"
@@ -30,6 +31,8 @@
 #include "storage/lmgr.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/json.h"
+#include "utils/jsonfuncs.h"
 #include "utils/lsyscache.h"
 #include "utils/pg_lsn.h"
 
@@ -69,6 +72,14 @@ typedef struct ConflictLogColumnDef
  * scalar columns (relid, conflict_type, commit timestamp) while these json
  * columns are per-conflict payload to inspect, not search keys.
  *
+ * A column value is recorded verbatim, or not at all: values larger than
+ * CONFLICT_MAX_VALUE_SIZE are replaced by a marker object recording their
+ * length (see conflict_values_to_json()). Values are never truncated,
+ * because a partial value in a queryable table would silently give wrong
+ * answers to equality and join predicates. 'has_omitted_values' is true if
+ * any value in the row was replaced this way, so that incomplete rows can be
+ * filtered cheaply without searching the json columns.
+ *
  * 'local_conflicts' is typed as an array of JSON objects (json[]), not a
  * single json object, so that a future conflict type needing to record
  * multiple local rows for one remote operation doesn't require a
@@ -86,10 +97,32 @@ static const ConflictLogColumnDef ConflictLogSchema[] = {
 	{.attname = "replica_identity_full", .atttypid = BOOLOID},
 	{.attname = "replica_identity", .atttypid = JSONOID},
 	{.attname = "remote_tuple", .atttypid = JSONOID},
-	{.attname = "local_conflicts", .atttypid = JSONARRAYOID}
+	{.attname = "local_conflicts", .atttypid = JSONARRAYOID},
+	{.attname = "has_omitted_values", .atttypid = BOOLOID}
 };
 
 #define NUM_CONFLICT_ATTRS ((AttrNumber) lengthof(ConflictLogSchema))
+
+/*
+ * Largest value recorded verbatim in the json columns of the conflict log
+ * table; anything larger is replaced by a marker recording its length. See
+ * conflict_values_to_json().
+ *
+ * This is generous enough that an ordinary row is always recorded in full,
+ * while excluding the large TOASTed values that would otherwise bloat the
+ * conflict log table, and the WAL written for it, out of proportion to the
+ * conflict being recorded.
+ *
+ * With CONFLICT_MAX_VALUE_SIZE set to 16kB, even a table with the maximum
+ * supported number of columns (MaxHeapAttributeNumber = 1600) undergoing the
+ * worst-case 6x JSON escape expansion will produce a serialized JSON datum of
+ * at most ~150MB, safely below PostgreSQL's 1GB varlena limit. Furthermore,
+ * across all three JSON columns in ConflictLogSchema (replica_identity,
+ * remote_tuple, local_conflicts), the total in-memory formed row size is
+ * bounded by ~460MB, ensuring it stays comfortably within PostgreSQL's 1GB
+ * (MaxAllocSize) in-memory row/tuple size limit.
+ */
+#define CONFLICT_MAX_VALUE_SIZE (16 * 1024)
 
 /*
  * Schema for the elements within the 'local_conflicts' JSON array.
@@ -138,13 +171,18 @@ static void build_index_datums_from_slot(EState *estate, Relation localrel,
 										 bool *isnull);
 static char *build_index_value_desc(EState *estate, Relation localrel,
 									TupleTableSlot *slot, Oid indexoid);
-static Datum tuple_table_slot_to_json_datum(TupleTableSlot *slot);
+static Datum conflict_values_to_json(TupleDesc tupdesc, const Datum *values,
+									 const bool *isnull, bool *omitted);
+static Datum tuple_table_slot_to_json_datum(TupleTableSlot *slot,
+											bool *omitted);
 static Datum tuple_table_slot_to_indextup_json(EState *estate,
 											   Relation localrel,
 											   Oid replica_index,
-											   TupleTableSlot *slot);
+											   TupleTableSlot *slot,
+											   bool *omitted);
 static TupleDesc build_local_conflicts_tupledesc(void);
-static Datum build_local_conflicts_json_array(List *conflicttuples);
+static Datum build_local_conflicts_json_array(List *conflicttuples,
+											  bool *omitted);
 static void insert_conflict_log_tuple(EState *estate, Relation rel,
 									  Relation conflictlogrel,
 									  ConflictType conflict_type,
@@ -177,7 +215,7 @@ create_conflict_log_table_tupdesc(void)
  * Create a structured conflict log table for a subscription.
  *
  * The table is created within the system-managed 'pg_conflict' namespace to
- * prevent users from manually dropping or altering it.  This also prevents
+ * prevent users from manually dropping or altering it. This also prevents
  * accidental name collisions with user-created tables with the same name.
  *
  * The table name is generated automatically using the subscription's OID
@@ -329,7 +367,7 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 
 	/*
 	 * Only LOG-level conflicts (i.e. resolved conflicts where the transaction
-	 * continues) are recorded in the conflict log table.  ERROR-level
+	 * continues) are recorded in the conflict log table. ERROR-level
 	 * conflicts halt replication and abort the transaction, so they are
 	 * always reported exclusively to the server log.
 	 */
@@ -343,7 +381,7 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 		 * If a conflict log table was requested but it has been dropped
 		 * concurrently (e.g. a concurrent ALTER SUBSCRIPTION changed
 		 * conflict_log_destination), get_conflictlog_dest_and_table()
-		 * returned NULL.  Fall back to logging to the server log so that the
+		 * returned NULL. Fall back to logging to the server log so that the
 		 * conflict is not lost.
 		 */
 		if (log_dest_table && conflictlogrel == NULL)
@@ -359,7 +397,7 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 	}
 
 	/*
-	 * Report the conflict to the server log.  When the server log is one of
+	 * Report the conflict to the server log. When the server log is one of
 	 * the destinations (or for ERROR-level conflicts), emit the full details.
 	 * Otherwise (table-only for LOG-level conflicts), emit a shorter message
 	 * noting that the details are captured in the conflict log table.
@@ -465,7 +503,7 @@ InitConflictIndexes(ResultRelInfo *relInfo)
  *
  * The table is opened with try_table_open(), so NULL is returned if the
  * conflict log table has been dropped concurrently (e.g. by an ALTER
- * SUBSCRIPTION that changed conflict_log_destination).  Callers must treat a
+ * SUBSCRIPTION that changed conflict_log_destination). Callers must treat a
  * NULL result for a table destination as "table unavailable" and fall back to
  * server-log reporting rather than failing.
  */
@@ -475,7 +513,7 @@ get_conflictlog_dest_and_table(ConflictLogDest *log_dest)
 	Oid			conflictlogrelid;
 
 	/*
-	 * Convert the text log destination to the internal enum.  MySubscription
+	 * Convert the text log destination to the internal enum. MySubscription
 	 * already contains the data from pg_subscription.
 	 */
 	*log_dest = GetConflictLogDest(MySubscription->conflictlogdest);
@@ -490,7 +528,7 @@ get_conflictlog_dest_and_table(ConflictLogDest *log_dest)
 
 	/*
 	 * Use try_table_open(): the table may have been dropped concurrently by
-	 * an ALTER SUBSCRIPTION that changed conflict_log_destination.  Returning
+	 * an ALTER SUBSCRIPTION that changed conflict_log_destination. Returning
 	 * NULL lets the caller fall back to the server log instead of failing.
 	 */
 	return try_table_open(conflictlogrelid, RowExclusiveLock);
@@ -997,26 +1035,175 @@ build_index_value_desc(EState *estate, Relation localrel, TupleTableSlot *slot,
 }
 
 /*
+ * conflict_values_to_json
+ *
+ * Serialize the given attribute values to a JSON object datum for the
+ * conflict log table.
+ *
+ * This behaves like row_to_json() on the equivalent tuple, except that a
+ * value larger than CONFLICT_MAX_VALUE_SIZE is not stored; in its place we
+ * emit an object recording that it was omitted along with its length, for
+ * example:
+ *
+ *	   {"a" : 1, "b" : {"omitted":true,"length":190000000}}
+ *
+ * A cap is required, not merely desirable. The result must become a json
+ * Datum, and a varlena cannot exceed 1GB, so a tuple whose JSON form is
+ * larger than that simply cannot be stored. Note that the JSON form can be
+ * far larger than the tuple: escape_json_char() expands every byte below
+ * 0x20 to a six-byte \uXXXX sequence, and bytea output is hex, so the
+ * expansion factor depends on the value's *content*, not just its length.
+ * Capping the stored size keeps the bound predictable regardless of content.
+ *
+ * We omit rather than truncate. A truncated value in a queryable table
+ * would silently return wrong answers to equality, join and diff predicates,
+ * with no way for the consumer to tell. The server log can truncate because
+ * a human reads it and ExecBuildSlotValueDescription() appends an ellipsis.
+ * Here the contract is that any value present is byte-exact.
+ *
+ * The marker is placed on the value rather than in a side list of column
+ * names because the same column may be oversized in one payload of a
+ * conflict log row and fine in another, and because a sibling metadata key
+ * could collide with a real column of that name.
+ *
+ * *omitted is set to true if any value was omitted; it is never set to
+ * false, so callers can accumulate the flag across several tuples.
+ */
+static Datum
+conflict_values_to_json(TupleDesc tupdesc, const Datum *values,
+						const bool *isnull, bool *omitted)
+{
+	Datum	   *args;
+	bool	   *nulls;
+	Oid		   *types;
+	int			nargs = 0;
+	bool		found_oversized = false;
+	Datum		result;
+
+	/*
+	 * First pass: look for oversized values. We test the raw datum size
+	 * rather than the length of the type's output representation so that a
+	 * toasted value is not detoasted merely to find out that we are going to
+	 * discard it; for a toasted datum this only reads the pointer header. The
+	 * two differ for types whose output is wider than their storage (bytea
+	 * renders as hex, for instance), but only by a small constant factor,
+	 * which the cap already accounts for.
+	 */
+	for (int i = 0; i < tupdesc->natts; i++)
+	{
+		Form_pg_attribute att = TupleDescAttr(tupdesc, i);
+
+		if (att->attisdropped || att->attlen != -1 || isnull[i])
+			continue;
+
+		if (toast_raw_datum_size(values[i]) - VARHDRSZ >
+			CONFLICT_MAX_VALUE_SIZE)
+		{
+			found_oversized = true;
+			break;
+		}
+	}
+
+	/*
+	 * Nothing oversized, which is the overwhelmingly common case: form the
+	 * tuple and hand it to row_to_json(), so that the stored representation
+	 * is exactly what it would have been without this check.
+	 */
+	if (!found_oversized)
+	{
+		HeapTuple	tuple;
+		Datum		json;
+
+		tuple = heap_form_tuple(tupdesc, unconstify(Datum *, values),
+								unconstify(bool *, isnull));
+		json = DirectFunctionCall1(row_to_json,
+								   heap_copy_tuple_as_datum(tuple, tupdesc));
+		heap_freetuple(tuple);
+
+		return json;
+	}
+
+	/*
+	 * Otherwise build the object ourselves, substituting a marker for each
+	 * oversized value. Note this renders with json_build_object()'s spacing
+	 * rather than row_to_json()'s; both are valid json and these columns are
+	 * payload to inspect, not compared as text.
+	 */
+	args = palloc_array(Datum, tupdesc->natts * 2);
+	nulls = palloc_array(bool, tupdesc->natts * 2);
+	types = palloc_array(Oid, tupdesc->natts * 2);
+
+	for (int i = 0; i < tupdesc->natts; i++)
+	{
+		Form_pg_attribute att = TupleDescAttr(tupdesc, i);
+		Size		rawsize = 0;
+
+		if (att->attisdropped)
+			continue;
+
+		/* Key. */
+		args[nargs] = CStringGetTextDatum(NameStr(att->attname));
+		nulls[nargs] = false;
+		types[nargs] = TEXTOID;
+		nargs++;
+
+		if (!isnull[i] && att->attlen == -1)
+			rawsize = toast_raw_datum_size(values[i]) - VARHDRSZ;
+
+		if (rawsize > CONFLICT_MAX_VALUE_SIZE)
+		{
+			StringInfoData marker;
+
+			initStringInfo(&marker);
+			appendStringInfo(&marker,
+							 "{\"omitted\":true,\"length\":" UINT64_FORMAT "}",
+							 (uint64) rawsize);
+
+			/*
+			 * Passed as json so that it is emitted verbatim rather than as a
+			 * quoted string.
+			 */
+			args[nargs] = CStringGetTextDatum(marker.data);
+			nulls[nargs] = false;
+			types[nargs] = JSONOID;
+			pfree(marker.data);
+
+			*omitted = true;
+		}
+		else
+		{
+			args[nargs] = values[i];
+			nulls[nargs] = isnull[i];
+			types[nargs] = att->atttypid;
+		}
+		nargs++;
+	}
+
+	result = json_build_object_worker(nargs, args, nulls, types, false, false);
+
+	pfree(args);
+	pfree(nulls);
+	pfree(types);
+
+	return result;
+}
+
+/*
  * tuple_table_slot_to_json_datum
  *
  * Helper function to convert a TupleTableSlot to JSON.
  */
 static Datum
-tuple_table_slot_to_json_datum(TupleTableSlot *slot)
+tuple_table_slot_to_json_datum(TupleTableSlot *slot, bool *omitted)
 {
-	HeapTuple	tuple;
-	Datum		datum;
-	Datum		json;
-
 	Assert(slot != NULL);
 
-	tuple = ExecCopySlotHeapTuple(slot);
-	datum = heap_copy_tuple_as_datum(tuple, slot->tts_tupleDescriptor);
+	/* Make sure the tuple is fully deconstructed */
+	slot_getallattrs(slot);
 
-	json = DirectFunctionCall1(row_to_json, datum);
-	heap_freetuple(tuple);
-
-	return json;
+	return conflict_values_to_json(slot->tts_tupleDescriptor,
+								   slot->tts_values, slot->tts_isnull,
+								   omitted);
 }
 
 /*
@@ -1030,12 +1217,12 @@ tuple_table_slot_to_json_datum(TupleTableSlot *slot)
  */
 static Datum
 tuple_table_slot_to_indextup_json(EState *estate, Relation localrel,
-								  Oid indexid, TupleTableSlot *slot)
+								  Oid indexid, TupleTableSlot *slot,
+								  bool *omitted)
 {
 	Relation	indexDesc;
 	Datum		values[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
-	HeapTuple	tuple;
 	TupleDesc	tupdesc;
 	Datum		datum;
 
@@ -1052,15 +1239,11 @@ tuple_table_slot_to_indextup_json(EState *estate, Relation localrel,
 	/* Bless the tupdesc so it can be looked up by row_to_json. */
 	BlessTupleDesc(tupdesc);
 
-	/* Form the replica identity tuple. */
-	tuple = heap_form_tuple(tupdesc, values, isnull);
-	datum = heap_copy_tuple_as_datum(tuple, tupdesc);
+	/* Convert the replica identity key values to a JSON datum. */
+	datum = conflict_values_to_json(tupdesc, values, isnull, omitted);
 
-	heap_freetuple(tuple);
 	index_close(indexDesc, NoLock);
 
-	/* Convert to a JSON datum. */
-	datum = DirectFunctionCall1(row_to_json, datum);
 	FreeTupleDesc(tupdesc);
 
 	return datum;
@@ -1112,9 +1295,19 @@ build_local_conflicts_tupledesc(void)
  *
  * Example output structure:
  * [ { "xid": "1001", "commit_ts": "...", "origin": "...", "tuple": {...} }, ... ]
+ *
+ * XXX Each element's tuple is bounded by conflict_values_to_json(), but
+ * the array as a whole is not, and it is itself a varlena limited to 1GB.
+ * That is unreachable today because the only conflict type that can produce
+ * more than one element, CT_MULTIPLE_UNIQUE_CONFLICTS, is reported at ERROR
+ * level and so is never written to the conflict log table (see
+ * ReportApplyConflict). If configurable resolution strategies later make
+ * such a conflict non-fatal, this will need a bound on the total size, and
+ * the caller should also avoid recording the same local row once per
+ * violated unique index.
  */
 static Datum
-build_local_conflicts_json_array(List *conflicttuples)
+build_local_conflicts_json_array(List *conflicttuples, bool *omitted)
 {
 	Datum	   *json_datum_array;
 	Datum		json_array_datum;
@@ -1167,7 +1360,8 @@ build_local_conflicts_json_array(List *conflicttuples)
 
 		/* Convert conflicting tuple to JSON datum. */
 		if (conflicttuple->slot)
-			values[attno++] = tuple_table_slot_to_json_datum(conflicttuple->slot);
+			values[attno++] =
+				tuple_table_slot_to_json_datum(conflicttuple->slot, omitted);
 		else
 			nulls[attno++] = true;
 
@@ -1226,6 +1420,7 @@ insert_conflict_log_tuple(EState *estate, Relation rel,
 	TransactionId remote_xid;
 	XLogRecPtr	remote_final_lsn;
 	TimestampTz remote_commit_ts;
+	bool		omitted = false;
 	HeapTuple	tuple;
 
 	Assert(conflictlogrel != NULL);
@@ -1282,12 +1477,14 @@ insert_conflict_log_tuple(EState *estate, Relation rel,
 			values[attno++] = BoolGetDatum(false);
 			values[attno++] = tuple_table_slot_to_indextup_json(estate, rel,
 																replica_index,
-																searchslot);
+																searchslot,
+																&omitted);
 		}
 		else
 		{
 			values[attno++] = BoolGetDatum(true);
-			values[attno++] = tuple_table_slot_to_json_datum(searchslot);
+			values[attno++] = tuple_table_slot_to_json_datum(searchslot,
+															 &omitted);
 		}
 	}
 	else
@@ -1297,11 +1494,14 @@ insert_conflict_log_tuple(EState *estate, Relation rel,
 	}
 
 	if (!TupIsNull(remoteslot))
-		values[attno++] = tuple_table_slot_to_json_datum(remoteslot);
+		values[attno++] = tuple_table_slot_to_json_datum(remoteslot, &omitted);
 	else
 		nulls[attno++] = true;
 
-	values[attno] = build_local_conflicts_json_array(conflicttuples);
+	values[attno++] = build_local_conflicts_json_array(conflicttuples,
+													   &omitted);
+
+	values[attno] = BoolGetDatum(omitted);
 
 	Assert(attno + 1 == NUM_CONFLICT_ATTRS);
 

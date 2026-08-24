@@ -706,7 +706,8 @@ WHERE s.subname = 'regress_conflict_test1' AND a.attnum > 0
      10 | replica_identity
      11 | remote_tuple
      12 | local_conflicts
-(12 rows)
+     13 | has_omitted_values
+(13 rows)
 
 -- Changing the subscription owner should also update the owner
 -- of the associated conflict log table.

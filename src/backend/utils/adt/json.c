@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "access/detoast.h"
 #include "access/htup_details.h"
 #include "catalog/pg_type.h"
 #include "common/hashfn.h"
@@ -100,6 +101,67 @@ static void add_json(Datum val, bool is_null, StringInfo result,
 static text *catenate_stringinfo_string(StringInfo buffer, const char *addon);
 
 /*
+ * Optional output size limit for datum_to_json_internal() and the
+ * recursive calls it makes for array/composite values. Zero (the default)
+ * means unlimited, matching the historical behavior of every caller in
+ * this file. json_set_size_limit() is meant to be used around a single
+ * top-level call (e.g. a call to datum_to_json()); the caller should reset
+ * the limit to 0 afterward so it doesn't apply to unrelated json.c calls
+ * later in the same backend.
+ */
+static Size json_size_limit = 0;
+static bool json_size_limit_hit = false;
+
+/*
+ * Set the output size limit checked by datum_to_json_internal(). Pass 0 to
+ * disable the limit. Also clears the "limit exceeded" flag, so this is
+ * safe to call both before starting a bounded call and after finishing one
+ * (to reset for the next caller).
+ */
+void
+json_set_size_limit(Size maxlen)
+{
+	json_size_limit = maxlen;
+	json_size_limit_hit = false;
+}
+
+/*
+ * Whether the most recent call made under a size limit set by
+ * json_set_size_limit() stopped early because the limit was exceeded.
+ */
+bool
+json_size_limit_exceeded(void)
+{
+	return json_size_limit_hit;
+}
+
+/*
+ * Would appending 'addlen' more bytes on top of 'currentlen' already-
+ * written bytes exceed the limit set by json_set_size_limit()? If so,
+ * record that the limit was hit and return true.
+ *
+ * This is for the handful of rendering paths in datum_to_json_internal()
+ * that build their entire output in a single call (escaping a text value,
+ * calling a type's output or cast function): the check at the top of that
+ * function only ever sees the total so far each time it is re-entered, so
+ * it catches unbounded recursion (e.g. many array elements or composite
+ * fields) but not one leaf value whose own rendering is disproportionately
+ * large. Each such call site knows, cheaply, the exact or worst-case size
+ * of what it is about to append, before appending it, and can check here
+ * instead of finding out only after building it.
+ */
+static bool
+json_size_would_exceed(int currentlen, Size addlen)
+{
+	if (json_size_limit && (Size) currentlen + addlen > json_size_limit)
+	{
+		json_size_limit_hit = true;
+		return true;
+	}
+	return false;
+}
+
+/*
  * Input.
  */
 Datum
@@ -184,6 +246,19 @@ datum_to_json_internal(Datum val, bool is_null, StringInfo result,
 
 	check_stack_depth();
 
+	/*
+	 * Stop as soon as a size limit set by json_set_size_limit() is exceeded,
+	 * rather than continuing to append. Every recursive call for array
+	 * elements or composite fields comes back through here, so this one check
+	 * bounds the total output of the top-level call regardless of how deeply
+	 * arrays and composites are nested inside one another. (This alone is not
+	 * enough for a leaf value whose own single-shot rendering is
+	 * disproportionately large; see the individual checks below and
+	 * json_size_would_exceed().)
+	 */
+	if (json_size_would_exceed(result->len, 0))
+		return;
+
 	/* callers are expected to ensure that null keys are not passed in */
 	Assert(!(key_scalar && is_null));
 
@@ -222,6 +297,11 @@ datum_to_json_internal(Datum val, bool is_null, StringInfo result,
 			break;
 		case JSONTYPE_NUMERIC:
 			outputstr = OidOutputFunctionCall(outfuncoid, val);
+			if (json_size_would_exceed(result->len, strlen(outputstr)))
+			{
+				pfree(outputstr);
+				return;
+			}
 
 			/*
 			 * Don't quote a non-key if it's a valid JSON number (i.e., not
@@ -273,14 +353,30 @@ datum_to_json_internal(Datum val, bool is_null, StringInfo result,
 			}
 			break;
 		case JSONTYPE_JSON:
-			/* JSON and JSONB output will already be escaped */
+
+			/*
+			 * JSON and JSONB output are already escaped, so we can call their
+			 * output functions directly without extra escaping. Check the
+			 * rendered length before appending to result.
+			 */
 			outputstr = OidOutputFunctionCall(outfuncoid, val);
+			if (json_size_would_exceed(result->len, strlen(outputstr)))
+			{
+				pfree(outputstr);
+				return;
+			}
+
 			appendStringInfoString(result, outputstr);
 			pfree(outputstr);
 			break;
 		case JSONTYPE_CAST:
 			/* outfuncoid refers to a cast function, not an output function */
 			jsontext = DatumGetTextPP(OidFunctionCall1(outfuncoid, val));
+			if (json_size_would_exceed(result->len, VARSIZE_ANY_EXHDR(jsontext)))
+			{
+				pfree(jsontext);
+				return;
+			}
 			appendBinaryStringInfo(result, VARDATA_ANY(jsontext),
 								   VARSIZE_ANY_EXHDR(jsontext));
 			pfree(jsontext);
@@ -289,10 +385,29 @@ datum_to_json_internal(Datum val, bool is_null, StringInfo result,
 			/* special-case text types to save useless palloc/memcpy cycles */
 			if (outfuncoid == F_TEXTOUT || outfuncoid == F_VARCHAROUT ||
 				outfuncoid == F_BPCHAROUT)
+			{
+				/*
+				 * escape_json_char() expands every byte below 0x20 to a
+				 * six-byte \uXXXX sequence, the worst case for this path;
+				 * check against that before escaping rather than after.
+				 * toast_raw_datum_size() gives the logical (uncompressed)
+				 * length without detoasting a value we may be about to
+				 * discard.
+				 */
+				Size		rawsize = toast_raw_datum_size(val) - VARHDRSZ;
+
+				if (json_size_would_exceed(result->len, 6 * rawsize))
+					return;
 				escape_json_text(result, (text *) DatumGetPointer(val));
+			}
 			else
 			{
 				outputstr = OidOutputFunctionCall(outfuncoid, val);
+				if (json_size_would_exceed(result->len, 6 * strlen(outputstr)))
+				{
+					pfree(outputstr);
+					return;
+				}
 				escape_json(result, outputstr);
 				pfree(outputstr);
 			}
@@ -461,6 +576,15 @@ array_dim_to_json(StringInfo result, int dim, int ndims, int *dims, const Datum 
 			array_dim_to_json(result, dim + 1, ndims, dims, vals, nulls,
 							  valcount, tcategory, outfuncoid, false);
 		}
+
+		/*
+		 * Stop looping once a size limit set by json_set_size_limit() has
+		 * been hit; datum_to_json_internal() already stopped appending, so
+		 * further iterations would just add separators to no purpose, and for
+		 * a very large remaining element count that adds up.
+		 */
+		if (json_size_limit_hit)
+			break;
 	}
 
 	appendStringInfoChar(result, ']');
@@ -585,6 +709,15 @@ composite_to_json(Datum composite, StringInfo result, bool use_line_feeds)
 
 		datum_to_json_internal(val, isnull, result, tcategory, outfuncoid,
 							   false);
+
+		/*
+		 * Stop looping once a size limit set by json_set_size_limit() has
+		 * been hit; datum_to_json_internal() already stopped appending, so
+		 * further iterations would just add field names and separators to no
+		 * purpose, and for a very wide row that adds up.
+		 */
+		if (json_size_limit_hit)
+			break;
 	}
 
 	appendStringInfoChar(result, '}');

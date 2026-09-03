@@ -157,6 +157,79 @@ $node_subscriber->wait_for_log(
 
 pass('multiple_unique_conflicts detected on a leaf partition during insert');
 
+# Truncate table to get rid of the error
+$node_subscriber->safe_psql('postgres', "TRUNCATE conf_tab_2;");
+
+##################################################
+# Test that a value too large to record in the conflict log table is omitted
+# rather than breaking apply. A JSON representation can be several times
+# larger than the value itself (every byte below 0x20 escapes to a six-byte
+# \uXXXX sequence), so an oversized value used to error out the apply worker,
+# which then retried the same change forever.
+##################################################
+$node_publisher->safe_psql('postgres',
+	"CREATE TABLE conf_tab_big (a int PRIMARY KEY, b text);");
+$node_subscriber->safe_psql('postgres',
+	"CREATE TABLE conf_tab_big (a int PRIMARY KEY, b text);");
+
+$node_publisher->safe_psql('postgres',
+	"ALTER PUBLICATION pub_tab ADD TABLE conf_tab_big");
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION sub_tab REFRESH PUBLICATION");
+$node_subscriber->wait_for_subscription_sync($node_publisher, $appname);
+
+$node_publisher->safe_psql('postgres',
+	"INSERT INTO conf_tab_big VALUES (1, 'small');");
+$node_publisher->wait_for_catchup($appname);
+
+# Remove the row locally so that the next remote update cannot find it.
+$node_subscriber->safe_psql('postgres',
+	"DELETE FROM conf_tab_big WHERE a = 1;");
+
+# Update it on the publisher with a value whose JSON form is far larger than
+# the value itself, generating an update_missing conflict on the subscriber.
+$node_publisher->safe_psql('postgres',
+	"UPDATE conf_tab_big SET b = repeat(chr(1), 100000) WHERE a = 1;");
+
+# Apply must not break; replication continues past the conflict.
+$node_publisher->safe_psql('postgres',
+	"INSERT INTO conf_tab_big VALUES (2, 'after');");
+$node_publisher->wait_for_catchup($appname);
+
+is( $node_subscriber->safe_psql(
+		'postgres', "SELECT b FROM conf_tab_big WHERE a = 2;"),
+	'after',
+	'apply continues when a conflicting value is too large to record');
+
+# The conflict was recorded, with the oversized value marked as omitted
+# rather than truncated or dropped silently.
+is( $node_subscriber->safe_psql(
+		'postgres',
+		"SELECT has_omitted_values FROM $clt WHERE relname = 'conf_tab_big';"),
+	't',
+	'oversized value is flagged by has_omitted_values');
+
+is( $node_subscriber->safe_psql(
+		'postgres',
+		"SELECT remote_tuple->'b'->>'omitted' FROM $clt
+		 WHERE relname = 'conf_tab_big';"),
+	'true',
+	'oversized value is marked omitted in place');
+
+is( $node_subscriber->safe_psql(
+		'postgres',
+		"SELECT remote_tuple->'b'->>'length' FROM $clt
+		 WHERE relname = 'conf_tab_big';"),
+	'100000',
+	'omitted value records its length');
+
+# Values below the cap in the same row are still recorded exactly.
+is( $node_subscriber->safe_psql(
+		'postgres',
+		"SELECT remote_tuple->>'a' FROM $clt WHERE relname = 'conf_tab_big';"),
+	'1',
+	'values below the cap are recorded verbatim');
+
 ###############################################################################
 # Setup a bidirectional logical replication between node_A & node_B
 ###############################################################################
@@ -713,7 +786,7 @@ like(
 
 ###############################################################################
 # ALTER TABLE ALL IN TABLESPACE must skip conflict log tables, the same way it
-# skips catalog and TOAST tables, instead of failing.  Use an isolated database
+# skips catalog and TOAST tables, instead of failing. Use an isolated database
 # so the bulk move only touches the objects created here.
 ###############################################################################
 $node_subscriber->safe_psql('postgres', "CREATE DATABASE clt_ts_test");
@@ -751,7 +824,7 @@ is( $node_subscriber->safe_psql(
 	'0',
 	"ALTER TABLE ALL IN TABLESPACE skips the conflict log table");
 
-# Cleanup.  The subscription has no real publisher connection, so detach its
+# Cleanup. The subscription has no real publisher connection, so detach its
 # slot before dropping it.
 $node_subscriber->safe_psql('clt_ts_test',
 	"ALTER SUBSCRIPTION sub_ts_test DISABLE");

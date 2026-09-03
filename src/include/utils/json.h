@@ -31,5 +31,7 @@ extern Datum json_build_object_worker(int nargs, const Datum *args, const bool *
 extern Datum json_build_array_worker(int nargs, const Datum *args, const bool *nulls,
 									 const Oid *types, bool absent_on_null);
 extern bool json_validate(text *json, bool check_unique_keys, bool throw_error);
+extern void json_set_size_limit(Size maxlen);
+extern bool json_size_limit_exceeded(void);
 
 #endif							/* JSON_H */

@@ -2398,6 +2398,13 @@ DETAIL:  <replaceable class="parameter">detailed_explanation</replaceable>[: <re
          <literal>delete_missing</literal> conflicts).
         </entry>
        </row>
+       <row>
+        <entry><literal>has_omitted_values</literal></entry>
+        <entry><type>boolean</type></entry>
+        <entry>Indicates whether any value in this row was too large to be
+        recorded and was replaced by an <literal>omitted</literal> marker
+        containing its length in bytes.</entry>
+       </row>
       </tbody>
      </tgroup>
     </table>
@@ -2406,6 +2413,31 @@ DETAIL:  <replaceable class="parameter">detailed_explanation</replaceable>[: <re
      The conflicting row data, including the incoming remote row (<literal>remote_tuple</literal>)
      and the associated local conflict details (<literal>local_conflicts</literal>), is stored in
      <type>json</type> formats for flexible querying and analysis.
+    </para>
+
+    <para>
+     A column value is either recorded exactly or not at all; it is never
+     truncated. Any value larger than 16kB is replaced in the
+     JSON columns by an object recording that it was omitted
+     together with its length in bytes, for example:
+<programlisting>
+{"a" : 1, "b" : {"omitted":true,"length":190000000}}
+</programlisting>
+     A cap is unavoidable, because these columns are of type
+     <type>json</type> and no value of that type may exceed 1GB, while the
+     JSON representation of a row can be several times larger
+     than the row itself. Values are omitted rather than truncated so that a
+     value present in the conflict log table can always be compared safely;
+     a truncated value would give wrong answers to equality and join
+     conditions without any indication. When a row contains such a marker,
+     <literal>has_omitted_values</literal> is <literal>true</literal>, which
+     allows incomplete rows to be found without searching the
+     JSON columns:
+<programlisting>
+SELECT * FROM pg_conflict.pg_conflict_log_16392 WHERE has_omitted_values;
+</programlisting>
+     Note that a large value which is overwritten as a result of the
+     conflict cannot be recovered from the conflict log table.
     </para>
 
     <para>

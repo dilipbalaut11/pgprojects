@@ -20,6 +20,7 @@
 #include "funcapi.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
+#include "nodes/miscnodes.h"
 #include "port/simd.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -28,6 +29,7 @@
 #include "utils/fmgroids.h"
 #include "utils/hsearch.h"
 #include "utils/json.h"
+#include "utils/jsonb.h"
 #include "utils/jsonfuncs.h"
 #include "utils/lsyscache.h"
 #include "utils/typcache.h"
@@ -90,72 +92,31 @@ typedef struct JsonAggState
 static void array_dim_to_json(StringInfo result, int dim, int ndims, int *dims,
 							  const Datum *vals, const bool *nulls, int *valcount,
 							  JsonTypeCategory tcategory, Oid outfuncoid,
-							  bool use_line_feeds);
+							  bool use_line_feeds, Size max_len, Node *escontext);
 static void array_to_json_internal(Datum array, StringInfo result,
-								   bool use_line_feeds);
+								   bool use_line_feeds, Size max_len, Node *escontext);
+static void composite_to_json_internal(Datum composite, StringInfo result,
+									   bool use_line_feeds, Size max_len, Node *escontext);
 static void datum_to_json_internal(Datum val, bool is_null, StringInfo result,
 								   JsonTypeCategory tcategory, Oid outfuncoid,
-								   bool key_scalar);
+								   bool key_scalar, Size max_len, Node *escontext);
 static void add_json(Datum val, bool is_null, StringInfo result,
 					 Oid val_type, bool key_scalar);
 static text *catenate_stringinfo_string(StringInfo buffer, const char *addon);
 
 /*
- * Optional output size limit for datum_to_json_internal() and the
- * recursive calls it makes for array/composite values. Zero (the default)
- * means unlimited, matching the historical behavior of every caller in
- * this file. json_set_size_limit() is meant to be used around a single
- * top-level call (e.g. a call to datum_to_json()); the caller should reset
- * the limit to 0 afterward so it doesn't apply to unrelated json.c calls
- * later in the same backend.
- */
-static Size json_size_limit = 0;
-static bool json_size_limit_hit = false;
-
-/*
- * Set the output size limit checked by datum_to_json_internal(). Pass 0 to
- * disable the limit. Also clears the "limit exceeded" flag, so this is
- * safe to call both before starting a bounded call and after finishing one
- * (to reset for the next caller).
- */
-void
-json_set_size_limit(Size maxlen)
-{
-	json_size_limit = maxlen;
-	json_size_limit_hit = false;
-}
-
-/*
- * Whether the most recent call made under a size limit set by
- * json_set_size_limit() stopped early because the limit was exceeded.
- */
-bool
-json_size_limit_exceeded(void)
-{
-	return json_size_limit_hit;
-}
-
-/*
  * Would appending 'addlen' more bytes on top of 'currentlen' already-
- * written bytes exceed the limit set by json_set_size_limit()? If so,
- * record that the limit was hit and return true.
- *
- * This is for the handful of rendering paths in datum_to_json_internal()
- * that build their entire output in a single call (escaping a text value,
- * calling a type's output or cast function): the check at the top of that
- * function only ever sees the total so far each time it is re-entered, so
- * it catches unbounded recursion (e.g. many array elements or composite
- * fields) but not one leaf value whose own rendering is disproportionately
- * large. Each such call site knows, cheaply, the exact or worst-case size
- * of what it is about to append, before appending it, and can check here
- * instead of finding out only after building it.
+ * written bytes exceed 'max_len'? If so, record the soft error in
+ * 'escontext' and return true.
  */
 static bool
-json_size_would_exceed(int currentlen, Size addlen)
+json_size_would_exceed(int currentlen, Size addlen, Size max_len, Node *escontext)
 {
-	if (json_size_limit && (Size) currentlen + addlen > json_size_limit)
+	if (max_len > 0 && (Size) currentlen + addlen > max_len)
 	{
-		json_size_limit_hit = true;
+		errsave(escontext,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("JSON output exceeds size limit of %zu bytes", max_len)));
 		return true;
 	}
 	return false;
@@ -239,24 +200,17 @@ json_recv(PG_FUNCTION_ARGS)
 static void
 datum_to_json_internal(Datum val, bool is_null, StringInfo result,
 					   JsonTypeCategory tcategory, Oid outfuncoid,
-					   bool key_scalar)
+					   bool key_scalar, Size max_len, Node *escontext)
 {
 	char	   *outputstr;
 	text	   *jsontext;
 
 	check_stack_depth();
 
-	/*
-	 * Stop as soon as a size limit set by json_set_size_limit() is exceeded,
-	 * rather than continuing to append. Every recursive call for array
-	 * elements or composite fields comes back through here, so this one check
-	 * bounds the total output of the top-level call regardless of how deeply
-	 * arrays and composites are nested inside one another. (This alone is not
-	 * enough for a leaf value whose own single-shot rendering is
-	 * disproportionately large; see the individual checks below and
-	 * json_size_would_exceed().)
-	 */
-	if (json_size_would_exceed(result->len, 0))
+	if (SOFT_ERROR_OCCURRED(escontext))
+		return;
+
+	if (json_size_would_exceed(result->len, 0, max_len, escontext))
 		return;
 
 	/* callers are expected to ensure that null keys are not passed in */
@@ -280,10 +234,10 @@ datum_to_json_internal(Datum val, bool is_null, StringInfo result,
 	switch (tcategory)
 	{
 		case JSONTYPE_ARRAY:
-			array_to_json_internal(val, result, false);
+			array_to_json_internal(val, result, false, max_len, escontext);
 			break;
 		case JSONTYPE_COMPOSITE:
-			composite_to_json(val, result, false);
+			composite_to_json_internal(val, result, false, max_len, escontext);
 			break;
 		case JSONTYPE_BOOL:
 			if (key_scalar)
@@ -297,7 +251,7 @@ datum_to_json_internal(Datum val, bool is_null, StringInfo result,
 			break;
 		case JSONTYPE_NUMERIC:
 			outputstr = OidOutputFunctionCall(outfuncoid, val);
-			if (json_size_would_exceed(result->len, strlen(outputstr)))
+			if (json_size_would_exceed(result->len, strlen(outputstr), max_len, escontext))
 			{
 				pfree(outputstr);
 				return;
@@ -353,57 +307,100 @@ datum_to_json_internal(Datum val, bool is_null, StringInfo result,
 			}
 			break;
 		case JSONTYPE_JSON:
-
-			/*
-			 * JSON and JSONB output are already escaped, so we can call their
-			 * output functions directly without extra escaping. Check the
-			 * rendered length before appending to result.
-			 */
-			outputstr = OidOutputFunctionCall(outfuncoid, val);
-			if (json_size_would_exceed(result->len, strlen(outputstr)))
+			if (outfuncoid == F_JSON_OUT)
 			{
-				pfree(outputstr);
-				return;
+				/*
+				 * For 'json', the datum is already valid JSON text. Check its
+				 * uncompressed size via toast_raw_datum_size() before calling
+				 * json_out() to avoid detoasting values that exceed max_len.
+				 */
+				if (json_size_would_exceed(result->len,
+										   toast_raw_datum_size(val) - VARHDRSZ,
+										   max_len, escontext))
+					return;
+				outputstr = OidOutputFunctionCall(outfuncoid, val);
+			}
+			else if (outfuncoid == F_JSONB_OUT)
+			{
+				/*
+				 * For 'jsonb', serialize with the remaining size budget so we
+				 * abort softly as soon as the limit is exceeded, preventing
+				 * runaway expansion of large numerics or deeply nested trees.
+				 */
+				Jsonb	   *jb = DatumGetJsonbP(val);
+				Size		rem_len = (max_len > 0 && (Size) result->len < max_len) ?
+					(max_len - (Size) result->len) : ((max_len > 0) ? 1 : 0);
+
+				outputstr = JsonbToCStringExtended(NULL, &jb->root, VARSIZE(jb),
+												   rem_len, escontext);
+				if ((Pointer) jb != DatumGetPointer(val))
+					pfree(jb);
+
+				if (SOFT_ERROR_OCCURRED(escontext) || outputstr == NULL)
+					return;
+			}
+			else
+			{
+				outputstr = OidOutputFunctionCall(outfuncoid, val);
+				if (json_size_would_exceed(result->len, strlen(outputstr), max_len, escontext))
+				{
+					pfree(outputstr);
+					return;
+				}
 			}
 
 			appendStringInfoString(result, outputstr);
 			pfree(outputstr);
 			break;
 		case JSONTYPE_CAST:
-			/* outfuncoid refers to a cast function, not an output function */
-			jsontext = DatumGetTextPP(OidFunctionCall1(outfuncoid, val));
-			if (json_size_would_exceed(result->len, VARSIZE_ANY_EXHDR(jsontext)))
 			{
+				LOCAL_FCINFO(fcinfo, 1);
+				FmgrInfo	flinfo;
+				Datum		res;
+
+				/*
+				 * outfuncoid refers to a type-to-json cast function, not a
+				 * standard output function.  Invoke it with escontext so that
+				 * any soft errors during conversion are trapped rather than
+				 * throwing a hard ERROR.
+				 */
+				fmgr_info(outfuncoid, &flinfo);
+				InitFunctionCallInfoData(*fcinfo, &flinfo, 1, InvalidOid, escontext, NULL);
+				fcinfo->args[0].value = val;
+				fcinfo->args[0].isnull = false;
+
+				res = FunctionCallInvoke(fcinfo);
+
+				if (SOFT_ERROR_OCCURRED(escontext) || fcinfo->isnull)
+					return;
+
+				/* Enforce the size limit on the rendered JSON text */
+				jsontext = DatumGetTextPP(res);
+				if (json_size_would_exceed(result->len, VARSIZE_ANY_EXHDR(jsontext), max_len, escontext))
+				{
+					pfree(jsontext);
+					return;
+				}
+				appendBinaryStringInfo(result, VARDATA_ANY(jsontext),
+									   VARSIZE_ANY_EXHDR(jsontext));
 				pfree(jsontext);
-				return;
 			}
-			appendBinaryStringInfo(result, VARDATA_ANY(jsontext),
-								   VARSIZE_ANY_EXHDR(jsontext));
-			pfree(jsontext);
 			break;
 		default:
 			/* special-case text types to save useless palloc/memcpy cycles */
 			if (outfuncoid == F_TEXTOUT || outfuncoid == F_VARCHAROUT ||
 				outfuncoid == F_BPCHAROUT)
 			{
-				/*
-				 * escape_json_char() expands every byte below 0x20 to a
-				 * six-byte \uXXXX sequence, the worst case for this path;
-				 * check against that before escaping rather than after.
-				 * toast_raw_datum_size() gives the logical (uncompressed)
-				 * length without detoasting a value we may be about to
-				 * discard.
-				 */
 				Size		rawsize = toast_raw_datum_size(val) - VARHDRSZ;
 
-				if (json_size_would_exceed(result->len, 6 * rawsize))
+				if (json_size_would_exceed(result->len, 6 * rawsize, max_len, escontext))
 					return;
 				escape_json_text(result, (text *) DatumGetPointer(val));
 			}
 			else
 			{
 				outputstr = OidOutputFunctionCall(outfuncoid, val);
-				if (json_size_would_exceed(result->len, 6 * strlen(outputstr)))
+				if (json_size_would_exceed(result->len, 6 * strlen(outputstr), max_len, escontext))
 				{
 					pfree(outputstr);
 					return;
@@ -544,7 +541,7 @@ JsonEncodeDateTime(char *buf, Datum value, Oid typid, const int *tzp)
 static void
 array_dim_to_json(StringInfo result, int dim, int ndims, int *dims, const Datum *vals,
 				  const bool *nulls, int *valcount, JsonTypeCategory tcategory,
-				  Oid outfuncoid, bool use_line_feeds)
+				  Oid outfuncoid, bool use_line_feeds, Size max_len, Node *escontext)
 {
 	int			i;
 	const char *sep;
@@ -564,7 +561,7 @@ array_dim_to_json(StringInfo result, int dim, int ndims, int *dims, const Datum 
 		{
 			datum_to_json_internal(vals[*valcount], nulls[*valcount],
 								   result, tcategory,
-								   outfuncoid, false);
+								   outfuncoid, false, max_len, escontext);
 			(*valcount)++;
 		}
 		else
@@ -574,16 +571,11 @@ array_dim_to_json(StringInfo result, int dim, int ndims, int *dims, const Datum 
 			 * we'll say no.
 			 */
 			array_dim_to_json(result, dim + 1, ndims, dims, vals, nulls,
-							  valcount, tcategory, outfuncoid, false);
+							  valcount, tcategory, outfuncoid, false, max_len, escontext);
 		}
 
-		/*
-		 * Stop looping once a size limit set by json_set_size_limit() has
-		 * been hit; datum_to_json_internal() already stopped appending, so
-		 * further iterations would just add separators to no purpose, and for
-		 * a very large remaining element count that adds up.
-		 */
-		if (json_size_limit_hit)
+		/* Stop looping once soft error or size limit has been hit */
+		if (SOFT_ERROR_OCCURRED(escontext))
 			break;
 	}
 
@@ -594,7 +586,8 @@ array_dim_to_json(StringInfo result, int dim, int ndims, int *dims, const Datum 
  * Turn an array into JSON.
  */
 static void
-array_to_json_internal(Datum array, StringInfo result, bool use_line_feeds)
+array_to_json_internal(Datum array, StringInfo result, bool use_line_feeds,
+					   Size max_len, Node *escontext)
 {
 	ArrayType  *v = DatumGetArrayTypeP(array);
 	Oid			element_type = ARR_ELEMTYPE(v);
@@ -631,7 +624,7 @@ array_to_json_internal(Datum array, StringInfo result, bool use_line_feeds)
 					  &nitems);
 
 	array_dim_to_json(result, 0, ndim, dim, elements, nulls, &count, tcategory,
-					  outfuncoid, use_line_feeds);
+					  outfuncoid, use_line_feeds, max_len, escontext);
 
 	pfree(elements);
 	pfree(nulls);
@@ -639,10 +632,10 @@ array_to_json_internal(Datum array, StringInfo result, bool use_line_feeds)
 
 /*
  * Turn a composite / record into JSON.
- * Exported so COPY TO can use it.
  */
-void
-composite_to_json(Datum composite, StringInfo result, bool use_line_feeds)
+static void
+composite_to_json_internal(Datum composite, StringInfo result, bool use_line_feeds,
+						   Size max_len, Node *escontext)
 {
 	HeapTupleHeader td;
 	Oid			tupType;
@@ -708,20 +701,25 @@ composite_to_json(Datum composite, StringInfo result, bool use_line_feeds)
 								 &outfuncoid);
 
 		datum_to_json_internal(val, isnull, result, tcategory, outfuncoid,
-							   false);
+							   false, max_len, escontext);
 
-		/*
-		 * Stop looping once a size limit set by json_set_size_limit() has
-		 * been hit; datum_to_json_internal() already stopped appending, so
-		 * further iterations would just add field names and separators to no
-		 * purpose, and for a very wide row that adds up.
-		 */
-		if (json_size_limit_hit)
+		/* Stop looping once soft error or size limit has been hit */
+		if (SOFT_ERROR_OCCURRED(escontext))
 			break;
 	}
 
 	appendStringInfoChar(result, '}');
 	ReleaseTupleDesc(tupdesc);
+}
+
+/*
+ * Turn a composite / record into JSON.
+ * Exported so COPY TO can use it.
+ */
+void
+composite_to_json(Datum composite, StringInfo result, bool use_line_feeds)
+{
+	composite_to_json_internal(composite, result, use_line_feeds, 0, NULL);
 }
 
 /*
@@ -753,7 +751,7 @@ add_json(Datum val, bool is_null, StringInfo result,
 							 &tcategory, &outfuncoid);
 
 	datum_to_json_internal(val, is_null, result, tcategory, outfuncoid,
-						   key_scalar);
+						   key_scalar, 0, NULL);
 }
 
 /*
@@ -767,7 +765,7 @@ array_to_json(PG_FUNCTION_ARGS)
 
 	initStringInfo(&result);
 
-	array_to_json_internal(array, &result, false);
+	array_to_json_internal(array, &result, false, 0, NULL);
 
 	PG_RETURN_TEXT_P(cstring_to_text_with_len(result.data, result.len));
 }
@@ -784,7 +782,7 @@ array_to_json_pretty(PG_FUNCTION_ARGS)
 
 	initStringInfo(&result);
 
-	array_to_json_internal(array, &result, use_line_feeds);
+	array_to_json_internal(array, &result, use_line_feeds, 0, NULL);
 
 	PG_RETURN_TEXT_P(cstring_to_text_with_len(result.data, result.len));
 }
@@ -857,6 +855,32 @@ to_json(PG_FUNCTION_ARGS)
 }
 
 /*
+ * Turn a Datum into JSON text with a maximum size limit and soft error handling.
+ *
+ * If max_len > 0 and the resulting JSON exceeds max_len, or if any soft error
+ * occurs during conversion, the error is recorded into escontext (if provided)
+ * and (Datum) 0 is returned.
+ */
+Datum
+datum_to_json_extended(Datum val, JsonTypeCategory tcategory, Oid outfuncoid,
+					   Size max_len, Node *escontext)
+{
+	StringInfoData result;
+
+	initStringInfo(&result);
+	datum_to_json_internal(val, false, &result, tcategory, outfuncoid,
+						   false, max_len, escontext);
+
+	if (SOFT_ERROR_OCCURRED(escontext))
+	{
+		pfree(result.data);
+		return (Datum) 0;
+	}
+
+	return PointerGetDatum(cstring_to_text_with_len(result.data, result.len));
+}
+
+/*
  * Turn a Datum into JSON text.
  *
  * tcategory and outfuncoid are from a previous call to json_categorize_type.
@@ -864,13 +888,7 @@ to_json(PG_FUNCTION_ARGS)
 Datum
 datum_to_json(Datum val, JsonTypeCategory tcategory, Oid outfuncoid)
 {
-	StringInfoData result;
-
-	initStringInfo(&result);
-	datum_to_json_internal(val, false, &result, tcategory, outfuncoid,
-						   false);
-
-	return PointerGetDatum(cstring_to_text_with_len(result.data, result.len));
+	return datum_to_json_extended(val, tcategory, outfuncoid, 0, NULL);
 }
 
 /*
@@ -931,7 +949,7 @@ json_agg_transfn_worker(FunctionCallInfo fcinfo, bool absent_on_null)
 	if (PG_ARGISNULL(1))
 	{
 		datum_to_json_internal((Datum) 0, true, state->str, JSONTYPE_NULL,
-							   InvalidOid, false);
+							   InvalidOid, false, 0, NULL);
 		PG_RETURN_POINTER(state);
 	}
 
@@ -946,7 +964,7 @@ json_agg_transfn_worker(FunctionCallInfo fcinfo, bool absent_on_null)
 	}
 
 	datum_to_json_internal(val, false, state->str, state->val_category,
-						   state->val_output_func, false);
+						   state->val_output_func, false, 0, NULL);
 
 	/*
 	 * The transition type for json_agg() is declared to be "internal", which
@@ -1210,7 +1228,7 @@ json_object_agg_transfn_worker(FunctionCallInfo fcinfo,
 	key_offset = out->len;
 
 	datum_to_json_internal(arg, false, out, state->key_category,
-						   state->key_output_func, true);
+						   state->key_output_func, true, 0, NULL);
 
 	if (unique_keys)
 	{
@@ -1241,7 +1259,7 @@ json_object_agg_transfn_worker(FunctionCallInfo fcinfo,
 
 	datum_to_json_internal(arg, PG_ARGISNULL(2), state->str,
 						   state->val_category,
-						   state->val_output_func, false);
+						   state->val_output_func, false, 0, NULL);
 
 	PG_RETURN_POINTER(state);
 }

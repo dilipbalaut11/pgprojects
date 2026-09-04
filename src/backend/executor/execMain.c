@@ -53,6 +53,7 @@
 #include "foreign/fdwapi.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "nodes/miscnodes.h"
 #include "nodes/queryjumble.h"
 #include "parser/parse_relation.h"
 #include "pgstat.h"
@@ -60,6 +61,7 @@
 #include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/backend_status.h"
+#include "utils/jsonb.h"
 #include "utils/lsyscache.h"
 #include "utils/partcache.h"
 #include "utils/rls.h"
@@ -2542,6 +2544,31 @@ ExecBuildSlotValueDescription(Oid reloid,
 				val = "virtual";
 			else if (slot->tts_isnull[i])
 				val = "null";
+			else if (getBaseType(att->atttypid) == JSONBOID)
+			{
+				/*
+				 * JSONB can be relatively small on disk but expand enormously
+				 * when converted to text (e.g., repeated numeric expansions
+				 * or deeply nested structures), potentially exceeding the 1GB
+				 * StringInfo limit in jsonb_out().  Since we only need at most
+				 * maxfieldlen bytes for the description, use the extended
+				 * serializer with a soft size cap so we stop formatting as soon
+				 * as maxfieldlen is reached instead of rendering the whole tree.
+				 */
+				Jsonb	   *jb = DatumGetJsonbP(slot->tts_values[i]);
+				ErrorSaveContext escontext = {
+					.type = T_ErrorSaveContext,
+					.details_wanted = false
+				};
+
+				val = JsonbToCStringExtended(NULL, &jb->root, VARSIZE(jb),
+											 maxfieldlen + 1, (Node *) &escontext);
+				if ((Pointer) jb != DatumGetPointer(slot->tts_values[i]))
+					pfree(jb);
+
+				if (val == NULL)
+					val = pstrdup("[...]");
+			}
 			else
 			{
 				Oid			foutoid;

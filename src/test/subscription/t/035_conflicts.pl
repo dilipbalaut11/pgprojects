@@ -230,6 +230,39 @@ is( $node_subscriber->safe_psql(
 	'1',
 	'values below the cap are recorded verbatim');
 
+# Test that a huge JSONB value with many numeric expansions (e.g. 1e131071)
+# does not crash the server log conflict reporting or apply worker.
+$node_publisher->safe_psql('postgres',
+	"CREATE TABLE conf_tab_jsonb_big (a int PRIMARY KEY, j jsonb);");
+$node_subscriber->safe_psql('postgres',
+	"CREATE TABLE conf_tab_jsonb_big (a int PRIMARY KEY, j jsonb);");
+
+$node_publisher->safe_psql('postgres',
+	"ALTER PUBLICATION pub_tab ADD TABLE conf_tab_jsonb_big");
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION sub_tab REFRESH PUBLICATION");
+$node_subscriber->wait_for_subscription_sync($node_publisher, $appname);
+
+$node_publisher->safe_psql('postgres',
+	"INSERT INTO conf_tab_jsonb_big (a) VALUES (1);");
+$node_publisher->wait_for_catchup($appname);
+
+# Update local row on subscriber with huge numeric expansions in JSONB
+$node_subscriber->safe_psql('postgres',
+	"UPDATE conf_tab_jsonb_big SET j = (SELECT ('['||string_agg('1e131071', ',')||']')::jsonb FROM generate_series(1,8300)) WHERE a = 1;");
+
+# Update on publisher to trigger conflict
+$node_publisher->safe_psql('postgres',
+	"UPDATE conf_tab_jsonb_big SET a = 1 WHERE a = 1;");
+$node_publisher->safe_psql('postgres',
+	"INSERT INTO conf_tab_jsonb_big (a) VALUES (2);");
+$node_publisher->wait_for_catchup($appname);
+
+is( $node_subscriber->safe_psql(
+		'postgres', "SELECT a FROM conf_tab_jsonb_big WHERE a = 2;"),
+	'2',
+	'apply continues after conflict on huge jsonb value');
+
 ###############################################################################
 # Setup a bidirectional logical replication between node_A & node_B
 ###############################################################################

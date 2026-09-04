@@ -87,6 +87,9 @@ extern void json_check_mutability(Oid typoid, bool is_jsonb,
 								  bool *has_mutable);
 extern Datum datum_to_json(Datum val, JsonTypeCategory tcategory,
 						   Oid outfuncoid);
+extern Datum datum_to_json_extended(Datum val, JsonTypeCategory tcategory,
+									Oid outfuncoid, Size max_len,
+									Node *escontext);
 extern Datum datum_to_jsonb(Datum val, JsonTypeCategory tcategory,
 							Oid outfuncoid);
 extern Datum jsonb_from_text(text *js, bool unique_keys);

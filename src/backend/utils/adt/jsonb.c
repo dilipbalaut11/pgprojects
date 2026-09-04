@@ -17,6 +17,7 @@
 #include "funcapi.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
+#include "nodes/miscnodes.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/json.h"
@@ -54,7 +55,8 @@ static void datum_to_jsonb_internal(Datum val, bool is_null, JsonbInState *resul
 									bool key_scalar);
 static void add_jsonb(Datum val, bool is_null, JsonbInState *result,
 					  Oid val_type, bool key_scalar);
-static char *JsonbToCStringWorker(StringInfo out, JsonbContainer *in, int estimated_len, bool indent);
+static char *JsonbToCStringWorker(StringInfo out, JsonbContainer *in, int estimated_len,
+								  bool indent, Size max_len, Node *escontext);
 static void add_indent(StringInfo out, bool indent, int level);
 
 /*
@@ -464,7 +466,7 @@ jsonb_in_scalar(void *pstate, char *token, JsonTokenType tokentype)
 char *
 JsonbToCString(StringInfo out, JsonbContainer *in, int estimated_len)
 {
-	return JsonbToCStringWorker(out, in, estimated_len, false);
+	return JsonbToCStringWorker(out, in, estimated_len, false, 0, NULL);
 }
 
 /*
@@ -473,14 +475,25 @@ JsonbToCString(StringInfo out, JsonbContainer *in, int estimated_len)
 char *
 JsonbToCStringIndent(StringInfo out, JsonbContainer *in, int estimated_len)
 {
-	return JsonbToCStringWorker(out, in, estimated_len, true);
+	return JsonbToCStringWorker(out, in, estimated_len, true, 0, NULL);
 }
 
 /*
- * common worker for above two functions
+ * Extended version with size limit and soft error handling
+ */
+char *
+JsonbToCStringExtended(StringInfo out, JsonbContainer *in, int estimated_len,
+					   Size max_len, Node *escontext)
+{
+	return JsonbToCStringWorker(out, in, estimated_len, false, max_len, escontext);
+}
+
+/*
+ * common worker for above functions
  */
 static char *
-JsonbToCStringWorker(StringInfo out, JsonbContainer *in, int estimated_len, bool indent)
+JsonbToCStringWorker(StringInfo out, JsonbContainer *in, int estimated_len,
+					 bool indent, Size max_len, Node *escontext)
 {
 	bool		first = true;
 	JsonbIterator *it;
@@ -488,6 +501,7 @@ JsonbToCStringWorker(StringInfo out, JsonbContainer *in, int estimated_len, bool
 	JsonbIteratorToken type = WJB_DONE;
 	int			level = 0;
 	bool		redo_switch = false;
+	bool		allocated_out = false;
 
 	/* If we are indenting, don't add a space after a comma */
 	int			ispaces = indent ? 1 : 2;
@@ -501,15 +515,31 @@ JsonbToCStringWorker(StringInfo out, JsonbContainer *in, int estimated_len, bool
 	bool		last_was_key = false;
 
 	if (out == NULL)
+	{
 		out = makeStringInfo();
+		allocated_out = true;
+	}
 
-	enlargeStringInfo(out, (estimated_len >= 0) ? estimated_len : 64);
+	enlargeStringInfo(out, (estimated_len >= 0 && (max_len == 0 || (Size) estimated_len <= max_len)) ? estimated_len : 64);
 
 	it = JsonbIteratorInit(in);
 
 	while (redo_switch ||
 		   ((type = JsonbIteratorNext(&it, &v, false)) != WJB_DONE))
 	{
+		if (max_len > 0 && (Size) out->len > max_len)
+		{
+			errsave(escontext,
+					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+					 errmsg("JSON output exceeds size limit of %zu bytes", max_len)));
+			if (allocated_out)
+			{
+				pfree(out->data);
+				pfree(out);
+			}
+			return NULL;
+		}
+
 		redo_switch = false;
 		switch (type)
 		{
@@ -596,6 +626,19 @@ JsonbToCStringWorker(StringInfo out, JsonbContainer *in, int estimated_len, bool
 		}
 		use_indent = indent;
 		last_was_key = redo_switch;
+	}
+
+	if (max_len > 0 && (Size) out->len > max_len)
+	{
+		errsave(escontext,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("JSON output exceeds size limit of %zu bytes", max_len)));
+		if (allocated_out)
+		{
+			pfree(out->data);
+			pfree(out);
+		}
+		return NULL;
 	}
 
 	Assert(level == 0);

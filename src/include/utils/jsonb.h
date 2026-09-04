@@ -449,6 +449,9 @@ extern char *JsonbToCString(StringInfo out, JsonbContainer *in,
 							int estimated_len);
 extern char *JsonbToCStringIndent(StringInfo out, JsonbContainer *in,
 								  int estimated_len);
+extern char *JsonbToCStringExtended(StringInfo out, JsonbContainer *in,
+									int estimated_len, Size max_len,
+									Node *escontext);
 extern char *JsonbUnquote(Jsonb *jb);
 extern bool JsonbExtractScalar(JsonbContainer *jbc, JsonbValue *res);
 extern const char *JsonbTypeName(JsonbValue *val);

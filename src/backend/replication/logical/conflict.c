@@ -25,6 +25,8 @@
 #include "catalog/toasting.h"
 #include "executor/executor.h"
 #include "funcapi.h"
+#include "miscadmin.h"
+#include "nodes/miscnodes.h"
 #include "pgstat.h"
 #include "replication/conflict.h"
 #include "replication/worker_internal.h"
@@ -1074,11 +1076,25 @@ build_index_value_desc(EState *estate, Relation localrel, TupleTableSlot *slot,
  * array or composite value can render every one of its NULL elements or
  * fields as several bytes of JSON while costing as little as one bit of
  * storage each, so raw storage size is not a safe proxy for the size of the
- * JSON it will produce. We therefore serialize each column under an actual
- * output size limit (json_set_size_limit()) rather than estimating from its
- * storage size beforehand; this is safe for any type, not just the ones we
- * have thought to check, because the limit is enforced by the JSON
- * serializer itself as it recurses through arrays and composites.
+ * JSON it will produce.
+ *
+ * We enforce this using PostgreSQL's ErrorSaveContext (escontext) protocol:
+ * 1. For each column, we pass CONFLICT_MAX_VALUE_SIZE and a local ErrorSaveContext
+ *    to datum_to_json_extended().
+ * 2. datum_to_json_extended() renders the column into an isolated temporary
+ *    buffer, checking cumulative size as it recurses through arrays, composites,
+ *    and nested jsonb structures.
+ * 3. If any field or container exceeds the size limit, or if a soft error occurs
+ *    during conversion, errsave() marks the soft error on escontext and
+ *    immediately aborts further serialization across all recursion levels.
+ * 4. datum_to_json_extended() frees the incomplete temporary buffer and returns
+ *    (Datum) 0.
+ * 5. This function detects SOFT_ERROR_OCCURRED(&escontext) and cleanly emits the
+ *    omission object {"omitted":true,"length":...} into the outer tuple JSON.
+ *
+ * This stack-scoped error-handling mechanism avoids global static variables,
+ * ensuring complete reentrancy and safety across nested calls (e.g. custom type
+ * casts or functions that themselves invoke json serialization).
  *
  * We omit rather than truncate. A truncated value in a queryable table
  * would silently return wrong answers to equality, join and diff predicates,
@@ -1130,13 +1146,18 @@ conflict_values_to_json(TupleDesc tupdesc, const Datum *values,
 			JsonTypeCategory tcategory;
 			Oid			outfuncoid;
 			Datum		attrjson;
+			ErrorSaveContext escontext = {
+				.type = T_ErrorSaveContext,
+				.details_wanted = false
+			};
 
 			json_categorize_type(att->atttypid, false, &tcategory, &outfuncoid);
 
-			json_set_size_limit(CONFLICT_MAX_VALUE_SIZE);
-			attrjson = datum_to_json(values[i], tcategory, outfuncoid);
+			attrjson = datum_to_json_extended(values[i], tcategory, outfuncoid,
+											  CONFLICT_MAX_VALUE_SIZE,
+											  (Node *) &escontext);
 
-			if (json_size_limit_exceeded())
+			if (SOFT_ERROR_OCCURRED(&escontext))
 			{
 				Size		rawsize = (att->attlen == -1) ?
 					toast_raw_datum_size(values[i]) - VARHDRSZ : 0;
@@ -1153,9 +1174,6 @@ conflict_values_to_json(TupleDesc tupdesc, const Datum *values,
 				appendBinaryStringInfo(&result, VARDATA_ANY(t),
 									   VARSIZE_ANY_EXHDR(t));
 			}
-
-			/* Don't leak the limit into unrelated json.c calls. */
-			json_set_size_limit(0);
 		}
 	}
 

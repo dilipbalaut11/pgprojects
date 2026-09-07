@@ -543,6 +543,117 @@ $node_A->safe_psql('postgres',
 );
 
 ###############################################################################
+# Test that oversized JSON values and Replica Identity numeric arrays do not
+# crash or hang during update_origin_differs conflict reporting.
+###############################################################################
+
+# Case 1: Huge JSONB value with many numeric expansions (1e131071)
+$node_A->safe_psql('postgres',
+	"CREATE TABLE t1_jsonb (a int PRIMARY KEY, j jsonb);");
+$node_B->safe_psql('postgres',
+	"CREATE TABLE t1_jsonb (a int PRIMARY KEY, j jsonb);");
+
+$node_A->safe_psql('postgres',
+	"ALTER PUBLICATION tap_pub_A ADD TABLE t1_jsonb");
+$node_B->safe_psql('postgres',
+	"ALTER SUBSCRIPTION $subname_BA REFRESH PUBLICATION WITH (copy_data = false)");
+$node_B->wait_for_subscription_sync($node_A, $subname_BA);
+
+# Pub inserts row (1)
+$node_A->safe_psql('postgres',
+	"INSERT INTO t1_jsonb (a) VALUES (1);");
+$node_A->wait_for_catchup($subname_BA);
+
+# Sub updates local row with huge numeric expansions in JSONB
+$node_B->safe_psql('postgres',
+	"UPDATE t1_jsonb SET j = (SELECT ('['||string_agg('1e131071', ',')||']')::jsonb FROM generate_series(1,8300)) WHERE a = 1;");
+
+# Pub triggers update_origin_differs
+$node_A->safe_psql('postgres',
+	"UPDATE t1_jsonb SET a = 1 WHERE a = 1;");
+$node_A->safe_psql('postgres',
+	"INSERT INTO t1_jsonb (a) VALUES (2);");
+$node_A->wait_for_catchup($subname_BA);
+
+is( $node_B->safe_psql(
+		'postgres', "SELECT a FROM t1_jsonb WHERE a = 2;"),
+	'2',
+	'apply continues after update_origin_differs conflict on huge jsonb value');
+
+is( $node_B->safe_psql(
+		'postgres',
+		"SELECT has_omitted_values FROM $clt_BA WHERE relname = 't1_jsonb';"),
+	't',
+	'oversized jsonb value is flagged by has_omitted_values');
+
+is( $node_B->safe_psql(
+		'postgres',
+		"SELECT (local_conflicts[1]->'tuple'->'j'->>'omitted') FROM $clt_BA WHERE relname = 't1_jsonb';"),
+	'true',
+	'oversized jsonb value is marked omitted in local_conflicts');
+
+# Case 2: Replica Identity numeric array with 8300 elements of 1e131071 with binary = true.
+# Set conflict_log_destination = 'table' because the 1.08GB array exceeds the 1GB
+# limit of the server log string buffer (array_out), testing that the CLT
+# datum_to_json_extended safely caps and omits the oversized array without crashing.
+$node_B->safe_psql('postgres',
+	"ALTER SUBSCRIPTION $subname_BA SET (conflict_log_destination = 'table', binary = true);");
+
+$node_A->safe_psql('postgres',
+	"CREATE TABLE conf_tab_ri_big (arr numeric[] PRIMARY KEY, val int);");
+$node_B->safe_psql('postgres',
+	"CREATE TABLE conf_tab_ri_big (arr numeric[] PRIMARY KEY, val int);");
+
+$node_A->safe_psql('postgres',
+	"ALTER PUBLICATION tap_pub_A ADD TABLE conf_tab_ri_big");
+$node_B->safe_psql('postgres',
+	"ALTER SUBSCRIPTION $subname_BA REFRESH PUBLICATION WITH (copy_data = false)");
+$node_B->wait_for_subscription_sync($node_A, $subname_BA);
+
+$node_A->safe_psql('postgres',
+	"INSERT INTO conf_tab_ri_big (arr, val) SELECT array_agg(('1e131071')::numeric), 1 FROM generate_series(1,8300);");
+$node_A->wait_for_catchup($subname_BA);
+
+# Sub updates locally so row's origin differs
+$node_B->safe_psql('postgres',
+	"UPDATE conf_tab_ri_big SET val = 2;");
+
+# Pub triggers update_origin_differs
+$node_A->safe_psql('postgres',
+	"UPDATE conf_tab_ri_big SET val = 3;");
+$node_A->safe_psql('postgres',
+	"INSERT INTO conf_tab_ri_big (arr, val) VALUES ('{1}', 10);");
+$node_A->wait_for_catchup($subname_BA);
+
+is( $node_B->safe_psql(
+		'postgres', "SELECT val FROM conf_tab_ri_big WHERE arr = '{1}';"),
+	'10',
+	'apply continues after update_origin_differs conflict on huge replica identity array');
+
+is( $node_B->safe_psql(
+		'postgres',
+		"SELECT has_omitted_values FROM $clt_BA WHERE relname = 'conf_tab_ri_big';"),
+	't',
+	'oversized numeric array is flagged by has_omitted_values');
+
+is( $node_B->safe_psql(
+		'postgres',
+		"SELECT remote_tuple->'arr'->>'omitted' FROM $clt_BA WHERE relname = 'conf_tab_ri_big';"),
+	'true',
+	'oversized numeric array is marked omitted in remote_tuple');
+
+is( $node_B->safe_psql(
+		'postgres',
+		"SELECT replica_identity->'arr'->>'omitted' FROM $clt_BA WHERE relname = 'conf_tab_ri_big';"),
+	'true',
+	'oversized numeric array is marked omitted in replica_identity');
+
+# Reset subscription settings back for subsequent tests
+$node_B->safe_psql('postgres',
+	"ALTER SUBSCRIPTION $subname_BA SET (conflict_log_destination = 'all', binary = false);");
+
+
+###############################################################################
 # Test that publisher's transactions marked with DELAY_CHKPT_IN_COMMIT prevent
 # concurrently deleted tuples on the subscriber from being removed. This test
 # also acts as a safeguard to prevent developers from moving the commit

@@ -11,14 +11,19 @@ use Test::More;
 # Setup
 ###############################
 
-# Create a publisher node
+# Create a publisher node. Prepared transactions are needed by the two_phase
+# tests at the end.
 my $node_publisher = PostgreSQL::Test::Cluster->new('publisher');
 $node_publisher->init(allows_streaming => 'logical');
+$node_publisher->append_conf('postgresql.conf',
+	"max_prepared_transactions = 10");
 $node_publisher->start;
 
 # Create a subscriber node
 my $node_subscriber = PostgreSQL::Test::Cluster->new('subscriber');
 $node_subscriber->init(allows_streaming => 'logical');
+$node_subscriber->append_conf('postgresql.conf',
+	"max_prepared_transactions = 10");
 $node_subscriber->start;
 
 # Create a table on publisher
@@ -576,11 +581,11 @@ is($clt_check_temporal, 1,
 	'delete_missing on tab_temporal logged into CLT on Node B');
 
 my $clt_row_temporal = $node_B->safe_psql('postgres',
-	"SELECT replica_identity::text FROM $clt_BA WHERE relname = 'tab_temporal';");
-is($clt_row_temporal,
-	'{"id":"[1,2)","valid_at":"{[2020-01-01,2021-01-01)}"}',
-	'replica identity uses table column type rather than index opckeytype'
+	"SELECT replica_identity::text FROM $clt_BA WHERE relname = 'tab_temporal';"
 );
+is( $clt_row_temporal,
+	'{"id":"[1,2)","valid_at":"{[2020-01-01,2021-01-01)}"}',
+	'replica identity uses table column type rather than index opckeytype');
 
 # Restore tap_pub_A to publishing only 'tab', as the later tests expect.
 $node_A->safe_psql('postgres',
@@ -1074,5 +1079,132 @@ $node_subscriber->safe_psql('clt_ts_test',
 $node_subscriber->safe_psql('clt_ts_test', "DROP SUBSCRIPTION sub_ts_test");
 $node_subscriber->safe_psql('postgres', "DROP DATABASE clt_ts_test");
 $node_subscriber->safe_psql('postgres', "DROP TABLESPACE backup_space");
+
+###############################################################################
+# A prepared transaction that recorded a conflict holds a lock on the conflict
+# log table until the apply worker applies COMMIT PREPARED or ROLLBACK
+# PREPARED. Dropping the table would wait for it, while the apply worker can
+# wait behind the drop, so neither could proceed. Check that the conflict log
+# table can't be dropped by ALTER SUBSCRIPTION ... SET
+# (conflict_log_destination = 'log') unless the subscription is disabled and
+# has no prepared transactions, nor by DROP SUBSCRIPTION while prepared
+# transactions exist.
+###############################################################################
+$node_publisher->safe_psql(
+	'postgres', qq[
+	CREATE TABLE tab_2pc (a int PRIMARY KEY);
+	CREATE PUBLICATION pub_2pc FOR TABLE tab_2pc;
+]);
+$node_subscriber->safe_psql('postgres',
+	"CREATE TABLE tab_2pc (a int PRIMARY KEY)");
+
+my $appname_2pc = 'sub_2pc';
+$node_subscriber->safe_psql(
+	'postgres',
+	"CREATE SUBSCRIPTION sub_2pc
+	 CONNECTION '$publisher_connstr application_name=$appname_2pc'
+	 PUBLICATION pub_2pc
+	 WITH (two_phase = true, conflict_log_destination = 'table')");
+$node_subscriber->wait_for_subscription_sync($node_publisher, $appname_2pc);
+$node_subscriber->poll_query_until('postgres',
+	"SELECT subtwophasestate = 'e' FROM pg_subscription WHERE subname = 'sub_2pc'"
+) or die "Timed out while waiting for two_phase to be enabled";
+
+my $clt_2pc = $node_subscriber->safe_psql('postgres',
+	"SELECT subconflictlogrelid::regclass FROM pg_subscription WHERE subname = 'sub_2pc'"
+);
+
+# Replicate a row, then remove it locally so that the remote DELETE of it
+# raises a delete_missing conflict.
+$node_publisher->safe_psql('postgres', "INSERT INTO tab_2pc VALUES (1)");
+$node_publisher->wait_for_catchup($appname_2pc);
+$node_subscriber->safe_psql('postgres', "DELETE FROM tab_2pc WHERE a = 1");
+
+$node_publisher->safe_psql(
+	'postgres', qq[
+	BEGIN;
+	DELETE FROM tab_2pc WHERE a = 1;
+	PREPARE TRANSACTION 'gx_2pc';
+]);
+$node_publisher->wait_for_catchup($appname_2pc);
+
+# The prepared transaction on the subscriber holds the lock taken to record
+# the conflict.
+is( $node_subscriber->safe_psql(
+		'postgres',
+		"SELECT count(*) FROM pg_locks
+		 WHERE relation = '$clt_2pc'::regclass AND pid IS NULL AND granted"),
+	'1',
+	'prepared transaction holds a lock on the conflict log table');
+
+# Fail - the subscription is enabled
+($cmdret, $stdout, $stderr) = $node_subscriber->psql('postgres',
+	"ALTER SUBSCRIPTION sub_2pc SET (conflict_log_destination = 'log')");
+like(
+	$stderr,
+	qr/ERROR:  cannot set option "conflict_log_destination" for enabled subscription/,
+	"changing conflict_log_destination to 'log' is not allowed for enabled subscription"
+);
+
+# Disable the subscription and wait for the apply worker to stop
+$node_subscriber->safe_psql('postgres', "ALTER SUBSCRIPTION sub_2pc DISABLE");
+$node_subscriber->poll_query_until('postgres',
+	"SELECT count(*) = 0 FROM pg_stat_subscription WHERE subname = 'sub_2pc' AND pid IS NOT NULL"
+) or die "Timed out while waiting for the apply worker to stop";
+
+# Fail - prepared transactions exist
+($cmdret, $stdout, $stderr) = $node_subscriber->psql('postgres',
+	"ALTER SUBSCRIPTION sub_2pc SET (conflict_log_destination = 'log')");
+like(
+	$stderr,
+	qr/ERROR:  cannot alter option "conflict_log_destination" when prepared transactions exist/,
+	"changing conflict_log_destination to 'log' is not allowed when prepared transactions exist"
+);
+
+($cmdret, $stdout, $stderr) =
+  $node_subscriber->psql('postgres', "DROP SUBSCRIPTION sub_2pc");
+like(
+	$stderr,
+	qr/ERROR:  cannot drop subscription "sub_2pc" when prepared transactions exist/,
+	"dropping subscription with a conflict log table is not allowed when prepared transactions exist"
+);
+
+# Resolve the prepared transaction: commit it on the publisher and let the
+# apply worker apply COMMIT PREPARED.
+$node_publisher->safe_psql('postgres', "COMMIT PREPARED 'gx_2pc'");
+$node_subscriber->safe_psql('postgres', "ALTER SUBSCRIPTION sub_2pc ENABLE");
+$node_subscriber->poll_query_until('postgres',
+	"SELECT count(*) = 0 FROM pg_prepared_xacts")
+  or die
+  "Timed out while waiting for the prepared transaction to be resolved";
+is( $node_subscriber->safe_psql(
+		'postgres', "SELECT conflict_type FROM $clt_2pc"),
+	'delete_missing',
+	'conflict recorded by the prepared transaction is committed');
+
+# With the subscription disabled and no prepared transactions, the conflict
+# log table can be dropped.
+$node_subscriber->safe_psql('postgres', "ALTER SUBSCRIPTION sub_2pc DISABLE");
+$node_subscriber->poll_query_until('postgres',
+	"SELECT count(*) = 0 FROM pg_stat_subscription WHERE subname = 'sub_2pc' AND pid IS NOT NULL"
+) or die "Timed out while waiting for the apply worker to stop";
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION sub_2pc SET (conflict_log_destination = 'log')");
+is( $node_subscriber->safe_psql(
+		'postgres',
+		"SELECT subconflictlogrelid FROM pg_subscription WHERE subname = 'sub_2pc'"
+	),
+	'0',
+	"conflict_log_destination is changed to 'log' for disabled subscription without prepared transactions"
+);
+
+# Clean up
+$node_subscriber->safe_psql('postgres', "DROP SUBSCRIPTION sub_2pc");
+$node_subscriber->safe_psql('postgres', "DROP TABLE tab_2pc");
+$node_publisher->safe_psql(
+	'postgres', qq[
+	DROP PUBLICATION pub_2pc;
+	DROP TABLE tab_2pc;
+]);
 
 done_testing();

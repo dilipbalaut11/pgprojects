@@ -30,6 +30,7 @@
 #include "storage/lmgr.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/guc.h"
 #include "utils/json.h"
 #include "utils/lsyscache.h"
 #include "utils/pg_lsn.h"
@@ -164,6 +165,7 @@ static void insert_conflict_log_tuple(EState *estate, Relation rel,
 									  ConflictType conflict_type,
 									  TupleTableSlot *searchslot,
 									  List *conflicttuples);
+static void lock_conflictlog_relation(Oid relid);
 
 /*
  * Builds the TupleDesc for the conflict log table.
@@ -449,6 +451,9 @@ InitConflictIndexes(ResultRelInfo *relInfo)
  * continues) are recorded in the conflict log table.  ERROR-level conflicts
  * halt replication and abort the transaction, so they are always reported
  * exclusively to the server log.
+ *
+ * Errors out if the lock on the conflict log table or its TOAST table is not
+ * immediately available, see lock_conflictlog_relation().
  */
 static Relation
 get_conflictlog_dest_and_table(int elevel, ConflictLogDest *log_dest)
@@ -476,18 +481,57 @@ get_conflictlog_dest_and_table(int elevel, ConflictLogDest *log_dest)
 
 	Assert(OidIsValid(conflictlogrelid));
 
-	/*
-	 * Use try_table_open() because the table may have been dropped
-	 * concurrently by an ALTER SUBSCRIPTION that changed
-	 * conflict_log_destination.  In that case, fall back to the server log
-	 * instead of failing.
-	 */
-	conflictlogrel = try_table_open(conflictlogrelid, RowExclusiveLock);
+	lock_conflictlog_relation(conflictlogrelid);
 
-	if (!conflictlogrel)
+	/*
+	 * The table can't be dropped while the apply worker is running: ALTER
+	 * SUBSCRIPTION ... SET (conflict_log_destination = 'log') requires no
+	 * running worker, and DROP SUBSCRIPTION stops the workers first.  Still,
+	 * use try_table_open() to be safe, so that the caller falls back to the
+	 * server log if the table is gone instead of failing.
+	 */
+	conflictlogrel = try_table_open(conflictlogrelid, NoLock);
+	if (conflictlogrel == NULL)
+	{
+		UnlockRelationOid(conflictlogrelid, RowExclusiveLock);
 		*log_dest = CONFLICT_LOG_DEST_LOG;
+		return NULL;
+	}
+
+	/*
+	 * Also lock the TOAST table now.  Inserting a toasted value locks it
+	 * separately, and a command run directly on it, such as REINDEX TABLE, is
+	 * not noticed by the lock on the conflict log table above.
+	 */
+	if (OidIsValid(conflictlogrel->rd_rel->reltoastrelid))
+		lock_conflictlog_relation(conflictlogrel->rd_rel->reltoastrelid);
 
 	return conflictlogrel;
+}
+
+/*
+ * lock_conflictlog_relation
+ *
+ * Lock the conflict log table or its TOAST table in RowExclusiveLock mode,
+ * erroring out if the lock is not immediately available.
+ *
+ * Don't wait for the lock.  A command that needs a stronger lock on the
+ * relation, such as TRUNCATE, may be waiting for a prepared transaction of
+ * this subscription that holds a lock on it.  If we waited behind that
+ * command, we could never apply the COMMIT PREPARED or ROLLBACK PREPARED that
+ * releases the lock.  Error out instead of falling back to the server log, so
+ * that a conflict is never resolved without being recorded in the table.
+ */
+static void
+lock_conflictlog_relation(Oid relid)
+{
+	if (!ConditionalLockRelationOid(relid, RowExclusiveLock))
+		ereport(ERROR,
+				errcode(ERRCODE_LOCK_NOT_AVAILABLE),
+				errmsg("could not obtain lock on conflict log table of subscription \"%s\"",
+					   MySubscription->name),
+				errdetail("Another session holds or is waiting for a conflicting lock on the conflict log table or its TOAST table."),
+				errhint("If that session is waiting for a prepared transaction of this subscription, cancel it, as only the apply worker can finish that transaction."));
 }
 
 /*
@@ -1015,6 +1059,7 @@ build_index_key_json(EState *estate, Relation localrel,
 	StringInfoData result;
 	int			indnkeyatts;
 	Datum		datum;
+	int			save_nestlevel;
 
 	Assert(slot != NULL);
 
@@ -1026,6 +1071,10 @@ build_index_key_json(EState *estate, Relation localrel,
 	build_index_datums_from_slot(estate, localrel, slot, indexDesc, values,
 								 isnull);
 
+	save_nestlevel = NewGUCNestLevel();
+	(void) set_config_option("datestyle", "ISO",
+							 PGC_USERSET, PGC_S_SESSION,
+							 GUC_ACTION_SAVE, true, 0, false);
 	/*
 	 * Build the JSON object here rather than handing the values to
 	 * row_to_json(), and render each of them with its type's output function.
@@ -1099,6 +1148,7 @@ build_index_key_json(EState *estate, Relation localrel,
 
 	appendStringInfoChar(&result, '}');
 
+	AtEOXact_GUC(true, save_nestlevel);
 	index_close(indexDesc, NoLock);
 
 	datum = PointerGetDatum(cstring_to_text_with_len(result.data, result.len));
